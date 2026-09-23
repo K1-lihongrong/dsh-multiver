@@ -1,0 +1,28 @@
+# 依赖
+node_modules/
+
+# 构建产物
+dist/
+src-tauri/target/
+
+# 图标生成中间文件
+icon-1024.png
+
+# 日志
+*.log
+
+# 编辑器
+.vscode/*
+!.vscode/extensions.json
+.idea/
+*.swp
+
+# 系统
+.DS_Store
+Thumbs.db
+
+# 本地数据（如果误建在源码目录）
+config.json
+versions/
+home/
+store/
