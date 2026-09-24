@@ -62,6 +62,8 @@ pub struct Dirs {
     pub store: PathBuf,
     pub cache: PathBuf,
     pub state: PathBuf,
+    /// WebView2 数据目录根（每个版本一个独立子目录，避免共享累积导致 431）
+    pub webview: PathBuf,
 }
 
 impl Dirs {
@@ -72,6 +74,7 @@ impl Dirs {
             store: root.join("store"),
             cache: root.join("cache"),
             state: root.join("state"),
+            webview: root.join("webview"),
             root,
         }
     }
@@ -83,6 +86,7 @@ impl Dirs {
         std::fs::create_dir_all(&self.store)?;
         std::fs::create_dir_all(&self.cache)?;
         std::fs::create_dir_all(&self.state)?;
+        std::fs::create_dir_all(&self.webview)?;
         Ok(())
     }
 }

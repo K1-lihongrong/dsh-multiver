@@ -256,6 +256,10 @@ async fn launch_window(
         .inner_size(1100.0, 760.0)
         // 用常见 Edge UA，避免 dsh 把内嵌 WebView2 当"非浏览器"而对 bundle 返回 404
         .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 Edg/120.0.0.0")
+        // 每个版本用独立的 WebView2 数据目录，避免所有窗口共享同一目录
+        // 长期累积 cookie/缓存 → 请求头膨胀 → dsh 返回 431 → "Failed to load plugins"。
+        // 放在数据根目录内（<根>/webview/<版本>），符合自包含原则。
+        .data_directory(dirs.webview.join(&version))
         .initialization_script(&init_script)
         .build();
     let window = match built {
