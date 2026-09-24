@@ -11,9 +11,10 @@ use std::path::PathBuf;
 use std::process::Child;
 use std::sync::{Arc, Mutex};
 
-/// 「窗口 label → (代次, dsh 子进程)」映射。
-/// 代次用于解决同名窗口替换时的 Destroyed 回调竞态：回调只在自己那一代仍是当前项时才 kill。
-type ProcMap = Arc<Mutex<HashMap<String, (u64, Child)>>>;
+/// 「版本号 → (窗口 label, 代次, dsh 子进程)」映射。
+/// - label 唯一化（带代次），避免 "a webview with label ... already exists"；
+/// - 代次用于解决窗口替换时的 Destroyed 回调竞态：回调只在自己那一代仍是当前项时才 kill。
+type ProcMap = Arc<Mutex<HashMap<String, (String, u64, Child)>>>;
 
 /// 全局单调递增的代次计数器（用于区分同名窗口的不同实例）
 static NEXT_GEN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
@@ -230,20 +231,21 @@ async fn launch_window(
     .map_err(|e| format!("启动任务失败: {}", e))?;
     let (child, url) = spawned?;
 
-    // 回到主线程建窗
-    let label = window_label(&version);
-    // 若同名窗口已存在：先显式结束其旧进程（从 map 移除并 kill），再关闭旧窗口。
-    if let Some((_, mut old_child)) = procs.lock().unwrap().remove(&label) {
+    // 回到主线程建窗。
+    // 先结束该版本的旧窗口/旧进程（若有）。
+    let old = procs.lock().unwrap().remove(&version);
+    if let Some((old_label, _old_gen, mut old_child)) = old {
         // 结束旧进程及其子进程树（kill 不 wait，避免阻塞）
         launcher::kill_tree(&mut old_child);
-    }
-    if let Some(existing) = app.get_webview_window(&label) {
-        // 用 destroy()（同步强制销毁）而非 close()：close() 是异步的，
-        // 窗口未真正销毁时同 label 的 build() 会报 "a webview with label ... already exists"。
-        let _ = existing.destroy();
+        // 关闭旧窗口（destroy 异步投递；因下面用新唯一 label，不受其影响）
+        if let Some(existing) = app.get_webview_window(&old_label) {
+            let _ = existing.destroy();
+        }
     }
 
+    // 生成唯一 label（带代次），从根本上避免 label 复用冲突
     let generation = NEXT_GEN.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let label = window_label_gen(&version, generation);
 
     let title = format!("DSH {}", version);
     let init_script = build_topbar_script(&version, &url);
@@ -263,16 +265,20 @@ async fn launch_window(
         }
     };
 
-    procs.lock().unwrap().insert(label.clone(), (generation, child));
+    procs
+        .lock()
+        .unwrap()
+        .insert(version.clone(), (label.clone(), generation, child));
 
     let procs2 = procs.clone();
-    let label2 = label.clone();
+    let version2 = version.clone();
     window.on_window_event(move |event| {
         if let tauri::WindowEvent::Destroyed = event {
             let mut map = procs2.lock().unwrap();
-            let should_kill = matches!(map.get(&label2), Some((g, _)) if *g == generation);
+            // 仅当该版本仍是"本代次"时才 kill，避免旧窗口滞后回调误杀新进程
+            let should_kill = matches!(map.get(&version2), Some((_, g, _)) if *g == generation);
             if should_kill {
-                if let Some((_, mut child)) = map.remove(&label2) {
+                if let Some((_, _, mut child)) = map.remove(&version2) {
                     // 结束整棵进程树；不 wait，避免阻塞事件线程导致关窗卡顿
                     launcher::kill_tree(&mut child);
                 }
@@ -329,8 +335,7 @@ async fn open_in_browser(
     let home = resolve_home(&cfg, &dirs, &version);
 
     // 1) 互斥提示：该版本已有内嵌窗口在开
-    let label = window_label(&version);
-    let has_window = procs.lock().unwrap().contains_key(&label);
+    let has_window = procs.lock().unwrap().contains_key(&version);
     if has_window {
         let ok = app
             .dialog()
@@ -401,15 +406,18 @@ async fn restart_version(
     }
     let home = resolve_home(&cfg, &dirs, &version);
 
-    let label = window_label(&version);
+    // 找到该版本当前的窗口（label 带代次，从 map 里取）
+    let (label, _old_gen, mut old_child) = procs
+        .lock()
+        .unwrap()
+        .remove(&version)
+        .ok_or_else(|| format!("版本 {} 的窗口不存在", version))?;
     let window = app
         .get_webview_window(&label)
         .ok_or_else(|| format!("窗口 {} 不存在", label))?;
 
     // 先结束旧进程及其进程树（不 wait）
-    if let Some((_, mut old)) = procs.lock().unwrap().remove(&label) {
-        launcher::kill_tree(&mut old);
-    }
+    launcher::kill_tree(&mut old_child);
 
     // 起新进程（阻塞部分丢后台）
     let vdir2 = vdir.clone();
@@ -424,8 +432,12 @@ async fn restart_version(
     .map_err(|e| format!("重启任务失败: {}", e))?;
     let (child, url) = spawned?;
 
+    // 记录新进程（同一 label，代次更新）
     let generation = NEXT_GEN.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    procs.lock().unwrap().insert(label.clone(), (generation, child));
+    procs
+        .lock()
+        .unwrap()
+        .insert(version.clone(), (label.clone(), generation, child));
 
     window
         .navigate(url.parse().map_err(|e| format!("URL 解析失败: {}", e))?)
@@ -646,14 +658,21 @@ fn log_launch_error(root: &std::path::Path, msg: &str) {
     }
 }
 
-/// 由版本号生成合法的窗口 label。
+/// 由版本号生成合法的窗口 label 前缀（不含代次）。
 /// Tauri 要求 label 只含字母数字和 `-` `/` `:` `_`，而版本号含 `.`，故替换为 `_`。
-fn window_label(version: &str) -> String {
+fn window_label_prefix(version: &str) -> String {
     let sanitized: String = version
         .chars()
         .map(|c| if c.is_ascii_alphanumeric() || matches!(c, '-' | '/' | ':' | '_') { c } else { '_' })
         .collect();
     format!("dsh-{}", sanitized)
+}
+
+/// 带代次的**唯一**窗口 label。
+/// 用唯一 label 从根本上避免 "a webview with label ... already exists"：
+/// close()/destroy() 都是异步投递，不能保证旧窗口立即消失，故不再复用 label。
+fn window_label_gen(version: &str, gen: u64) -> String {
+    format!("{}-{}", window_label_prefix(version), gen)
 }
 
 /// 从命令行参数解析出 --launch-version <版本>（精简启动模式用）
@@ -741,7 +760,7 @@ pub fn run() {
             if let tauri::RunEvent::ExitRequested { .. } = event {
                 // 退出时兜底清理所有 dsh 子进程，避免残留
                 let mut map = procs.lock().unwrap();
-                for (_, (_, child)) in map.iter_mut() {
+                for (_, (_, _, child)) in map.iter_mut() {
                     launcher::kill_tree(child);
                 }
                 map.clear();
