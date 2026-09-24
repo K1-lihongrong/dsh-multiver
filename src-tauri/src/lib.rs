@@ -254,6 +254,8 @@ async fn launch_window(
     let built = WebviewWindowBuilder::new(&app, &label, WebviewUrl::External(parsed))
         .title(&title)
         .inner_size(1100.0, 760.0)
+        // 用常见 Edge UA，避免 dsh 把内嵌 WebView2 当"非浏览器"而对 bundle 返回 404
+        .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 Edg/120.0.0.0")
         .initialization_script(&init_script)
         .build();
     let window = match built {
