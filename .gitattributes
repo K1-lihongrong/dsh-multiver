@@ -1,0 +1,13 @@
+# 默认：检出时用 LF，提交时归一化为 LF
+* text=auto eol=lf
+
+# Windows 批处理必须 CRLF，否则可能执行异常
+*.cmd text eol=crlf
+*.bat text eol=crlf
+
+# 二进制文件不做换行转换
+*.exe binary
+*.ico binary
+*.png binary
+*.svg text eol=lf
+*.lnk binary

@@ -549,6 +549,22 @@ fn set_isolated(app: tauri::AppHandle, version: String, isolated: bool) -> Resul
     }
 }
 
+/// 扫描整个版本目录的占用大小（含依赖 + 隔离 home）。
+#[tauri::command]
+async fn scan_version_size(app: tauri::AppHandle, version: String) -> Result<u64, String> {
+    let mdir = manager_dir(&app);
+    let cfg = Config::load(&mdir);
+    let dirs = Dirs::new(cfg.resolve_root(&mdir));
+    let versions_dir = dirs.versions.clone();
+    let v = version.clone();
+    let size = tauri::async_runtime::spawn_blocking(move || {
+        versions::version_size(&versions_dir, &v)
+    })
+    .await
+    .map_err(|e| format!("扫描失败: {}", e))?;
+    Ok(size)
+}
+
 #[tauri::command]
 async fn scan_isolated_size(app: tauri::AppHandle, version: String) -> Result<u64, String> {
     let mdir = manager_dir(&app);
@@ -716,6 +732,7 @@ pub fn run() {
             get_manager_dir,
             check_env,
             set_isolated,
+            scan_version_size,
             scan_isolated_size,
             copy_shared_to_isolated,
             clear_isolated_data,

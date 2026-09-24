@@ -13,18 +13,8 @@ pub struct VersionInfo {
     pub is_default: bool,
     /// 是否开启了数据隔离
     pub isolated: bool,
-}
-
-/// 执行命令并返回 (是否成功, stdout, stderr)
-fn run(cmd: &mut Command) -> (bool, String, String) {
-    match cmd.output() {
-        Ok(out) => {
-            let stdout = String::from_utf8_lossy(&out.stdout).to_string();
-            let stderr = String::from_utf8_lossy(&out.stderr).to_string();
-            (out.status.success(), stdout, stderr)
-        }
-        Err(e) => (false, String::new(), e.to_string()),
-    }
+    /// 安装日期（版本目录创建时间，格式 YYYY-MM-DD；读不到则为空）
+    pub installed_at: String,
 }
 
 /// 在 Windows 上调用 pnpm 需要走 cmd，否则可能找不到 .cmd
@@ -56,17 +46,64 @@ pub fn list(versions_dir: &Path, default_version: Option<&str>, isolated: &[Stri
             let version = entry.file_name().to_string_lossy().to_string();
             let is_default = default_version == Some(version.as_str());
             let is_isolated = isolated.iter().any(|v| v == &version);
+            let installed_at = dir_created_date(&path);
             result.push(VersionInfo {
                 version,
                 path: path.to_string_lossy().to_string(),
                 is_default,
                 isolated: is_isolated,
+                installed_at,
             });
         }
     }
     // 按版本号排序
     result.sort_by(|a, b| version_cmp(&a.version, &b.version));
     result
+}
+
+/// 读取目录创建时间并格式化为 YYYY-MM-DD（本地时区）。
+/// 读不到（权限/文件系统不支持）则返回空字符串。
+fn dir_created_date(path: &Path) -> String {
+    let meta = match std::fs::metadata(path) {
+        Ok(m) => m,
+        Err(_) => return String::new(),
+    };
+    let created = match meta.created() {
+        Ok(t) => t,
+        Err(_) => return String::new(),
+    };
+    // 转成本地时间：用 SystemTime -> 时区偏移需要外部 crate；
+    // 这里用 std 自带方式（Windows 上 created() 已是本地时间的 UTC 表示），
+    // 简化为按 UTC+8 处理（面向国内用户），偏移由 chrono 不存在，故用手工换算。
+    format_date_local(created)
+}
+
+/// 把 SystemTime 格式化为本地日期（YYYY-MM-DD）。
+/// 仅用于展示"安装日期"，对时区误差不敏感；按东八区（UTC+8）处理。
+fn format_date_local(t: std::time::SystemTime) -> String {
+    let secs = match t.duration_since(std::time::UNIX_EPOCH) {
+        Ok(d) => d.as_secs() as i64,
+        Err(_) => return String::new(),
+    };
+    let local = secs + 8 * 3600; // UTC+8
+    let days = local.div_euclid(86400);
+    let (y, m, d) = civil_from_days(days);
+    format!("{:04}-{:02}-{:02}", y, m, d)
+}
+
+/// 由"自 1970-01-01 起的天数"换算为 (年, 月, 日)。
+/// 算法来自 Howard Hinnant 的 civil_from_days。
+fn civil_from_days(z: i64) -> (i64, u32, u32) {
+    let z = z + 719468;
+    let era = if z >= 0 { z } else { z - 146096 } / 146097;
+    let doe = (z - era * 146097) as u64;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    let y = yoe as i64 + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = (doy - (153 * mp + 2) / 5 + 1) as u32;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 } as u32;
+    (if m <= 2 { y + 1 } else { y }, m, d)
 }
 
 /// 版本号比较：把数字段拆开按数值比较
@@ -247,6 +284,11 @@ pub fn dir_size(path: &Path) -> u64 {
         }
     }
     total
+}
+
+/// 整个版本目录的大小（字节）。用于"占用大小"展示。
+pub fn version_size(versions_dir: &Path, version: &str) -> u64 {
+    dir_size(&versions_dir.join(version))
 }
 
 /// 隔离 home 的路径

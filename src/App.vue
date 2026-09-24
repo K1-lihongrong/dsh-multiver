@@ -154,8 +154,22 @@ async function toggleIsolated(v, current) {
 
 // ===== 隔离管理菜单 =====
 const openMenu = ref(null);       // 当前展开菜单的版本号
-const scanning = ref(null);       // 正在扫描的版本号
-const sizes = ref({});            // 版本号 -> 字节数
+const scanning = ref(null);       // 正在扫描的版本号（隔离数据）
+const sizes = ref({});            // 版本号 -> 隔离数据字节数
+const scanningVer = ref(null);    // 正在扫描"整版本占用"的版本号
+const verSizes = ref({});         // 版本号 -> 整版本字节数
+
+async function scanVersionSize(v) {
+  scanningVer.value = v;
+  try {
+    const bytes = await invoke("scan_version_size", { version: v });
+    verSizes.value = { ...verSizes.value, [v]: bytes };
+  } catch (e) {
+    notify("" + e);
+  } finally {
+    scanningVer.value = null;
+  }
+}
 
 function toggleMenu(v) {
   openMenu.value = openMenu.value === v ? null : v;
@@ -291,12 +305,17 @@ onUnmounted(() => {
             <span class="ver-num">{{ v.version }}</span>
             <span class="badge" v-if="v.is_default">默认</span>
             <span class="badge badge-iso" v-if="v.isolated">隔离</span>
+            <span class="ver-meta" v-if="v.installed_at">安装于 {{ v.installed_at }}</span>
+            <span class="ver-meta" v-if="verSizes[v.version] != null">占用 {{ fmtSize(verSizes[v.version]) }}</span>
           </div>
           <div class="ver-actions">
             <button class="btn primary" @click="run(v.version)" :disabled="!!runningVersion">{{ runningVersion === v.version ? "启动中..." : "运行" }}</button>
             <button class="btn" @click="openInBrowser(v.version)" title="在新终端启动并在系统浏览器打开">浏览器打开</button>
             <button class="btn" @click="setDefault(v.version)" :disabled="v.is_default">设为默认</button>
             <button class="btn" @click="createShortcut(v.version)" title="在桌面创建 DSH 快捷方式">桌面快捷方式</button>
+            <button class="btn" @click="scanVersionSize(v.version)" :disabled="scanningVer === v.version" title="统计该版本占用的磁盘空间">
+              {{ scanningVer === v.version ? "扫描中..." : (verSizes[v.version] != null ? "重新扫描占用" : "扫描占用") }}
+            </button>
             <div class="menu-wrap" v-if="v.isolated">
               <button class="btn active" @click.stop="toggleMenu(v.version)">
                 已隔离 ▾
@@ -502,6 +521,7 @@ body {
 .ver-item:hover { border-color: #d6dae0; background: #fff; }
 .ver-main { display: flex; align-items: center; gap: 10px; }
 .ver-num { font-weight: 600; font-size: 14px; font-variant-numeric: tabular-nums; }
+.ver-meta { color: #9aa1ab; font-size: 11px; }
 .badge {
   background: #e8f5ec; color: #2f9e5f; font-size: 11px;
   padding: 2px 8px; border-radius: 10px; font-weight: 500;
