@@ -267,8 +267,19 @@ fn copy_dir_recursive(src: &Path, dst: &Path, count: &mut u64) -> std::io::Resul
     std::fs::create_dir_all(dst)?;
     for entry in std::fs::read_dir(src)? {
         let entry = entry?;
+        let name = entry.file_name();
         let src_path = entry.path();
-        let dst_path = dst.join(entry.file_name());
+
+        // 关键：跳过所有 node_modules 目录（不复制、不递归进入）。
+        // 共享 home 里的 node_modules 多为 JUNCTION（目录联接），
+        // 朴素复制会把它实体化成普通目录，破坏 dsh 的模块代理机制，
+        // 导致隔离版本启动时报 "exists and is not a symlink or dsh-managed module proxy"。
+        // 只复制用户数据，模块结构由 dsh 首次启动时自行重建。
+        if name == "node_modules" {
+            continue;
+        }
+
+        let dst_path = dst.join(&name);
         if src_path.is_dir() {
             copy_dir_recursive(&src_path, &dst_path, count)?;
         } else {

@@ -87,50 +87,6 @@ pub fn write_forward_script(dir: &Path, content: &str) -> std::io::Result<String
     Ok(path.to_string_lossy().to_string())
 }
 
-/// 启动某个版本的 dsh web
-pub fn spawn_web(
-    version_dir: &Path,
-    home_dir: &Path,
-    store_dir: &Path,
-    cache_dir: &Path,
-    state_dir: &Path,
-) -> (bool, String) {
-    let bin = version_dir
-        .join("node_modules")
-        .join(".bin")
-        .join(if cfg!(windows) { "dsh.cmd" } else { "dsh" });
-    if !bin.exists() {
-        return (false, format!("找不到启动入口: {}", bin.to_string_lossy()));
-    }
-
-    #[cfg(windows)]
-    let mut cmd = {
-        let mut c = Command::new("cmd");
-        c.arg("/C").arg(&bin);
-        c
-    };
-    #[cfg(not(windows))]
-    let mut cmd = Command::new(&bin);
-
-    cmd.arg("web")
-        .env("DSH_HOME", home_dir)
-        .env("npm_config_store_dir", store_dir)
-        .env("npm_config_cache_dir", cache_dir)
-        .env("npm_config_state_dir", state_dir);
-
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        const CREATE_NEW_CONSOLE: u32 = 0x00000010;
-        cmd.creation_flags(CREATE_NEW_CONSOLE);
-    }
-
-    match cmd.spawn() {
-        Ok(_) => (true, "已启动 dsh web（新窗口）".to_string()),
-        Err(e) => (false, format!("启动失败: {}", e)),
-    }
-}
-
 /// 打开文件夹
 pub fn open_folder(path: &Path) -> (bool, String) {
     #[cfg(windows)]
@@ -143,3 +99,4 @@ pub fn open_folder(path: &Path) -> (bool, String) {
         Err(e) => (false, e.to_string()),
     }
 }
+

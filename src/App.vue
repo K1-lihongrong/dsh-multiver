@@ -128,6 +128,18 @@ async function run(v) {
   } catch (e) { notify("" + e); }
 }
 
+async function createShortcut(v) {
+  try {
+    notify(await invoke("create_shortcut", { version: v }));
+  } catch (e) { notify("" + e); }
+}
+
+async function openInBrowser(v) {
+  try {
+    notify(await invoke("open_in_browser", { version: v }));
+  } catch (e) { notify("" + e); }
+}
+
 async function toggleIsolated(v, current) {
   try {
     notify(await invoke("set_isolated", { version: v, isolated: !current }));
@@ -277,7 +289,9 @@ onUnmounted(() => {
           </div>
           <div class="ver-actions">
             <button class="btn primary" @click="run(v.version)">运行</button>
+            <button class="btn" @click="openInBrowser(v.version)" title="在新终端启动并在系统浏览器打开">浏览器打开</button>
             <button class="btn" @click="setDefault(v.version)" :disabled="v.is_default">设为默认</button>
+            <button class="btn" @click="createShortcut(v.version)" title="在桌面创建 DSH 快捷方式">桌面快捷方式</button>
             <div class="menu-wrap" v-if="v.isolated">
               <button class="btn active" @click.stop="toggleMenu(v.version)">
                 已隔离 ▾
