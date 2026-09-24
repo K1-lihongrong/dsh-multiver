@@ -9,6 +9,9 @@
     </clipPath>
   </defs>
 
+  <!-- 整体缩放 8/7 并平移，使白底铺满画布（原白底在 32..480，现铺满 0..512）。
+       元素相对白底的位置比例保持不变。 -->
+  <g transform="scale(1.142857142857143) translate(-32,-32)">
   <rect x="32" y="32" width="448" height="448" rx="104" fill="url(#bg)"/>
 
   <!-- DeepSeek 官方鲸鱼：放大，完整显示 -->
@@ -23,5 +26,6 @@
     <rect x="286" y="358" width="72" height="72" rx="19" fill="#F5C542" opacity="0.7"/>
     <rect x="318" y="326" width="72" height="72" rx="19" fill="#E5484D" opacity="0.7"/>
     <rect x="350" y="294" width="72" height="72" rx="19" fill="#30A46C" opacity="0.7"/>
+  </g>
   </g>
 </svg>
