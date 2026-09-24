@@ -269,28 +269,90 @@ fn copy_dir_recursive(src: &Path, dst: &Path, count: &mut u64) -> std::io::Resul
         let entry = entry?;
         let name = entry.file_name();
         let src_path = entry.path();
+        let dst_path = dst.join(&name);
 
-        // 关键：跳过所有 node_modules 目录（不复制、不递归进入）。
-        // 共享 home 里的 node_modules 多为 JUNCTION（目录联接），
-        // 朴素复制会把它实体化成普通目录，破坏 dsh 的模块代理机制，
-        // 导致隔离版本启动时报 "exists and is not a symlink or dsh-managed module proxy"。
-        // 只复制用户数据，模块结构由 dsh 首次启动时自行重建。
-        if name == "node_modules" {
+        // 目标已存在则跳过（不覆盖）
+        if dst_path.exists() {
             continue;
         }
 
-        let dst_path = dst.join(&name);
+        // 关键：保留 junction / symlink，而不是实体化。
+        // 共享 home 的 node_modules 多为 JUNCTION（目录联接），朴素复制会把它
+        // 实体化成普通目录，破坏 dsh 的模块代理机制（报 "exists and is not a
+        // symlink or dsh-managed module proxy"）。这里在目标处**重建一个指向
+        // 相同目标的 junction**，从而"复制共享数据"的同时保持模块可解析。
+        if is_reparse_point(&src_path) {
+            if let Some(target) = read_link_target(&src_path) {
+                if create_junction(&dst_path, &target).is_ok() {
+                    *count += 1;
+                    continue;
+                }
+                // 建 junction 失败则退回普通处理（下面按目录/文件走）
+            }
+        }
+
         if src_path.is_dir() {
             copy_dir_recursive(&src_path, &dst_path, count)?;
         } else {
-            // 不覆盖已存在文件
-            if !dst_path.exists() {
-                std::fs::copy(&src_path, &dst_path)?;
-                *count += 1;
-            }
+            std::fs::copy(&src_path, &dst_path)?;
+            *count += 1;
         }
     }
     Ok(())
+}
+
+/// 判断路径是否为 reparse point（junction 或 symlink）。
+fn is_reparse_point(path: &Path) -> bool {
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0400;
+        match std::fs::symlink_metadata(path) {
+            Ok(md) => md.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0,
+            Err(_) => false,
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        std::fs::symlink_metadata(path).map(|m| m.file_type().is_symlink()).unwrap_or(false)
+    }
+}
+
+/// 读取 junction / symlink 指向的目标路径。
+fn read_link_target(path: &Path) -> Option<std::path::PathBuf> {
+    std::fs::read_link(path).ok()
+}
+
+/// 在 Windows 上创建目录 junction（mklink /J），无需管理员权限。
+/// 非 Windows 上退回 symlink_dir。
+fn create_junction(link: &Path, target: &Path) -> std::io::Result<()> {
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x08000000;
+        // 分开传参给 cmd：cmd /C mklink /J <link> <target>。
+        // 不要拼成单个字符串再 .arg()，否则 Rust 会二次转义导致路径解析失败。
+        let out = std::process::Command::new("cmd")
+            .arg("/C")
+            .arg("mklink")
+            .arg("/J")
+            .arg(link)
+            .arg(target)
+            .creation_flags(CREATE_NO_WINDOW)
+            .output()?;
+        if out.status.success() {
+            Ok(())
+        } else {
+            Err(std::io::Error::new(
+                std::io::ErrorKind::Other,
+                String::from_utf8_lossy(&out.stderr).to_string(),
+            ))
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        std::os::unix::fs::symlink(target, link)
+    }
 }
 
 /// 清理隔离 home（删除目录内容但保留目录本身）
