@@ -24,10 +24,14 @@ fn run(cmd: &mut Command) -> (bool, String, String) {
     }
 }
 
-/// 从 npm 查询所有可安装的版本号，倒序返回
-pub fn list_remote() -> (bool, Vec<String>, String) {
+/// 从 npm 查询所有可安装的版本号，倒序返回。
+/// 显式指定 store/cache/state，避免污染 pnpm 全局目录。
+pub fn list_remote(store_dir: &Path, cache_dir: &Path, state_dir: &Path) -> (bool, Vec<String>, String) {
     let mut cmd = pnpm_command();
-    cmd.arg("view").arg("@deepseek-ai/dsh").arg("versions").arg("--json");
+    cmd.arg("view").arg("@deepseek-ai/dsh").arg("versions").arg("--json")
+        .arg("--store-dir").arg(store_dir)
+        .arg("--cache-dir").arg(cache_dir)
+        .arg("--state-dir").arg(state_dir);
     let (ok, stdout, stderr) = run(&mut cmd);
     if !ok {
         let msg = if stderr.trim().is_empty() { stdout } else { stderr };
@@ -84,7 +88,13 @@ pub fn write_forward_script(dir: &Path, content: &str) -> std::io::Result<String
 }
 
 /// 启动某个版本的 dsh web
-pub fn spawn_web(version_dir: &Path, home_dir: &Path, store_dir: &Path) -> (bool, String) {
+pub fn spawn_web(
+    version_dir: &Path,
+    home_dir: &Path,
+    store_dir: &Path,
+    cache_dir: &Path,
+    state_dir: &Path,
+) -> (bool, String) {
     let bin = version_dir
         .join("node_modules")
         .join(".bin")
@@ -104,7 +114,9 @@ pub fn spawn_web(version_dir: &Path, home_dir: &Path, store_dir: &Path) -> (bool
 
     cmd.arg("web")
         .env("DSH_HOME", home_dir)
-        .env("npm_config_store_dir", store_dir);
+        .env("npm_config_store_dir", store_dir)
+        .env("npm_config_cache_dir", cache_dir)
+        .env("npm_config_state_dir", state_dir);
 
     #[cfg(windows)]
     {

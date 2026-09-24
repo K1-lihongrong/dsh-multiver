@@ -367,6 +367,16 @@ onUnmounted(() => {
           <span class="path-desc">pnpm 依赖仓库（硬链接省磁盘）</span>
           <code>{{ state.store_dir }}</code>
         </div>
+        <div class="path-item" @click="openDir('cache')">
+          <span class="path-name">cache</span>
+          <span class="path-desc">pnpm 下载/元数据缓存（可安全删除）</span>
+          <code>{{ state.cache_dir }}</code>
+        </div>
+        <div class="path-item" @click="openDir('state')">
+          <span class="path-name">state</span>
+          <span class="path-desc">pnpm 运行状态（可安全删除）</span>
+          <code>{{ state.state_dir }}</code>
+        </div>
       </div>
       <div class="hint">点击任意路径可在资源管理器中打开</div>
     </section>

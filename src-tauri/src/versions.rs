@@ -110,6 +110,8 @@ pub fn parse_stage(line: &str) -> Option<&'static str> {
 pub fn install(
     versions_dir: &Path,
     store_dir: &Path,
+    cache_dir: &Path,
+    state_dir: &Path,
     version: &str,
     on_stage: &dyn Fn(&str),
 ) -> (bool, String) {
@@ -144,6 +146,10 @@ pub fn install(
         .arg(&spec)
         .arg("--store-dir")
         .arg(store_dir)
+        .arg("--cache-dir")
+        .arg(cache_dir)
+        .arg("--state-dir")
+        .arg(state_dir)
         .arg("--config.confirmModulesPurge=false")
         .arg("--config.dangerouslyAllowAllBuilds=true")
         .stdout(std::process::Stdio::piped())

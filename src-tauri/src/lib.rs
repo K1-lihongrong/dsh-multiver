@@ -27,6 +27,8 @@ struct AppState {
     versions_dir: String,
     home_dir: String,
     store_dir: String,
+    cache_dir: String,
+    state_dir: String,
     default_version: Option<String>,
     manager_dir: String,
 }
@@ -43,6 +45,8 @@ fn get_state(app: tauri::AppHandle) -> AppState {
         versions_dir: dirs.versions.to_string_lossy().to_string(),
         home_dir: dirs.home.to_string_lossy().to_string(),
         store_dir: dirs.store.to_string_lossy().to_string(),
+        cache_dir: dirs.cache.to_string_lossy().to_string(),
+        state_dir: dirs.state.to_string_lossy().to_string(),
         default_version: cfg.default_version.clone(),
         manager_dir: mdir.to_string_lossy().to_string(),
     }
@@ -57,8 +61,12 @@ fn list_installed(app: tauri::AppHandle) -> Vec<versions::VersionInfo> {
 }
 
 #[tauri::command]
-fn list_remote() -> Result<Vec<String>, String> {
-    let (ok, list, err) = actions::list_remote();
+fn list_remote(app: tauri::AppHandle) -> Result<Vec<String>, String> {
+    let mdir = manager_dir(&app);
+    let cfg = Config::load(&mdir);
+    let dirs = Dirs::new(cfg.resolve_root(&mdir));
+    let _ = dirs.ensure();
+    let (ok, list, err) = actions::list_remote(&dirs.store, &dirs.cache, &dirs.state);
     if ok { Ok(list) } else { Err(err) }
 }
 
@@ -75,7 +83,7 @@ async fn install_version(app: tauri::AppHandle, version: String) -> Result<Strin
         let on_stage = move |stage: &str| {
             let _ = app2.emit("install-progress", stage.to_string());
         };
-        versions::install(&dirs.versions, &dirs.store, &version, &on_stage)
+        versions::install(&dirs.versions, &dirs.store, &dirs.cache, &dirs.state, &version, &on_stage)
     })
     .await
     .map_err(|e| format!("安装任务失败: {}", e))?;
@@ -171,7 +179,7 @@ fn run_version(app: tauri::AppHandle, version: String) -> Result<String, String>
     } else {
         dirs.home.clone()
     };
-    let (ok, msg) = actions::spawn_web(&vdir, &home, &dirs.store);
+    let (ok, msg) = actions::spawn_web(&vdir, &home, &dirs.store, &dirs.cache, &dirs.state);
     if ok { Ok(msg) } else { Err(msg) }
 }
 
@@ -279,6 +287,8 @@ fn open_dir(app: tauri::AppHandle, which: String) -> Result<(), String> {
         "versions" => dirs.versions.clone(),
         "home" => dirs.home.clone(),
         "store" => dirs.store.clone(),
+        "cache" => dirs.cache.clone(),
+        "state" => dirs.state.clone(),
         _ => dirs.root.clone(),
     };
     let (ok, msg) = actions::open_folder(&target);

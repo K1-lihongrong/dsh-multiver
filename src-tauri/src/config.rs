@@ -60,6 +60,8 @@ pub struct Dirs {
     pub versions: PathBuf,
     pub home: PathBuf,
     pub store: PathBuf,
+    pub cache: PathBuf,
+    pub state: PathBuf,
 }
 
 impl Dirs {
@@ -68,15 +70,19 @@ impl Dirs {
             versions: root.join("versions"),
             home: root.join("home"),
             store: root.join("store"),
+            cache: root.join("cache"),
+            state: root.join("state"),
             root,
         }
     }
 
-    /// 确保三个子目录存在
+    /// 确保各子目录存在
     pub fn ensure(&self) -> std::io::Result<()> {
         std::fs::create_dir_all(&self.versions)?;
         std::fs::create_dir_all(&self.home)?;
         std::fs::create_dir_all(&self.store)?;
+        std::fs::create_dir_all(&self.cache)?;
+        std::fs::create_dir_all(&self.state)?;
         Ok(())
     }
 }

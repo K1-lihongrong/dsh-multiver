@@ -26,3 +26,5 @@ config.json
 versions/
 home/
 store/
+cache/
+state/
