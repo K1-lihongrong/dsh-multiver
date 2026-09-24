@@ -238,7 +238,9 @@ async fn launch_window(
         launcher::kill_tree(&mut old_child);
     }
     if let Some(existing) = app.get_webview_window(&label) {
-        let _ = existing.close();
+        // 用 destroy()（同步强制销毁）而非 close()：close() 是异步的，
+        // 窗口未真正销毁时同 label 的 build() 会报 "a webview with label ... already exists"。
+        let _ = existing.destroy();
     }
 
     let generation = NEXT_GEN.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
