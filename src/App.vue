@@ -12,6 +12,7 @@ const toastExpanded = ref(false);
 const installInput = ref("");
 const rootInput = ref("");
 const installStage = ref("");
+const runningVersion = ref(""); // 正在启动的版本号（用于禁用按钮 + 显示反馈）
 const envChecks = ref([]);
 const envChecked = ref(false);
 const envPassed = ref(false);
@@ -123,9 +124,13 @@ async function clearDefault() {
 }
 
 async function run(v) {
+  if (runningVersion.value) return; // 已有版本在启动，忽略重复点击
+  runningVersion.value = v;
+  notify("正在启动 DSH " + v + "，请稍候...");
   try {
     notify(await invoke("run_version", { version: v }));
   } catch (e) { notify("" + e); }
+  finally { runningVersion.value = ""; }
 }
 
 async function createShortcut(v) {
@@ -288,7 +293,7 @@ onUnmounted(() => {
             <span class="badge badge-iso" v-if="v.isolated">隔离</span>
           </div>
           <div class="ver-actions">
-            <button class="btn primary" @click="run(v.version)">运行</button>
+            <button class="btn primary" @click="run(v.version)" :disabled="!!runningVersion">{{ runningVersion === v.version ? "启动中..." : "运行" }}</button>
             <button class="btn" @click="openInBrowser(v.version)" title="在新终端启动并在系统浏览器打开">浏览器打开</button>
             <button class="btn" @click="setDefault(v.version)" :disabled="v.is_default">设为默认</button>
             <button class="btn" @click="createShortcut(v.version)" title="在桌面创建 DSH 快捷方式">桌面快捷方式</button>
