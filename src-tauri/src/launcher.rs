@@ -228,6 +228,7 @@ pub fn spawn_web_console(
     store_dir: &Path,
     cache_dir: &Path,
     state_dir: &Path,
+    port: u16,
 ) -> (bool, String) {
     let bin = version_dir
         .join("node_modules")
@@ -248,7 +249,7 @@ pub fn spawn_web_console(
 
     cmd.arg("web")
         .arg("--port")
-        .arg("0")
+        .arg(port.to_string())
         .env("DSH_HOME", home_dir)
         .env("npm_config_store_dir", store_dir)
         .env("npm_config_cache_dir", cache_dir)
@@ -263,7 +264,16 @@ pub fn spawn_web_console(
     }
 
     match cmd.spawn() {
-        Ok(_) => (true, "已在新终端启动 dsh web，稍候会自动打开浏览器".to_string()),
+        Ok(_) => (true, format!("已在新终端用端口 {} 启动 dsh web，稍候会自动打开浏览器", port)),
         Err(e) => (false, format!("启动失败: {}", e)),
     }
+}
+
+/// 检测本机 127.0.0.1:<port> 是否已被占用（能连上即视为占用）。
+pub fn port_in_use(port: u16) -> bool {
+    std::net::TcpStream::connect_timeout(
+        &std::net::SocketAddr::from(([127, 0, 0, 1], port)),
+        std::time::Duration::from_millis(300),
+    )
+    .is_ok()
 }

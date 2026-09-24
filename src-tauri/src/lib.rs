@@ -122,6 +122,8 @@ async fn uninstall_version(app: tauri::AppHandle, version: String) -> Result<Str
     if need_save {
         let _ = cfg.save(&mdir);
     }
+    // 卸载可能清掉了默认版本 / 隔离标记：重生成转发脚本（无默认版本时会删除 dsh.cmd）
+    regenerate_forward_script(&mdir, &cfg);
     // 删除目录可能很慢，放到后台线程
     let (ok, msg) = tauri::async_runtime::spawn_blocking(move || {
         versions::uninstall(&dirs.versions, &version)
@@ -144,20 +146,30 @@ fn set_default(app: tauri::AppHandle, version: Option<String>) -> Result<String,
     cfg.default_version = version.clone();
     cfg.save(&mdir).map_err(|e| e.to_string())?;
 
-    // 生成转发脚本（版本号与根目录直接写进脚本，避免解析 JSON）
-    let target = path_bin_dir(&mdir);
+    // 生成/删除转发脚本（版本号、根目录、DSH_HOME 直接写进脚本）
+    regenerate_forward_script(&mdir, &cfg);
     match &version {
+        Some(v) => Ok(format!("默认版本已设为 {}，dsh 命令已就绪", v)),
+        None => Ok("已清除默认版本".to_string()),
+    }
+}
+
+/// 根据当前配置，重生成（或删除）终端 dsh 转发脚本 dsh.cmd。
+///
+/// - 有默认版本：写入 dsh.cmd（含 DSH_HOME，按默认版本是否隔离决定）
+/// - 无默认版本：删除 dsh.cmd
+/// 供 set_default / set_root / set_isolated / uninstall_version 统一调用。
+fn regenerate_forward_script(mdir: &PathBuf, cfg: &Config) {
+    let target = path_bin_dir(mdir);
+    match &cfg.default_version {
         Some(v) => {
-            let root = cfg.resolve_root(&mdir);
-            let script = actions::build_forward_script(v, &root.to_string_lossy());
-            actions::write_forward_script(&target, &script).map_err(|e| e.to_string())?;
-            Ok(format!("默认版本已设为 {}，dsh 命令已就绪", v))
+            let isolated = cfg.isolated_versions.iter().any(|x| x == v);
+            let root = cfg.resolve_root(mdir);
+            let script = actions::build_forward_script(v, &root.to_string_lossy(), isolated);
+            let _ = actions::write_forward_script(&target, &script);
         }
         None => {
-            // 清除默认版本：删除转发脚本
-            let script_path = target.join("dsh.cmd");
-            let _ = std::fs::remove_file(script_path);
-            Ok("已清除默认版本".to_string())
+            let _ = std::fs::remove_file(target.join("dsh.cmd"));
         }
     }
 }
@@ -293,8 +305,18 @@ fn create_shortcut(app: tauri::AppHandle, version: String) -> Result<String, Str
 
 /// 用新控制台窗口启动某版本的 dsh web，并让 dsh 自动打开系统默认浏览器。
 /// home 与「运行」一致：非隔离用共享 home，隔离用独立 home。
+///
+/// 交互：
+/// - 若该版本已有内嵌窗口（ProcMap 中存在 dsh-<版本>），先弹原生对话框确认「再开一个？」
+/// - 端口固定 3080；若被占用，弹原生对话框让用户选择「换随机端口」或「取消」
 #[tauri::command]
-fn open_in_browser(app: tauri::AppHandle, version: String) -> Result<String, String> {
+async fn open_in_browser(
+    app: tauri::AppHandle,
+    procs: tauri::State<'_, ProcMap>,
+    version: String,
+) -> Result<String, String> {
+    use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
+
     let mdir = manager_dir(&app);
     let cfg = Config::load(&mdir);
     let dirs = Dirs::new(cfg.resolve_root(&mdir));
@@ -303,10 +325,59 @@ fn open_in_browser(app: tauri::AppHandle, version: String) -> Result<String, Str
         return Err(format!("版本 {} 未安装", version));
     }
     let home = resolve_home(&cfg, &dirs, &version);
+
+    // 1) 互斥提示：该版本已有内嵌窗口在开
+    let label = window_label(&version);
+    let has_window = procs.lock().unwrap().contains_key(&label);
+    if has_window {
+        let ok = app
+            .dialog()
+            .message(format!("版本 {} 已在窗口打开，确定还要在浏览器再开一个吗？", version))
+            .title("已在窗口打开")
+            .kind(MessageDialogKind::Warning)
+            .buttons(MessageDialogButtons::OkCancelCustom(
+                "再开一个".to_string(),
+                "取消".to_string(),
+            ))
+            .blocking_show();
+        if !ok {
+            return Ok("已取消".to_string());
+        }
+    }
+
+    // 2) 端口：固定 3080；占用则让用户选择
+    let default_port: u16 = 3080;
+    let mut port = default_port;
+    if launcher::port_in_use(default_port) {
+        let use_random = app
+            .dialog()
+            .message(format!(
+                "端口 {} 已被占用。\n\n点「用随机端口」将换一个空闲端口打开；点「取消」放弃本次操作。",
+                default_port
+            ))
+            .title("端口被占用")
+            .kind(MessageDialogKind::Warning)
+            .buttons(MessageDialogButtons::OkCancelCustom(
+                "用随机端口".to_string(),
+                "取消".to_string(),
+            ))
+            .blocking_show();
+        if !use_random {
+            return Ok("已取消".to_string());
+        }
+        port = 0;
+    }
+
+    // 3) 启动（新控制台，不传 --no-open，让 dsh 打开系统浏览器）
     let (ok, msg) = launcher::spawn_web_console(
-        &vdir, &home, &dirs.store, &dirs.cache, &dirs.state,
+        &vdir, &home, &dirs.store, &dirs.cache, &dirs.state, port,
     );
-    if ok { Ok(msg) } else { Err(msg) }
+    if ok {
+        // 提示：端口 + 数据目录
+        Ok(format!("{}；数据目录：{}", msg, home.to_string_lossy()))
+    } else {
+        Err(msg)
+    }
 }
 
 /// 重启某版本窗口对应的 dsh web 进程：
@@ -449,6 +520,8 @@ fn set_isolated(app: tauri::AppHandle, version: String, isolated: bool) -> Resul
         let _ = std::fs::create_dir_all(dirs.versions.join(&version).join("home"));
     }
     cfg.save(&mdir).map_err(|e| e.to_string())?;
+    // 隔离状态变了：若改的是当前默认版本，重生成转发脚本（DSH_HOME 会变）
+    regenerate_forward_script(&mdir, &cfg);
     if isolated {
         Ok(format!("{} 已开启数据隔离", version))
     } else {
@@ -519,12 +592,8 @@ fn set_root(app: tauri::AppHandle, root: Option<String>) -> Result<String, Strin
     cfg.save(&mdir).map_err(|e| e.to_string())?;
     let dirs = Dirs::new(cfg.resolve_root(&mdir));
     dirs.ensure().map_err(|e| e.to_string())?;
-    // 根目录变了，如果已设默认版本，重新生成转发脚本
-    if let Some(v) = &cfg.default_version {
-        let script = actions::build_forward_script(v, &dirs.root.to_string_lossy());
-        let target = path_bin_dir(&mdir);
-        let _ = actions::write_forward_script(&target, &script);
-    }
+    // 根目录变了，重生成转发脚本（含新的 DSH_HOME）
+    regenerate_forward_script(&mdir, &cfg);
     Ok(format!("根目录已设为 {}", dirs.root.to_string_lossy()))
 }
 
@@ -602,6 +671,7 @@ pub fn run() {
     let procs_setup = procs.clone();
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_dialog::init())
         .manage(procs.clone())
         .invoke_handler(tauri::generate_handler![
             get_state,
