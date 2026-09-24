@@ -28,10 +28,12 @@ fn run(cmd: &mut Command) -> (bool, String, String) {
 /// 显式指定 store/cache/state，避免污染 pnpm 全局目录。
 pub fn list_remote(store_dir: &Path, cache_dir: &Path, state_dir: &Path) -> (bool, Vec<String>, String) {
     let mut cmd = pnpm_command();
+    // 注意：pnpm view 不接受顶层 --store-dir/--cache-dir/--state-dir（会报 Unknown option），
+    // 要用 --config.xxx=value 形式传，既不报错也保持"不污染全局目录"的意图。
     cmd.arg("view").arg("@deepseek-ai/dsh").arg("versions").arg("--json")
-        .arg("--store-dir").arg(store_dir)
-        .arg("--cache-dir").arg(cache_dir)
-        .arg("--state-dir").arg(state_dir);
+        .arg(format!("--config.store-dir={}", store_dir.to_string_lossy()))
+        .arg(format!("--config.cache-dir={}", cache_dir.to_string_lossy()))
+        .arg(format!("--config.state-dir={}", state_dir.to_string_lossy()));
     let (ok, stdout, stderr) = run(&mut cmd);
     if !ok {
         let msg = if stderr.trim().is_empty() { stdout } else { stderr };
