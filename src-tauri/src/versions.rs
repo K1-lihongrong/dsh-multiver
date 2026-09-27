@@ -144,12 +144,11 @@ pub fn install(
     cmd.current_dir(&target)
         .arg("add")
         .arg(&spec)
-        .arg("--store-dir")
-        .arg(store_dir)
-        .arg("--cache-dir")
-        .arg(cache_dir)
-        .arg("--state-dir")
-        .arg(state_dir)
+        // 注意：pnpm add 不接受顶层 --state-dir（报 Unknown option），
+        // 统一改用 --config.xxx=value 形式，既不报错也保持"不污染全局目录"的意图。
+        .arg(format!("--config.store-dir={}", store_dir.to_string_lossy()))
+        .arg(format!("--config.cache-dir={}", cache_dir.to_string_lossy()))
+        .arg(format!("--config.state-dir={}", state_dir.to_string_lossy()))
         .arg("--config.confirmModulesPurge=false")
         .arg("--config.dangerouslyAllowAllBuilds=true")
         .stdout(std::process::Stdio::piped())
