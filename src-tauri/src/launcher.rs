@@ -16,6 +16,7 @@ pub fn spawn_web_hidden(
     store_dir: &Path,
     cache_dir: &Path,
     state_dir: &Path,
+    profile: Option<&str>,
 ) -> Result<(Child, String, Option<crate::jobobj::JobHandle>), String> {
     let bin = version_dir
         .join("node_modules")
@@ -34,8 +35,17 @@ pub fn spawn_web_hidden(
     #[cfg(not(windows))]
     let mut cmd = Command::new(&bin);
 
-    cmd.arg("web")
-        .arg("--port")
+    // 普通版本走 `dsh web`（等价于 --profile web）；
+    // 整合包实例走 `dsh --profile <名>`，启动它自己的 profile。
+    match profile {
+        Some(p) => {
+            cmd.arg("--profile").arg(p);
+        }
+        None => {
+            cmd.arg("web");
+        }
+    }
+    cmd.arg("--port")
         .arg("0")
         .arg("--no-open")
         .env("DSH_HOME", home_dir)
@@ -303,6 +313,7 @@ pub fn spawn_web_console(
     cache_dir: &Path,
     state_dir: &Path,
     port: u16,
+    profile: Option<&str>,
 ) -> (bool, String) {
     let bin = version_dir
         .join("node_modules")
@@ -321,8 +332,15 @@ pub fn spawn_web_console(
     #[cfg(not(windows))]
     let mut cmd = Command::new(&bin);
 
-    cmd.arg("web")
-        .arg("--port")
+    match profile {
+        Some(p) => {
+            cmd.arg("--profile").arg(p);
+        }
+        None => {
+            cmd.arg("web");
+        }
+    }
+    cmd.arg("--port")
         .arg(port.to_string())
         .env("DSH_HOME", home_dir)
         .env("npm_config_store_dir", store_dir)

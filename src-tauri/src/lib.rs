@@ -423,6 +423,39 @@ fn path_bin_dir(manager: &PathBuf) -> PathBuf {
     manager.clone()
 }
 
+/// 顶部小栏的显示标签。
+///
+/// - 整合包实例：`<包名> <包版本>（DSH <内嵌版本>）`
+/// - 普通版本：`DSH <版本>`
+fn bar_label_for(versions_dir: &std::path::Path, version: &str) -> String {
+    if version.starts_with("modpack-") {
+        if let Some(m) = crate::modpack::read_meta(&versions_dir.join(version)) {
+            let name = if m.display_name.is_empty() {
+                m.modpack_name.clone()
+            } else {
+                m.display_name.clone()
+            };
+            if m.packed_dsh_version.is_empty() {
+                return format!("{} {}", name, m.modpack_version);
+            }
+            return format!("{} {}（DSH {}）", name, m.modpack_version, m.packed_dsh_version);
+        }
+    }
+    format!("DSH {}", version)
+}
+
+/// 读取某实例应使用的启动 profile。
+///
+/// - 整合包实例（modpack- 前缀）：读元数据的 launch_profile
+/// - 普通版本：None（走 dsh web）
+fn launch_profile_for(versions_dir: &std::path::Path, version: &str) -> Option<String> {
+    if !version.starts_with("modpack-") {
+        return None;
+    }
+    let dir = versions_dir.join(version);
+    crate::modpack::read_meta(&dir).map(|m| m.launch_profile)
+}
+
 /// 计算某版本实际使用的 DSH_HOME（隔离版本用独立目录，否则用共享 home）
 fn resolve_home(cfg: &Config, dirs: &Dirs, version: &str) -> PathBuf {
     let vdir = dirs.versions.join(version);
@@ -454,6 +487,7 @@ async fn launch_window(
         return Err(format!("版本 {} 未安装", version));
     }
     let home = resolve_home(&cfg, &dirs, &version);
+    let profile = launch_profile_for(&dirs.versions, &version);
 
     // 阻塞部分（起进程 + 等端口/URL，最多 30s）丢到后台线程，避免冻结界面
     let vdir2 = vdir.clone();
@@ -461,8 +495,16 @@ async fn launch_window(
     let store2 = dirs.store.clone();
     let cache2 = dirs.cache.clone();
     let state2 = dirs.state.clone();
+    let profile2 = profile.clone();
     let spawned = tauri::async_runtime::spawn_blocking(move || {
-        launcher::spawn_web_hidden(&vdir2, &home2, &store2, &cache2, &state2)
+        launcher::spawn_web_hidden(
+            &vdir2,
+            &home2,
+            &store2,
+            &cache2,
+            &state2,
+            profile2.as_deref(),
+        )
     })
     .await
     .map_err(|e| format!("启动任务失败: {}", e))?;
@@ -484,8 +526,10 @@ async fn launch_window(
     let generation = NEXT_GEN.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let label = window_label_gen(&version, generation);
 
+    // 顶部小栏标签：整合包显示「包名 版本（DSH x.y.z）」，普通版本显示「DSH x.y.z」
+    let bar_label = bar_label_for(&dirs.versions, &version);
     let title = format!("DSH {}", version);
-    let init_script = build_topbar_script(&version, &url);
+    let init_script = build_topbar_script(&bar_label, &url);
     let parsed = url.parse().map_err(|e| format!("URL 解析失败: {}", e))?;
 
     let built = WebviewWindowBuilder::new(&app, &label, WebviewUrl::External(parsed))
@@ -619,8 +663,15 @@ async fn open_in_browser(
     }
 
     // 3) 启动（新控制台，不传 --no-open，让 dsh 打开系统浏览器）
+    let profile = launch_profile_for(&dirs.versions, &version);
     let (ok, msg) = launcher::spawn_web_console(
-        &vdir, &home, &dirs.store, &dirs.cache, &dirs.state, port,
+        &vdir,
+        &home,
+        &dirs.store,
+        &dirs.cache,
+        &dirs.state,
+        port,
+        profile.as_deref(),
     );
     if ok {
         // 提示：端口 + 数据目录
@@ -648,6 +699,7 @@ async fn restart_version(
         return Err(format!("版本 {} 未安装", version));
     }
     let home = resolve_home(&cfg, &dirs, &version);
+    let profile = launch_profile_for(&dirs.versions, &version);
 
     // 找到该版本当前的窗口（label 带代次，从 map 里取）
     let (label, _old_gen, mut old_child, _old_job) = procs
@@ -668,8 +720,16 @@ async fn restart_version(
     let store2 = dirs.store.clone();
     let cache2 = dirs.cache.clone();
     let state2 = dirs.state.clone();
+    let profile2 = profile.clone();
     let spawned = tauri::async_runtime::spawn_blocking(move || {
-        launcher::spawn_web_hidden(&vdir2, &home2, &store2, &cache2, &state2)
+        launcher::spawn_web_hidden(
+            &vdir2,
+            &home2,
+            &store2,
+            &cache2,
+            &state2,
+            profile2.as_deref(),
+        )
     })
     .await
     .map_err(|e| format!("重启任务失败: {}", e))?;
@@ -693,8 +753,8 @@ async fn restart_version(
 /// 注入到 dsh 页面的顶部可折叠小栏（显示版本号 + 完整 URL + 重启按钮）
 ///
 /// 说明：这里用普通字符串拼接而非 format!，避免 JS 里大量 {} 触发 Rust 格式串转义。
-fn build_topbar_script(version: &str, url: &str) -> String {
-    let ver = version.replace('\\', "\\\\").replace('\'', "\\'");
+fn build_topbar_script(label: &str, url: &str) -> String {
+    let ver = label.replace('\\', "\\\\").replace('\'', "\\'");
     let url_js = url.replace('\\', "\\\\").replace('\'', "\\'");
     let mut s = String::new();
     s.push_str("(function() {\n");
