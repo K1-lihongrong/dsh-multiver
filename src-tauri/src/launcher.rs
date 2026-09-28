@@ -188,12 +188,17 @@ pub fn create_desktop_shortcut(exe_path: &Path, version: &str) -> Result<String,
 
 fn build_shortcut_script(lnk: &Path, exe_path: &Path, version: &str) -> String {
     let work = exe_path.parent().unwrap_or(Path::new("."));
+    // AppUserModelID 必须与进程启动时设置的（lib.rs 的 set_windows_app_user_model_id，
+    // 取自 app identifier）完全一致，否则 Windows 任务栏会把进程与快捷方式分到不同组，
+    // 导致图标丢失。
+    let aumid = "io.github.K1-lihongrong.dsh-multiver";
     format!(
-        "$ws = New-Object -ComObject WScript.Shell; $lnk = $ws.CreateShortcut('{}'); $lnk.TargetPath = '{}'; $lnk.Arguments = '--launch-version {}'; $lnk.WorkingDirectory = '{}'; $lnk.Save()",
+        "$ws = New-Object -ComObject WScript.Shell; $lnk = $ws.CreateShortcut('{}'); $lnk.TargetPath = '{}'; $lnk.Arguments = '--launch-version {}'; $lnk.WorkingDirectory = '{}'; $lnk.AppUserModelID = '{}'; $lnk.Save()",
         escape_ps(&lnk.to_string_lossy()),
         escape_ps(&exe_path.to_string_lossy()),
         escape_ps(version),
         escape_ps(&work.to_string_lossy()),
+        escape_ps(aumid),
     )
 }
 
@@ -202,8 +207,17 @@ fn escape_ps(s: &str) -> String {
     s.replace('\'', "''")
 }
 
-/// 桌面目录：优先 USERPROFILE\\Desktop，回退 USERPROFILE\\OneDrive\\Desktop
+/// 桌面目录。
+///
+/// 桌面可能被 OneDrive、域策略或手动重定向到任意位置（例如 %USERPROFILE% 之外的盘符），
+/// 因此**优先读注册表** Shell Folders\Desktop —— 这是 Windows 判断桌面位置的标准来源。
+/// 读不到再回退到常见路径猜测。
 fn desktop_dir() -> Option<PathBuf> {
+    if let Some(dir) = desktop_from_registry() {
+        if dir.exists() {
+            return Some(dir);
+        }
+    }
     let user = std::env::var("USERPROFILE").ok()?;
     let plain = PathBuf::from(&user).join("Desktop");
     if plain.exists() {
@@ -214,6 +228,48 @@ fn desktop_dir() -> Option<PathBuf> {
         return Some(onedrive);
     }
     Some(plain)
+}
+
+/// 从注册表读取真实桌面路径：HKCU\...\Explorer\Shell Folders 的 Desktop 值。
+/// 用 reg query 读取（零依赖）；失败返回 None。
+#[cfg(windows)]
+fn desktop_from_registry() -> Option<PathBuf> {
+    use std::os::windows::process::CommandExt;
+    const CREATE_NO_WINDOW: u32 = 0x08000000;
+    let out = Command::new("reg")
+        .args([
+            "query",
+            "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Shell Folders",
+            "/v",
+            "Desktop",
+        ])
+        .creation_flags(CREATE_NO_WINDOW)
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let text = String::from_utf8_lossy(&out.stdout);
+    // 输出形如：    Desktop    REG_SZ    D:\Users\ALING\Desktop
+    for line in text.lines() {
+        let line = line.trim();
+        if let Some(rest) = line.strip_prefix("Desktop") {
+            let value = rest
+                .trim_start()
+                .strip_prefix("REG_SZ")
+                .or_else(|| rest.trim_start().strip_prefix("REG_EXPAND_SZ"))?
+                .trim();
+            if !value.is_empty() {
+                return Some(PathBuf::from(value));
+            }
+        }
+    }
+    None
+}
+
+#[cfg(not(windows))]
+fn desktop_from_registry() -> Option<PathBuf> {
+    None
 }
 
 /// 用**新控制台窗口**启动某版本的 dsh web（供「浏览器打开」按钮）。

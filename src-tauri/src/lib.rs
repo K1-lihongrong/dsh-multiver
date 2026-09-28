@@ -708,6 +708,53 @@ fn parse_launch_version(args: &[String]) -> Option<String> {
     None
 }
 
+/// 显式设置进程 AppUserModelID，稳定 Windows 任务栏图标。
+///
+/// 不设置时，Windows 会尝试从"与 exe 关联的快捷方式"推断分组：
+/// 一旦为某版本创建桌面快捷方式，任务栏重新分组就会取不到图标（图标丢失），
+/// 重启程序才暂时恢复。显式固定 AUMID（用 app identifier）后分组稳定。
+///
+/// 注意：设了 AUMID 后，任务栏会改为从注册表
+/// HKCU\Software\Classes\AppUserModelId\<AUMID> 的 IconUri 读取图标，
+/// 因此这里一并把 IconUri 注册为当前 exe，否则任务栏会显示占位图。
+/// 必须在任何窗口显示之前调用。
+#[cfg(windows)]
+fn set_windows_app_user_model_id(app: &tauri::AppHandle) {
+    use tauri::Manager;
+    let app_id = app.config().identifier.clone();
+    let wide: Vec<u16> = app_id.encode_utf16().chain(std::iter::once(0)).collect();
+    unsafe {
+        windows_sys::Win32::UI::Shell::SetCurrentProcessExplicitAppUserModelID(wide.as_ptr());
+    }
+
+    // 为 AUMID 注册任务栏图标：IconUri 指向当前 exe。
+    if let Ok(exe) = std::env::current_exe() {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x08000000;
+        let key = format!(
+            "HKCU\\Software\\Classes\\AppUserModelId\\{}",
+            app_id
+        );
+        let _ = std::process::Command::new("reg")
+            .args([
+                "add",
+                &key,
+                "/v",
+                "IconUri",
+                "/t",
+                "REG_SZ",
+                "/d",
+                &exe.to_string_lossy(),
+                "/f",
+            ])
+            .creation_flags(CREATE_NO_WINDOW)
+            .output();
+    }
+}
+
+#[cfg(not(windows))]
+fn set_windows_app_user_model_id(_app: &tauri::AppHandle) {}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let procs: ProcMap = Arc::new(Mutex::new(HashMap::new()));
@@ -740,6 +787,8 @@ pub fn run() {
         ])
         .setup(move |app| {
             use tauri::Manager;
+            // 必须在任何窗口显示之前设置，否则任务栏图标可能不稳定
+            set_windows_app_user_model_id(&app.handle().clone());
             // 精简启动模式：命令行带 --launch-version <版本> 时，
             // 关闭默认主窗口，直接打开该版本的内嵌窗口。
             if let Some(version) = parse_launch_version(&std::env::args().collect::<Vec<_>>()) {
