@@ -3,8 +3,12 @@ use std::process::Command;
 
 #[cfg(windows)]
 fn pnpm_command() -> Command {
+    use std::os::windows::process::CommandExt;
+    const CREATE_NO_WINDOW: u32 = 0x08000000;
     let mut c = Command::new("cmd");
     c.arg("/C").arg("pnpm");
+    // 静默运行，不弹终端黑框（刷新版本列表等场景避免误导用户）
+    c.creation_flags(CREATE_NO_WINDOW);
     c
 }
 

@@ -1,6 +1,7 @@
 mod actions;
 mod config;
 mod envcheck;
+mod jobobj;
 mod launcher;
 mod versions;
 
@@ -14,7 +15,9 @@ use std::sync::{Arc, Mutex};
 /// 「版本号 → (窗口 label, 代次, dsh 子进程)」映射。
 /// - label 唯一化（带代次），避免 "a webview with label ... already exists"；
 /// - 代次用于解决窗口替换时的 Destroyed 回调竞态：回调只在自己那一代仍是当前项时才 kill。
-type ProcMap = Arc<Mutex<HashMap<String, (String, u64, Child)>>>;
+/// 「版本号 → (窗口 label, 代次, dsh 子进程, Job 持有句柄)」。
+/// Job 句柄用于"管理器退出即杀光子进程"：持有到进程被移除/窗口关闭时。
+type ProcMap = Arc<Mutex<HashMap<String, (String, u64, Child, Option<jobobj::JobHandle>)>>>;
 
 /// 全局单调递增的代次计数器（用于区分同名窗口的不同实例）
 static NEXT_GEN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
@@ -229,12 +232,12 @@ async fn launch_window(
     })
     .await
     .map_err(|e| format!("启动任务失败: {}", e))?;
-    let (child, url) = spawned?;
+    let (child, url, job) = spawned?;
 
     // 回到主线程建窗。
     // 先结束该版本的旧窗口/旧进程（若有）。
     let old = procs.lock().unwrap().remove(&version);
-    if let Some((old_label, _old_gen, mut old_child)) = old {
+    if let Some((old_label, _old_gen, mut old_child, _old_job)) = old {
         // 结束旧进程及其子进程树（kill 不 wait，避免阻塞）
         launcher::kill_tree(&mut old_child);
         // 关闭旧窗口（destroy 异步投递；因下面用新唯一 label，不受其影响）
@@ -274,7 +277,7 @@ async fn launch_window(
     procs
         .lock()
         .unwrap()
-        .insert(version.clone(), (label.clone(), generation, child));
+        .insert(version.clone(), (label.clone(), generation, child, job));
 
     let procs2 = procs.clone();
     let version2 = version.clone();
@@ -282,9 +285,9 @@ async fn launch_window(
         if let tauri::WindowEvent::Destroyed = event {
             let mut map = procs2.lock().unwrap();
             // 仅当该版本仍是"本代次"时才 kill，避免旧窗口滞后回调误杀新进程
-            let should_kill = matches!(map.get(&version2), Some((_, g, _)) if *g == generation);
+            let should_kill = matches!(map.get(&version2), Some((_, g, _, _)) if *g == generation);
             if should_kill {
-                if let Some((_, _, mut child)) = map.remove(&version2) {
+                if let Some((_, _, mut child, _job)) = map.remove(&version2) {
                     // 结束整棵进程树；不 wait，避免阻塞事件线程导致关窗卡顿
                     launcher::kill_tree(&mut child);
                 }
@@ -413,7 +416,7 @@ async fn restart_version(
     let home = resolve_home(&cfg, &dirs, &version);
 
     // 找到该版本当前的窗口（label 带代次，从 map 里取）
-    let (label, _old_gen, mut old_child) = procs
+    let (label, _old_gen, mut old_child, _old_job) = procs
         .lock()
         .unwrap()
         .remove(&version)
@@ -436,14 +439,14 @@ async fn restart_version(
     })
     .await
     .map_err(|e| format!("重启任务失败: {}", e))?;
-    let (child, url) = spawned?;
+    let (child, url, job) = spawned?;
 
     // 记录新进程（同一 label，代次更新）
     let generation = NEXT_GEN.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     procs
         .lock()
         .unwrap()
-        .insert(version.clone(), (label.clone(), generation, child));
+        .insert(version.clone(), (label.clone(), generation, child, job));
 
     window
         .navigate(url.parse().map_err(|e| format!("URL 解析失败: {}", e))?)
@@ -831,7 +834,7 @@ pub fn run() {
             if let tauri::RunEvent::ExitRequested { .. } = event {
                 // 退出时兜底清理所有 dsh 子进程，避免残留
                 let mut map = procs.lock().unwrap();
-                for (_, (_, _, child)) in map.iter_mut() {
+                for (_, (_, _, child, _job)) in map.iter_mut() {
                     launcher::kill_tree(child);
                 }
                 map.clear();

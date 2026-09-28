@@ -15,13 +15,21 @@ pub struct VersionInfo {
     pub isolated: bool,
     /// 安装日期（版本目录创建时间，格式 YYYY-MM-DD；读不到则为空）
     pub installed_at: String,
+    /// 是否使用共享 home（= 未开启隔离）。
+    /// 非隔离版本共用 `<根>/home`，多版本混用可能导致插件/依赖版本错配
+    /// （如 dsh 0.1.7 的 open-in-app 失效会连累旧版本），UI 应提示。
+    pub shared_home: bool,
 }
 
 /// 在 Windows 上调用 pnpm 需要走 cmd，否则可能找不到 .cmd
 #[cfg(windows)]
 fn pnpm_command() -> Command {
+    use std::os::windows::process::CommandExt;
+    const CREATE_NO_WINDOW: u32 = 0x08000000;
     let mut c = Command::new("cmd");
     c.arg("/C").arg("pnpm");
+    // 静默运行，不弹终端黑框（安装时界面已有阶段式进度提示）
+    c.creation_flags(CREATE_NO_WINDOW);
     c
 }
 
@@ -53,6 +61,7 @@ pub fn list(versions_dir: &Path, default_version: Option<&str>, isolated: &[Stri
                 is_default,
                 isolated: is_isolated,
                 installed_at,
+                shared_home: !is_isolated,
             });
         }
     }

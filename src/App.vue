@@ -18,6 +18,8 @@ const envChecked = ref(false);
 const envPassed = ref(false);
 let toastTimer = null;
 let unlistenProgress = null;
+// 「运行共享 home 版本时提示」开关（持久化到 localStorage）
+const warnSharedHomeEnabled = ref(localStorage.getItem("dsh-multiver.warnSharedHome") !== "0");
 
 function notify(msg) {
   toast.value = msg;
@@ -123,7 +125,29 @@ async function clearDefault() {
   } catch (e) { notify("" + e); }
 }
 
+/// 运行非隔离（共享 home）版本前的提示。返回 false 表示用户取消。
+function confirmSharedHome(v) {
+  if (!warnSharedHomeEnabled.value) return true;
+  const ver = installed.value.find((x) => x.version === v);
+  if (!ver || ver.isolated) return true; // 隔离版本无此风险
+  return confirm(
+    "版本 " + v + " 使用【共享 home】（<根>/home）。\n\n" +
+    "多个版本共用同一个 home 时，插件/依赖可能相互影响，\n" +
+    "导致某些功能异常（例如 0.1.7 的「在文件管理器中打开」失效会连累其它版本）。\n\n" +
+    "建议对测试版本开启【数据隔离】。\n\n" +
+    "（可在「路径设置」里关闭此提示）\n\n" +
+    "继续运行吗？"
+  );
+}
+
+/// 切换提示开关并持久化
+function setWarnSharedHome(val) {
+  warnSharedHomeEnabled.value = val;
+  localStorage.setItem("dsh-multiver.warnSharedHome", val ? "1" : "0");
+}
+
 async function run(v) {
+  if (!confirmSharedHome(v)) return;
   if (runningVersion.value) return; // 已有版本在启动，忽略重复点击
   runningVersion.value = v;
   notify("正在启动 DSH " + v + "，请稍候...");
@@ -140,6 +164,7 @@ async function createShortcut(v) {
 }
 
 async function openInBrowser(v) {
+  if (!confirmSharedHome(v)) return;
   try {
     notify(await invoke("open_in_browser", { version: v }));
   } catch (e) { notify("" + e); }
@@ -305,6 +330,7 @@ onUnmounted(() => {
             <span class="ver-num">{{ v.version }}</span>
             <span class="badge" v-if="v.is_default">默认</span>
             <span class="badge badge-iso" v-if="v.isolated">隔离</span>
+            <span class="badge badge-shared" v-else title="使用共享 home：多版本混用可能导致插件/依赖版本错配，测试版建议开隔离">共享 home</span>
             <span class="ver-meta" v-if="v.installed_at">安装于 {{ v.installed_at }}</span>
             <span class="ver-meta" v-if="verSizes[v.version] != null">占用 {{ fmtSize(verSizes[v.version]) }}</span>
           </div>
@@ -388,6 +414,15 @@ onUnmounted(() => {
           <button class="btn" @click="resetRoot">默认</button>
         </div>
       </div>
+
+      <label class="checkbox-row">
+        <input
+          type="checkbox"
+          :checked="warnSharedHomeEnabled"
+          @change="setWarnSharedHome($event.target.checked)"
+        />
+        <span>运行「共享 home」版本时提示（多版本混用可能错配）</span>
+      </label>
 
       <div class="paths" v-if="state">
         <div class="path-item" @click="openDir('versions')">
@@ -527,6 +562,7 @@ body {
   padding: 2px 8px; border-radius: 10px; font-weight: 500;
 }
 .badge-iso { background: #fff4e5; color: #c77d1a; }
+.badge-shared { background: #eef1f5; color: #6b7280; cursor: help; }
 .btn.active {
   background: #fff4e5; border-color: #f0c98a; color: #c77d1a;
 }
@@ -593,6 +629,11 @@ body {
 .chip:hover:not(:disabled) { border-color: #4f6ef7; color: #4f6ef7; background: #f5f7ff; }
 .chip:disabled { opacity: .5; cursor: not-allowed; }
 
+.checkbox-row {
+  display: flex; align-items: center; gap: 8px;
+  font-size: 12px; color: #6b7280; margin: 4px 0 14px; cursor: pointer;
+}
+.checkbox-row input { cursor: pointer; }
 .field { margin-bottom: 14px; }
 .field label { display: block; font-size: 12px; color: #6b7280; margin-bottom: 6px; }
 .field-row { display: flex; gap: 8px; }

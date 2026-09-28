@@ -16,7 +16,7 @@ pub fn spawn_web_hidden(
     store_dir: &Path,
     cache_dir: &Path,
     state_dir: &Path,
-) -> Result<(Child, String), String> {
+) -> Result<(Child, String, Option<crate::jobobj::JobHandle>), String> {
     let bin = version_dir
         .join("node_modules")
         .join(".bin")
@@ -53,6 +53,11 @@ pub fn spawn_web_hidden(
     }
 
     let mut child = cmd.spawn().map_err(|e| format!("启动 dsh web 失败: {}", e))?;
+
+    // 关键：把子进程加入一个 Job（KILL_ON_JOB_CLOSE）。
+    // 管理器进程一退出（正常/强杀/崩溃），OS 会自动结束 Job 内所有进程，
+    // 根除"窗口关了但 node 还在"的孤儿进程问题。
+    let job = crate::jobobj::assign_to_new_job(&child);
 
     // stdout 用独立线程读取：解析到完整 URL 后，**继续读到 EOF 并丢弃**，
     // 避免 dsh 运行中往 stdout 写满管道缓冲区导致进程阻塞（假死）。
@@ -100,7 +105,7 @@ pub fn spawn_web_hidden(
     let deadline = Instant::now() + Duration::from_secs(30);
     loop {
         match rx.recv_timeout(Duration::from_millis(200)) {
-            Ok(url) => return Ok((child, url)),
+            Ok(url) => return Ok((child, url, job)),
             Err(mpsc::RecvTimeoutError::Timeout) => {
                 if Instant::now() >= deadline {
                     kill_tree(&mut child);
@@ -171,6 +176,19 @@ pub fn create_desktop_shortcut(exe_path: &Path, version: &str) -> Result<String,
 
     let script = build_shortcut_script(&lnk_path, exe_path, version);
 
+    #[cfg(windows)]
+    let out = {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x08000000;
+        Command::new("powershell")
+            .arg("-NoProfile")
+            .arg("-Command")
+            .arg(&script)
+            .creation_flags(CREATE_NO_WINDOW)
+            .output()
+            .map_err(|e| format!("调用 PowerShell 失败: {}", e))?
+    };
+    #[cfg(not(windows))]
     let out = Command::new("powershell")
         .arg("-NoProfile")
         .arg("-Command")

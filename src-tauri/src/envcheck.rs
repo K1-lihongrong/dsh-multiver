@@ -4,8 +4,12 @@ use serde::Serialize;
 
 #[cfg(windows)]
 fn cmd_command(program: &str) -> Command {
+    use std::os::windows::process::CommandExt;
+    const CREATE_NO_WINDOW: u32 = 0x08000000;
     let mut c = Command::new("cmd");
     c.arg("/C").arg(program);
+    // 静默运行，不弹终端黑框（检查 node/pnpm/registry 时避免误导用户）
+    c.creation_flags(CREATE_NO_WINDOW);
     c
 }
 
