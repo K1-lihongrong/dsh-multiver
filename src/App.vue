@@ -2,6 +2,7 @@
 import { ref, onMounted, onUnmounted } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { ask } from "@tauri-apps/plugin-dialog";
 
 const state = ref(null);
 const installed = ref([]);
@@ -104,7 +105,7 @@ async function install(v) {
 }
 
 async function uninstall(v) {
-  if (!confirm("确定卸载版本 " + v + " ?")) return;
+  if (!(await ask("确定卸载版本 " + v + " ?", { title: "卸载版本", kind: "warning" }))) return;
   try {
     notify(await invoke("uninstall_version", { version: v }));
     await refresh();
@@ -126,17 +127,19 @@ async function clearDefault() {
 }
 
 /// 运行非隔离（共享 home）版本前的提示。返回 false 表示用户取消。
-function confirmSharedHome(v) {
+/// 用 Tauri 原生对话框（window.confirm 在 Tauri WebView 中不可用，会静默返回 false）。
+async function confirmSharedHome(v) {
   if (!warnSharedHomeEnabled.value) return true;
   const ver = installed.value.find((x) => x.version === v);
   if (!ver || ver.isolated) return true; // 隔离版本无此风险
-  return confirm(
+  return await ask(
     "版本 " + v + " 使用【共享 home】（<根>/home）。\n\n" +
     "多个版本共用同一个 home 时，插件/依赖可能相互影响，\n" +
     "导致某些功能异常（例如 0.1.7 的「在文件管理器中打开」失效会连累其它版本）。\n\n" +
     "建议对测试版本开启【数据隔离】。\n\n" +
     "（可在「路径设置」里关闭此提示）\n\n" +
-    "继续运行吗？"
+    "继续运行吗？",
+    { title: "共享 home 提示", kind: "warning" }
   );
 }
 
@@ -147,7 +150,7 @@ function setWarnSharedHome(val) {
 }
 
 async function run(v) {
-  if (!confirmSharedHome(v)) return;
+  if (!(await confirmSharedHome(v))) return;
   if (runningVersion.value) return; // 已有版本在启动，忽略重复点击
   runningVersion.value = v;
   notify("正在启动 DSH " + v + "，请稍候...");
@@ -164,7 +167,7 @@ async function createShortcut(v) {
 }
 
 async function openInBrowser(v) {
-  if (!confirmSharedHome(v)) return;
+  if (!(await confirmSharedHome(v))) return;
   try {
     notify(await invoke("open_in_browser", { version: v }));
   } catch (e) { notify("" + e); }
@@ -232,7 +235,7 @@ function fmtSize(bytes) {
 
 async function copyShared(v) {
   closeMenu();
-  if (!confirm("将把共享数据（<根>/home）复制到该版本的隔离目录。\n已存在的文件不会覆盖。\n\n继续吗？")) return;
+  if (!(await ask("将把共享数据（<根>/home）复制到该版本的隔离目录。\n已存在的文件不会覆盖。\n\n继续吗？", { title: "复制共享数据", kind: "warning" }))) return;
   try {
     notify(await invoke("copy_shared_to_isolated", { version: v }));
     sizes.value = { ...sizes.value, [v]: undefined };
@@ -241,7 +244,7 @@ async function copyShared(v) {
 
 async function clearIsolated(v) {
   closeMenu();
-  if (!confirm("将删除该版本的隔离数据（保留版本本身）。\n此操作不可恢复，继续吗？")) return;
+  if (!(await ask("将删除该版本的隔离数据（保留版本本身）。\n此操作不可恢复，继续吗？", { title: "清理隔离数据", kind: "warning" }))) return;
   try {
     notify(await invoke("clear_isolated_data", { version: v }));
     sizes.value = { ...sizes.value, [v]: 0 };
