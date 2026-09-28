@@ -135,6 +135,156 @@ pub fn read_manifest_text(dir: &Path) -> Result<String, String> {
     std::fs::read_to_string(&p).map_err(|e| format!("读取 manifest.json 失败: {}", e))
 }
 
+// ===================== 路径安全与落盘原语 =====================
+
+/// 判断某个归档内相对路径是否命中「敏感文件」过滤。
+///
+/// 打包侧已做五类过滤，导入侧仍要防御式拒绝——防止恶意包写敏感文件。
+/// 返回 Some(原因) 表示应拒绝。
+pub fn sensitive_reason(rel: &Path) -> Option<String> {
+    use std::path::Component;
+
+    // 逐段检查
+    let segs: Vec<String> = rel
+        .components()
+        .filter_map(|c| match c {
+            Component::Normal(s) => Some(s.to_string_lossy().to_string()),
+            _ => None,
+        })
+        .collect();
+
+    let basename = segs.last().cloned().unwrap_or_default();
+    let lower = basename.to_lowercase();
+
+    // 精确名（任意路径段命中）
+    for seg in &segs {
+        let s = seg.to_lowercase();
+        if matches!(
+            s.as_str(),
+            "node_modules"
+                | ".env"
+                | ".credentials.yaml"
+                | ".anonymous-user-id"
+                | "settings.yaml"
+                | ".dshpkcfg"
+                | "credentials.yaml"
+                | "credentials.yml"
+                | "id_rsa"
+                | "id_ed25519"
+        ) {
+            return Some(format!("含敏感文件/目录 \"{}\"", seg));
+        }
+        // attachments/ 与安装基线模板
+        if s == "attachments" || s == ".system" {
+            return Some(format!("含运行时/系统目录 \"{}\"", seg));
+        }
+    }
+
+    // 扩展名
+    if let Some(ext) = rel.extension().and_then(|e| e.to_str()) {
+        let e = ext.to_lowercase();
+        if matches!(
+            e.as_str(),
+            "key" | "pem" | "p12" | "pfx" | "crt" | "der" | "asc"
+        ) {
+            return Some(format!("含密钥/证书文件 \"{}\"", basename));
+        }
+        // 嵌套压缩包
+        if matches!(e.as_str(), "zip" | "dspack" | "tgz" | "gz" | "tar") {
+            return Some(format!("含嵌套压缩包 \"{}\"", basename));
+        }
+    }
+
+    // 文件名正则类（用简单前缀/包含判断，避免引入 regex 依赖）
+    let is_cred = (lower.starts_with("credentials") && (lower.ends_with(".yml") || lower.ends_with(".yaml")))
+        || lower.ends_with(".credentials")
+        || (lower.starts_with("secrets") && (lower.ends_with(".json") || lower.ends_with(".yml") || lower.ends_with(".yaml")))
+        || lower.contains("token")
+        || lower.contains("api_key")
+        || lower.starts_with("id_rsa")
+        || lower.starts_with("id_ed25519")
+        || (lower.starts_with(".env"));
+    if is_cred {
+        return Some(format!("含疑似凭据文件 \"{}\"", basename));
+    }
+
+    None
+}
+
+/// 安全拼接：把归档内相对路径 rel 拼到 base 下，拒绝越界。
+///
+/// rel 必须是纯相对路径（不含 \`..\`、不以盘符/根开头）。
+pub fn safe_join(base: &Path, rel: &Path) -> Result<PathBuf, String> {
+    use std::path::Component;
+    for c in rel.components() {
+        match c {
+            Component::Normal(_) | Component::CurDir => {}
+            Component::ParentDir => {
+                return Err(format!("非法路径（含 ..）: {}", rel.display()));
+            }
+            Component::RootDir | Component::Prefix(_) => {
+                return Err(format!("非法路径（绝对路径）: {}", rel.display()));
+            }
+        }
+    }
+    Ok(base.join(rel))
+}
+
+/// 递归把 src 下的内容复制到 dst（保持相对结构），逐条施加安全校验。
+///
+/// - 跳过命中 sensitive_reason 的条目（记录到 skipped）
+/// - 目标已存在则覆盖
+/// - 返回 (复制的文件数, 被跳过的条目列表)
+pub fn copy_tree_checked(
+    src: &Path,
+    dst: &Path,
+    skipped: &mut Vec<String>,
+) -> Result<u64, String> {
+    if !src.exists() {
+        return Ok(0);
+    }
+    let mut count = 0u64;
+    copy_tree_inner(src, src, dst, skipped, &mut count)?;
+    Ok(count)
+}
+
+fn copy_tree_inner(
+    root: &Path,
+    cur: &Path,
+    dst: &Path,
+    skipped: &mut Vec<String>,
+    count: &mut u64,
+) -> Result<(), String> {
+    let entries = std::fs::read_dir(cur).map_err(|e| format!("读取目录失败 {}: {}", cur.display(), e))?;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let rel = path
+            .strip_prefix(root)
+            .map_err(|e| format!("路径解析失败: {}", e))?;
+
+        if let Some(reason) = sensitive_reason(rel) {
+            skipped.push(format!("{}（{}）", rel.display(), reason));
+            continue;
+        }
+
+        let out = safe_join(dst, rel)?;
+        if path.is_dir() {
+            std::fs::create_dir_all(&out)
+                .map_err(|e| format!("创建目录失败 {}: {}", out.display(), e))?;
+            copy_tree_inner(root, &path, dst, skipped, count)?;
+        } else {
+            if let Some(parent) = out.parent() {
+                std::fs::create_dir_all(parent)
+                    .map_err(|e| format!("创建目录失败 {}: {}", parent.display(), e))?;
+            }
+            std::fs::copy(&path, &out)
+                .map_err(|e| format!("复制失败 {} → {}: {}", path.display(), out.display(), e))?;
+            *count += 1;
+        }
+    }
+    Ok(())
+}
+
 // ===================== manifest 解析与校验 =====================
 
 /// 支持的 manifest 版本：现行 v5，兼容 v4。
@@ -467,6 +617,58 @@ mod tests {
         let p = build_min_dspack(&tmp, r#"{"format":"dspack","version":9}"#, true);
         let err = extract(&p).unwrap_err();
         assert!(err.contains("不支持的容器版本 v9"), "实际错误: {}", err);
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    // ---------- 路径安全与落盘原语 ----------
+
+    #[test]
+    fn safe_join_rejects_parent_dir() {
+        let base = Path::new("C:/base");
+        assert!(safe_join(base, Path::new("a/b.txt")).is_ok());
+        assert!(safe_join(base, Path::new("../evil.txt")).is_err());
+        assert!(safe_join(base, Path::new("a/../../evil.txt")).is_err());
+    }
+
+    #[test]
+    fn sensitive_reason_blocks_common_cases() {
+        assert!(sensitive_reason(Path::new(".env")).is_some());
+        assert!(sensitive_reason(Path::new("config/.env")).is_some());
+        assert!(sensitive_reason(Path::new("node_modules/x.js")).is_some());
+        assert!(sensitive_reason(Path::new("keys/server.pem")).is_some());
+        assert!(sensitive_reason(Path::new("creds/credentials.yaml")).is_some());
+        assert!(sensitive_reason(Path::new("nested/inner.zip")).is_some());
+        assert!(sensitive_reason(Path::new("settings.yaml")).is_some());
+        assert!(sensitive_reason(Path::new(".dshpkcfg")).is_some());
+
+        // 正常文件应放行
+        assert!(sensitive_reason(Path::new("cordis.patch.yml")).is_none());
+        assert!(sensitive_reason(Path::new("skills/demo/SKILL.md")).is_none());
+        assert!(sensitive_reason(Path::new("package.json")).is_none());
+    }
+
+    #[test]
+    fn copy_tree_skips_sensitive_files() {
+        let tmp = std::env::temp_dir().join("dsh-multiver-test-copytree");
+        let _ = std::fs::remove_dir_all(&tmp);
+        let src = tmp.join("src");
+        let dst = tmp.join("dst");
+        std::fs::create_dir_all(src.join("skills/demo")).unwrap();
+        std::fs::write(src.join("cordis.patch.yml"), b"[]").unwrap();
+        std::fs::write(src.join("skills/demo/SKILL.md"), b"# demo").unwrap();
+        std::fs::write(src.join(".env"), b"SECRET=1").unwrap();
+        std::fs::write(src.join("server.pem"), b"key").unwrap();
+
+        let mut skipped = Vec::new();
+        let n = copy_tree_checked(&src, &dst, &mut skipped).unwrap();
+
+        assert_eq!(n, 2, "应只复制 2 个正常文件");
+        assert_eq!(skipped.len(), 2, "应跳过 2 个敏感文件");
+        assert!(dst.join("cordis.patch.yml").is_file());
+        assert!(dst.join("skills/demo/SKILL.md").is_file());
+        assert!(!dst.join(".env").exists());
+        assert!(!dst.join("server.pem").exists());
+
         let _ = std::fs::remove_dir_all(&tmp);
     }
 
