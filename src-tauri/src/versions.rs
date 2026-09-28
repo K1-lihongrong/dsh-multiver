@@ -295,18 +295,12 @@ pub fn install(
     }
 }
 
-/// 把原始错误转成更易懂的提示
+/// 把原始错误转成更易懂的提示。
+///
+/// 复用整合包模块的统一诊断器，保证版本安装与整合包导入的错误文案一致。
 fn friendly_error(raw: &str) -> String {
-    if raw.contains("ERR_PNPM_NO_MATCHING_VERSION") || raw.contains("No matching version found") {
-        format!(
-            "该版本在官方源上发布不完整（依赖子包缺失），无法安装。\n建议换一个版本重试。\n\n原始信息：\n{}",
-            raw
-        )
-    } else if raw.contains("ERR_PNPM_FETCH") || raw.contains("UND_ERR") || raw.contains("ETIMEDOUT") {
-        format!("网络连接失败，请检查网络或稍后重试。\n\n原始信息：\n{}", raw)
-    } else {
-        format!("安装失败：\n{}", raw)
-    }
+    let (_, msg) = crate::modpack::diagnose(raw);
+    msg
 }
 
 /// 卸载指定版本

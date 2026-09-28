@@ -10,6 +10,113 @@ use serde::Deserialize;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
+// ===================== 安装错误诊断 =====================
+
+/// 诊断类别。
+#[derive(Debug, Clone, PartialEq)]
+pub enum DiagKind {
+    /// dsh 运行时不可用（主包/子包版本对不上，通常是上游下架或半发布）
+    DshRuntime,
+    /// 上游插件的依赖声明在当前源上无匹配版本
+    PluginDep,
+    /// 网络
+    Network,
+    /// 文件被占用 / 权限
+    FileLocked,
+    /// 磁盘空间
+    DiskFull,
+    /// 其他
+    Unknown,
+}
+
+/// 从原始错误文本中提取「找不到的包名」。
+/// 典型输入：`No matching version found for @scope/name@>=1.0.0 <2.0.0`
+fn extract_missing_package(raw: &str) -> Option<String> {
+    const MARKER: &str = "No matching version found for ";
+    let idx = raw.find(MARKER)?;
+    let rest = raw[idx + MARKER.len()..].trim_start();
+    let token: String = rest.chars().take_while(|c| !c.is_whitespace()).collect();
+    if token.is_empty() {
+        return None;
+    }
+    // 去掉版本后缀：@scope/name@ver -> @scope/name；name@ver -> name
+    let name = if let Some(stripped) = token.strip_prefix('@') {
+        match stripped.find('@') {
+            Some(pos) => token[..pos + 1].to_string(),
+            None => token.clone(),
+        }
+    } else {
+        match token.find('@') {
+            Some(pos) => token[..pos].to_string(),
+            None => token.clone(),
+        }
+    };
+    if name.is_empty() { None } else { Some(name) }
+}
+
+/// 把原始安装错误转成结构化诊断，返回 (类别, 用户文案)。
+pub fn diagnose(raw: &str) -> (DiagKind, String) {
+    let lower = raw.to_lowercase();
+
+    // 网络类（先判，避免被 NO_MATCHING_VERSION 的次生错误误导）
+    let net_markers = [
+        "und_err",
+        "etimedout",
+        "econnreset",
+        "enotfound",
+        "err_pnpm_fetch",
+        "socket hang up",
+        "fetch failed",
+    ];
+    if net_markers.iter().any(|m| lower.contains(m)) {
+        return (
+            DiagKind::Network,
+            "网络连接失败，无法从 npm 拉取依赖。\n\n建议：\n  · 检查网络 / 代理是否正常\n  · 稍后重试（源站可能暂时不可达）".to_string(),
+        );
+    }
+
+    if lower.contains("enospc") || lower.contains("no space left") {
+        return (
+            DiagKind::DiskFull,
+            "磁盘空间不足，无法写入依赖。\n\n建议：清理磁盘后重试。".to_string(),
+        );
+    }
+
+    if lower.contains("os error 32")
+        || lower.contains("being used by another process")
+        || lower.contains("eacces")
+        || lower.contains("eperm")
+    {
+        return (
+            DiagKind::FileLocked,
+            "文件被其他进程占用，或权限不足。\n\n建议：\n  · 关闭正在运行的 dsh / 资源管理器窗口\n  · 稍后重试".to_string(),
+        );
+    }
+
+    if lower.contains("err_pnpm_no_matching_version") || lower.contains("no matching version found") {
+        let pkg = extract_missing_package(raw).unwrap_or_default();
+        let display = if pkg.is_empty() { "（未识别包名）".to_string() } else { pkg.clone() };
+        if pkg.starts_with("@deepseek-ai/dsh") {
+            return (
+                DiagKind::DshRuntime,
+                format!(
+                    "此包需要的 dsh 运行时组件 `{}` 在当前 npm 源上无法获取。\n\n常见原因：\n  · 该 dsh 版本已被官方下架或尚未发布完整\n  · npm 上处于「半发布」窗口期（部分子包已更、部分未更）\n\n建议：\n  · 稍后重试（可能只是暂时状态）\n  · 或让整合包作者改用其他 dsh 版本",
+                    display
+                ),
+            );
+        }
+        return (
+            DiagKind::PluginDep,
+            format!(
+                "上游插件的依赖声明在当前 npm 源上无匹配版本：`{}`。\n\n这通常是该插件自身的问题（peer / 依赖声明过窄，或写死了已下架的版本），与整合包本身无关。\n\n建议：\n  · 联系整合包作者反馈此插件\n  · 或等待上游插件修复",
+                display
+            ),
+        );
+    }
+
+    (DiagKind::Unknown, format!("安装失败：\n{}", raw))
+}
+
 /// `.dspack` 根部的容器标记文件内容。
 #[derive(Debug, Clone, Deserialize)]
 pub struct DspackMarker {
@@ -584,7 +691,8 @@ fn run_pnpm_install(
     if matches!(status, Ok(s) if s.success()) {
         Ok(())
     } else {
-        Err(format!("安装依赖失败：\n{}", combined.trim()))
+        let (_, msg) = diagnose(combined.trim());
+        Err(format!("安装依赖失败：\n\n{}", msg))
     }
 }
 
@@ -803,7 +911,8 @@ fn install_dsh_into(
     if matches!(status, Ok(s) if s.success()) {
         Ok(())
     } else {
-        Err(format!("安装 dsh {} 失败：\n{}", dsh_version, combined.trim()))
+        let (_, msg) = diagnose(combined.trim());
+        Err(format!("安装 dsh {} 失败：\n\n{}", dsh_version, msg))
     }
 }
 
@@ -1315,6 +1424,59 @@ mod tests {
         let err = extract(&p).unwrap_err();
         assert!(err.contains("不支持的容器版本 v9"), "实际错误: {}", err);
         let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    // ---------- 错误诊断 ----------
+
+    #[test]
+    fn diag_extracts_scoped_package() {
+        let raw = "[ERR_PNPM_NO_MATCHING_VERSION] No matching version found for @deepseek-ai/dsh-home-paths@>=0.1.7 <0.2.0-0 while fetching it from https://registry.npmjs.org/";
+        assert_eq!(extract_missing_package(raw).as_deref(), Some("@deepseek-ai/dsh-home-paths"));
+    }
+
+    #[test]
+    fn diag_extracts_plain_package() {
+        let raw = "No matching version found for lucide-react@^1.0.0";
+        assert_eq!(extract_missing_package(raw).as_deref(), Some("lucide-react"));
+    }
+
+    #[test]
+    fn diag_classifies_dsh_runtime() {
+        let raw = "[ERR_PNPM_NO_MATCHING_VERSION] No matching version found for @deepseek-ai/dsh-home-paths@>=0.1.7 <0.2.0-0 while fetching it from https://registry.npmjs.org/";
+        let (kind, msg) = diagnose(raw);
+        assert_eq!(kind, DiagKind::DshRuntime);
+        assert!(msg.contains("dsh 运行时"), "文案应说明是运行时问题: {}", msg);
+        assert!(msg.contains("dsh-home-paths"), "应给出具体包名: {}", msg);
+    }
+
+    #[test]
+    fn diag_classifies_plugin_dep() {
+        let raw = "[ERR_PNPM_NO_MATCHING_VERSION] No matching version found for some-plugin-sub@^2.0.0";
+        let (kind, msg) = diagnose(raw);
+        assert_eq!(kind, DiagKind::PluginDep);
+        assert!(msg.contains("上游插件"), "文案应指出是插件问题: {}", msg);
+    }
+
+    #[test]
+    fn diag_classifies_network() {
+        let raw = "GET https://registry.npmjs.org/x error (UND_ERR_DESTROYED). Will retry";
+        let (kind, _) = diagnose(raw);
+        assert_eq!(kind, DiagKind::Network);
+    }
+
+    #[test]
+    fn diag_classifies_file_locked() {
+        let raw = "EPERM: operation not permitted, unlink 'x'";
+        let (kind, _) = diagnose(raw);
+        assert_eq!(kind, DiagKind::FileLocked);
+    }
+
+    #[test]
+    fn diag_unknown_passthrough() {
+        let raw = "some totally unexpected failure";
+        let (kind, msg) = diagnose(raw);
+        assert_eq!(kind, DiagKind::Unknown);
+        assert!(msg.contains("some totally unexpected failure"));
     }
 
     // ---------- files[] 下载校验 ----------
