@@ -28,7 +28,7 @@ const importPreview = ref(null);   // 预览结果（确认框用）
 const importPath = ref("");        // 待导入的文件路径
 const importBusy = ref(false);
 const importStage = ref("");
-let unlistenImportStage = null;
+let unlistenCliImport = null;
 
 // 列表分组
 const versionList = computed(() => installed.value.filter((v) => v.kind !== "modpack"));
@@ -415,6 +415,10 @@ onMounted(async () => {
   unlistenProgress = await listen("install-progress", (e) => {
     installStage.value = e.payload;
   });
+  // 命令行 --import：界面就绪后自动弹出导入确认
+  unlistenCliImport = await listen("cli-import", (e) => {
+    previewModpack(e.payload);
+  });
   await runEnvCheck();
   document.addEventListener("click", closeMenu);
 });
@@ -422,6 +426,7 @@ onMounted(async () => {
 onUnmounted(() => {
   document.removeEventListener("click", closeMenu);
   if (unlistenProgress) unlistenProgress();
+  if (unlistenCliImport) unlistenCliImport();
 });
 </script>
 

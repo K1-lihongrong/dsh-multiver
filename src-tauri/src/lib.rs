@@ -4,6 +4,8 @@ mod envcheck;
 mod jobobj;
 mod launcher;
 mod modpack;
+#[cfg(test)]
+mod modpack_e2e_test;
 mod versions;
 
 use config::{Config, Dirs};
@@ -994,6 +996,30 @@ fn window_label_gen(version: &str, gen: u64) -> String {
     format!("{}-{}", window_label_prefix(version), gen)
 }
 
+/// 简易异步睡眠（避免引入 tokio 直接依赖）。
+async fn tokio_sleep(ms: u64) {
+    let (tx, rx) = std::sync::mpsc::channel::<()>();
+    std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(ms));
+        let _ = tx.send(());
+    });
+    let _ = tauri::async_runtime::spawn_blocking(move || {
+        let _ = rx.recv();
+    })
+    .await;
+}
+
+/// 从命令行参数解析出 --import <路径>（命令行导入模式用）
+fn parse_import_path(args: &[String]) -> Option<String> {
+    let mut it = args.iter();
+    while let Some(a) = it.next() {
+        if a == "--import" {
+            return it.next().cloned();
+        }
+    }
+    None
+}
+
 /// 从命令行参数解析出 --launch-version <版本>（精简启动模式用）
 fn parse_launch_version(args: &[String]) -> Option<String> {
     let mut it = args.iter();
@@ -1087,9 +1113,20 @@ pub fn run() {
             use tauri::Manager;
             // 必须在任何窗口显示之前设置，否则任务栏图标可能不稳定
             set_windows_app_user_model_id(&app.handle().clone());
+            // 命令行导入模式：--import <路径> 时，界面就绪后自动发起导入预览。
+            let args: Vec<String> = std::env::args().collect();
+            if let Some(path) = parse_import_path(&args) {
+                let app_handle = app.handle().clone();
+                tauri::async_runtime::spawn(async move {
+                    use tauri::Emitter;
+                    // 稍等前端挂载完成
+                    tokio_sleep(800).await;
+                    let _ = app_handle.emit("cli-import", path);
+                });
+            }
             // 精简启动模式：命令行带 --launch-version <版本> 时，
             // 关闭默认主窗口，直接打开该版本的内嵌窗口。
-            if let Some(version) = parse_launch_version(&std::env::args().collect::<Vec<_>>()) {
+            if let Some(version) = parse_launch_version(&args) {
                 // 注意：不能立刻 close 主窗口——若此时尚无其他窗口，Tauri 会认为
                 // "所有窗口已关闭" 而直接退出事件循环，导致异步创建 dsh 窗口来不及执行。
                 // 因此先**隐藏**主窗口（保持进程存活），待 dsh 窗口建好后再关闭它。

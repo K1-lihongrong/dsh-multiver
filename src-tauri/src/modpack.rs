@@ -543,14 +543,30 @@ fn run_pnpm_install(
 
     let mut child = cmd.spawn().map_err(|e| format!("启动 pnpm install 失败: {}", e))?;
 
-    let mut collected = String::new();
+    use std::io::BufRead;
+    use std::sync::{Arc, Mutex};
+
+    let stdout_text = Arc::new(Mutex::new(String::new()));
+    let stdout_handle = child.stdout.take().map(|stdout| {
+        let c = stdout_text.clone();
+        std::thread::spawn(move || {
+            let reader = std::io::BufReader::new(stdout);
+            for line in reader.lines().map_while(Result::ok) {
+                if let Ok(mut g) = c.lock() {
+                    g.push_str(&line);
+                    g.push('\n');
+                }
+            }
+        })
+    });
+
+    let mut err_text = String::new();
     let mut last = String::new();
     if let Some(stderr) = child.stderr.take() {
-        use std::io::BufRead;
         let reader = std::io::BufReader::new(stderr);
         for line in reader.lines().map_while(Result::ok) {
-            collected.push_str(&line);
-            collected.push('\n');
+            err_text.push_str(&line);
+            err_text.push('\n');
             if let Some(stage) = crate::versions::parse_stage(&line) {
                 if stage != last {
                     last = stage.to_string();
@@ -560,10 +576,15 @@ fn run_pnpm_install(
         }
     }
     let status = child.wait();
+    if let Some(h) = stdout_handle {
+        let _ = h.join();
+    }
+    let out_text = stdout_text.lock().map(|g| g.clone()).unwrap_or_default();
+    let combined = format!("{}{}", err_text.trim(), if out_text.trim().is_empty() { String::new() } else { format!("\n{}", out_text.trim()) });
     if matches!(status, Ok(s) if s.success()) {
         Ok(())
     } else {
-        Err(format!("安装依赖失败：\n{}", collected.trim()))
+        Err(format!("安装依赖失败：\n{}", combined.trim()))
     }
 }
 
@@ -577,6 +598,24 @@ pub fn instance_dir_name(m: &Manifest, suffix: Option<&str>) -> String {
         Some(s) if !s.trim().is_empty() => format!("{}-{}", base, sanitize(s)),
         _ => base,
     }
+}
+
+/// 删除目录，带退避重试（应对 Windows 上短暂的文件占用）。
+fn remove_dir_with_retry(dir: &Path, attempts: u32) -> std::io::Result<()> {
+    if !dir.exists() {
+        return Ok(());
+    }
+    let mut last = None;
+    for i in 0..attempts {
+        match std::fs::remove_dir_all(dir) {
+            Ok(()) => return Ok(()),
+            Err(e) => {
+                last = Some(e);
+                std::thread::sleep(std::time::Duration::from_millis(150 * (i as u64 + 1)));
+            }
+        }
+    }
+    Err(last.unwrap_or_else(|| std::io::Error::new(std::io::ErrorKind::Other, "未知错误")))
 }
 
 /// 把标识/版本里的非法文件名字符替换为 \`-\`。
@@ -675,9 +714,18 @@ pub fn import(
             })
         }
         Err(e) => {
-            // 回滚：删除整个实例目录
-            let _ = std::fs::remove_dir_all(&instance_dir);
-            Err(e)
+            // 回滚：删除整个实例目录。
+            // Windows 上 pnpm 退出后可能仍短暂持有目录句柄（worker/杀毒/索引），
+            // 故带退避重试；仍失败则如实报告，让用户手动清理，而不是静默留半成品。
+            match remove_dir_with_retry(&instance_dir, 8) {
+                Ok(()) => Err(e),
+                Err(del_err) => Err(format!(
+                    "{}\n\n（回滚未完成：删除实例目录失败 {}。请关闭占用该目录的进程后手动删除 {}）",
+                    e,
+                    del_err,
+                    instance_dir.display()
+                )),
+            }
         }
     }
 }
@@ -703,14 +751,35 @@ fn install_dsh_into(
         .stderr(std::process::Stdio::piped());
 
     let mut child = cmd.spawn().map_err(|e| format!("启动 pnpm add 失败: {}", e))?;
-    let mut collected = String::new();
+
+    // stdout 与 stderr 都要读：pnpm 的进度走 stderr，但部分错误（尤其经 cmd /C）
+    // 会走 stdout。两个流都用独立线程读到 EOF，避免管道填满导致假死。
+    use std::io::BufRead;
+    use std::sync::{Arc, Mutex};
+
+    // stdout 用独立线程读到 EOF（丢弃内容，仅防管道填满）
+    let stdout_text = Arc::new(Mutex::new(String::new()));
+    let stdout_handle = child.stdout.take().map(|stdout| {
+        let c = stdout_text.clone();
+        std::thread::spawn(move || {
+            let reader = std::io::BufReader::new(stdout);
+            for line in reader.lines().map_while(Result::ok) {
+                if let Ok(mut g) = c.lock() {
+                    g.push_str(&line);
+                    g.push('\n');
+                }
+            }
+        })
+    });
+
+    // stderr 在主线程逐行读（顺带推阶段）——pnpm 的进度与多数错误走 stderr
+    let mut err_text = String::new();
     let mut last = String::new();
     if let Some(stderr) = child.stderr.take() {
-        use std::io::BufRead;
         let reader = std::io::BufReader::new(stderr);
         for line in reader.lines().map_while(Result::ok) {
-            collected.push_str(&line);
-            collected.push('\n');
+            err_text.push_str(&line);
+            err_text.push('\n');
             if let Some(stage) = crate::versions::parse_stage(&line) {
                 if stage != last {
                     last = stage.to_string();
@@ -720,10 +789,15 @@ fn install_dsh_into(
         }
     }
     let status = child.wait();
+    if let Some(h) = stdout_handle {
+        let _ = h.join();
+    }
+    let out_text = stdout_text.lock().map(|g| g.clone()).unwrap_or_default();
+    let combined = format!("{}{}", err_text.trim(), if out_text.trim().is_empty() { String::new() } else { format!("\n{}", out_text.trim()) });
     if matches!(status, Ok(s) if s.success()) {
         Ok(())
     } else {
-        Err(format!("安装 dsh {} 失败：\n{}", dsh_version, collected.trim()))
+        Err(format!("安装 dsh {} 失败：\n{}", dsh_version, combined.trim()))
     }
 }
 
