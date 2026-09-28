@@ -720,7 +720,6 @@ fn parse_launch_version(args: &[String]) -> Option<String> {
 /// 必须在任何窗口显示之前调用。
 #[cfg(windows)]
 fn set_windows_app_user_model_id(app: &tauri::AppHandle) {
-    use tauri::Manager;
     let app_id = app.config().identifier.clone();
     let wide: Vec<u16> = app_id.encode_utf16().chain(std::iter::once(0)).collect();
     unsafe {
