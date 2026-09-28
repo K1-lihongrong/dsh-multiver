@@ -1,8 +1,8 @@
 <script setup>
-import { ref, onMounted, onUnmounted } from "vue";
+import { ref, computed, onMounted, onUnmounted } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { ask } from "@tauri-apps/plugin-dialog";
+import { ask, open } from "@tauri-apps/plugin-dialog";
 
 const state = ref(null);
 const installed = ref([]);
@@ -21,6 +21,148 @@ let toastTimer = null;
 let unlistenProgress = null;
 // 「运行共享 home 版本时提示」开关（持久化到 localStorage）
 const warnSharedHomeEnabled = ref(localStorage.getItem("dsh-multiver.warnSharedHome") !== "0");
+
+// ---- 整合包导入相关状态 ----
+const dragging = ref(false);
+const importPreview = ref(null);   // 预览结果（确认框用）
+const importPath = ref("");        // 待导入的文件路径
+const importBusy = ref(false);
+const importStage = ref("");
+let unlistenImportStage = null;
+
+// 列表分组
+const versionList = computed(() => installed.value.filter((v) => v.kind !== "modpack"));
+const modpackList = computed(() => installed.value.filter((v) => v.kind === "modpack"));
+
+/// 悬停浮层：当前展开的实例
+const hoverItem = ref(null);
+
+function fmtMultiLang(v) {
+  return v || "";
+}
+
+/// 触发文件选择 → 预览
+async function pickAndPreview() {
+  try {
+    const selected = await open({
+      multiple: false,
+      filters: [{ name: "DSH 整合包", extensions: ["dspack"] }],
+    });
+    if (!selected) return;
+    await previewModpack(selected);
+  } catch (e) {
+    notify("选择文件失败：" + e);
+  }
+}
+
+/// 预览并弹确认
+async function previewModpack(path) {
+  if (importBusy.value) return;
+  importBusy.value = true;
+  importStage.value = "正在解析整合包...";
+  try {
+    const p = await invoke("preview_dspack", { path });
+    importPreview.value = p;
+    importPath.value = path;
+  } catch (e) {
+    notify(String(e));
+  } finally {
+    importBusy.value = false;
+    importStage.value = "";
+  }
+}
+
+/// 用户确认导入
+async function confirmImport(mode) {
+  // mode: "normal" | "replace" | "keep"
+  const p = importPreview.value;
+  if (!p) return;
+  importPreview.value = null;
+  importBusy.value = true;
+  importStage.value = "正在导入...";
+  try {
+    let suffix = null;
+    let replace = false;
+    if (mode === "keep") {
+      suffix = timestampSuffix();
+    } else if (mode === "replace") {
+      replace = true;
+    }
+    const name = await invoke("import_dspack", {
+      path: importPath.value,
+      suffix,
+      replace,
+    });
+    await refresh();
+    const open = await ask(
+      "整合包 " + p.display_name + " 导入完成，是否立即打开？",
+      { title: "导入完成", kind: "info" }
+    );
+    if (open) await run(name);
+  } catch (e) {
+    notify(String(e));
+  } finally {
+    importBusy.value = false;
+    importStage.value = "";
+  }
+}
+
+function cancelImport() {
+  importPreview.value = null;
+  importPath.value = "";
+}
+
+function timestampSuffix() {
+  const d = new Date();
+  const p = (n) => String(n).padStart(2, "0");
+  return (
+    d.getFullYear() +
+    p(d.getMonth() + 1) +
+    p(d.getDate()) +
+    "-" +
+    p(d.getHours()) +
+    p(d.getMinutes()) +
+    p(d.getSeconds())
+  );
+}
+
+/// 拖拽处理
+function onDrop(e) {
+  dragging.value = false;
+  const files = e.dataTransfer?.files;
+  if (!files || !files.length) return;
+  if (files.length > 1) {
+    notify("一次只能导入一个 .dspack 文件");
+    return;
+  }
+  const f = files[0];
+  const name = f.name || "";
+  if (!name.toLowerCase().endsWith(".dspack")) {
+    notify("只支持 .dspack 整合包文件");
+    return;
+  }
+  // Tauri 下 file 对象带 path
+  const path = f.path || f.name;
+  if (!path) {
+    notify("无法获取文件路径");
+    return;
+  }
+  previewModpack(path);
+}
+
+function onDragOver(e) {
+  e.preventDefault();
+  dragging.value = true;
+}
+
+function onDragLeave() {
+  dragging.value = false;
+}
+
+/// 是否整合包实例
+function isModpack(v) {
+  return v && v.kind === "modpack";
+}
 
 function notify(msg) {
   toast.value = msg;
@@ -327,8 +469,9 @@ onUnmounted(() => {
         还没有安装任何版本，从下方列表安装一个吧
       </div>
 
-      <ul class="ver-list" v-else>
-        <li v-for="v in installed" :key="v.version" class="ver-item">
+      <!-- 版本分组 -->
+      <ul class="ver-list" v-if="versionList.length">
+        <li v-for="v in versionList" :key="v.version" class="ver-item">
           <div class="ver-main">
             <span class="ver-num">{{ v.version }}</span>
             <span class="badge" v-if="v.is_default">默认</span>
@@ -371,6 +514,95 @@ onUnmounted(() => {
           </div>
         </li>
       </ul>
+
+      <!-- 整合包分组 -->
+      <div class="group-head" v-if="modpackList.length">
+        <h3>整合包</h3>
+        <span class="count">{{ modpackList.length }}</span>
+      </div>
+      <ul class="pack-list" v-if="modpackList.length">
+        <li
+          v-for="v in modpackList"
+          :key="v.version"
+          class="pack-item"
+          @mouseenter="hoverItem = v.version"
+          @mouseleave="hoverItem = null"
+        >
+          <div class="pack-icon">
+            <img v-if="v.modpack_icon && /^https?:/.test(v.modpack_icon)" :src="v.modpack_icon" alt="" />
+            <span v-else>📦</span>
+          </div>
+          <div class="pack-main">
+            <div class="pack-title">
+              {{ v.modpack_display_name || v.modpack_name }}
+              <span class="pack-ver">{{ v.modpack_version }}</span>
+              <span class="badge badge-pack" v-if="v.modpack_type === 'dshhome'">dshhome</span>
+            </div>
+            <div class="pack-sub">
+              <span v-if="v.packed_dsh_version">DSH {{ v.packed_dsh_version }}</span>
+              <span v-if="v.bundle_count != null">· {{ v.bundle_count }} 个插件</span>
+              <span v-if="v.skill_count">· {{ v.skill_count }} 个技能</span>
+              <span v-if="v.installed_at">· 导入于 {{ v.installed_at }}</span>
+            </div>
+          </div>
+          <div class="ver-actions">
+            <button class="btn primary" @click="run(v.version)" :disabled="!!runningVersion">{{ runningVersion === v.version ? "启动中..." : "运行" }}</button>
+            <button class="btn" @click="openInBrowser(v.version)">浏览器打开</button>
+            <button class="btn" @click="createShortcut(v.version)">桌面快捷方式</button>
+            <button class="btn" @click="scanVersionSize(v.version)" :disabled="scanningVer === v.version">
+              {{ scanningVer === v.version ? "扫描中..." : (verSizes[v.version] != null ? "重新扫描占用" : "扫描占用") }}
+            </button>
+            <div class="menu-wrap">
+              <button class="btn active" @click.stop="toggleMenu(v.version)">已隔离 ▾</button>
+              <div class="menu" v-if="openMenu === v.version" @click.stop>
+                <button class="menu-item" @click="openIsolatedDir(v.version)">打开数据目录</button>
+                <button class="menu-item" @click="scanSize(v.version)" :disabled="scanning === v.version">
+                  <span v-if="scanning === v.version">扫描中...</span>
+                  <span v-else-if="sizes[v.version] != null">占用 {{ fmtSize(sizes[v.version]) }}（重新扫描）</span>
+                  <span v-else>扫描占用大小</span>
+                </button>
+                <button class="menu-item" @click="copyShared(v.version)">复制共享数据到此</button>
+                <button class="menu-item danger" @click="clearIsolated(v.version)">清理隔离数据</button>
+              </div>
+            </div>
+            <button class="btn danger" @click="uninstall(v.version)">卸载</button>
+          </div>
+
+          <!-- 悬停浮层详情 -->
+          <div class="pack-pop" v-if="hoverItem === v.version">
+            <div class="pop-name">{{ v.modpack_display_name || v.modpack_name }} <span class="pack-ver">{{ v.modpack_version }}</span></div>
+            <div class="pop-desc" v-if="v.modpack_description">{{ v.modpack_description }}</div>
+            <div class="pop-row" v-if="v.modpack_author"><b>作者</b>{{ v.modpack_author }}</div>
+            <div class="pop-row"><b>标识</b>{{ v.modpack_name }}@{{ v.modpack_version }}</div>
+            <div class="pop-row"><b>形态</b>{{ v.modpack_type }}</div>
+            <div class="pop-row"><b>内嵌 DSH</b>{{ v.packed_dsh_version || "—" }}</div>
+            <div class="pop-row"><b>插件</b>{{ v.bundle_count != null ? v.bundle_count : "—" }}</div>
+            <div class="pop-row"><b>技能</b>{{ v.skill_count != null ? v.skill_count : "—" }}</div>
+            <div class="pop-row" v-if="v.installed_at"><b>导入</b>{{ v.installed_at }}</div>
+            <div class="pop-row" v-if="verSizes[v.version] != null"><b>占用</b>{{ fmtSize(verSizes[v.version]) }}</div>
+          </div>
+        </li>
+      </ul>
+    </section>
+
+    <section class="panel">
+      <div class="panel-head">
+        <h2>导入整合包</h2>
+        <button class="btn primary small" @click="pickAndPreview" :disabled="importBusy">选择 .dspack 文件</button>
+      </div>
+      <div
+        class="drop-zone"
+        :class="{ over: dragging }"
+        @dragover="onDragOver"
+        @dragleave="onDragLeave"
+        @drop="onDrop"
+      >
+        把 .dspack 文件拖到这里，或点右上角选择文件
+      </div>
+      <div class="install-progress" v-if="importStage">
+        <div class="spinner"></div>
+        <span class="stage-text">{{ importStage }}</span>
+      </div>
     </section>
 
     <section class="panel">
@@ -457,6 +689,44 @@ onUnmounted(() => {
       <div class="hint">点击任意路径可在资源管理器中打开</div>
     </section>
   </main>
+
+  <!-- 导入确认模态框 -->
+  <div class="modal-mask" v-if="importPreview">
+    <div class="modal">
+      <h3>确认导入</h3>
+      <div class="modal-pack">
+        <div class="modal-icon">
+          <img v-if="importPreview.icon && /^https?:/.test(importPreview.icon)" :src="importPreview.icon" alt="" />
+          <span v-else>📦</span>
+        </div>
+        <div>
+          <div class="modal-title">
+            {{ importPreview.display_name }}
+            <span class="pack-ver">{{ importPreview.version }}</span>
+          </div>
+          <div class="modal-sub">{{ importPreview.name }}@{{ importPreview.version }} · {{ importPreview.modpack_type }}</div>
+        </div>
+      </div>
+      <div class="modal-desc" v-if="importPreview.description">{{ importPreview.description }}</div>
+      <div class="modal-rows">
+        <div class="pop-row" v-if="importPreview.author"><b>作者</b>{{ importPreview.author }}</div>
+        <div class="pop-row"><b>容器</b>v{{ importPreview.container_version }} / manifest v{{ importPreview.manifest_version }}</div>
+        <div class="pop-row"><b>目标 DSH</b>{{ importPreview.dsh_version || "（用本机最新）" }}</div>
+        <div class="pop-row" v-if="importPreview.dsh_versions && importPreview.dsh_versions.length"><b>兼容集</b>{{ importPreview.dsh_versions.join(", ") }}</div>
+        <div class="pop-row"><b>插件</b>{{ importPreview.bundle_count }}</div>
+        <div class="pop-row"><b>依赖</b>{{ importPreview.dep_count }}</div>
+        <div class="pop-row" v-if="importPreview.files_count"><b>下载资源</b>{{ importPreview.files_count }} 项</div>
+        <div class="pop-row"><b>启动 profile</b>{{ importPreview.launch_profile }}</div>
+        <div class="pop-row"><b>实例目录</b>{{ importPreview.instance_name }}</div>
+      </div>
+      <div class="modal-actions">
+        <button class="btn" @click="cancelImport">取消</button>
+        <button class="btn" @click="confirmImport('keep')" title="保留已有实例，新建一份">保留两份</button>
+        <button class="btn" @click="confirmImport('replace')" title="删除已有同名实例后重装">重装</button>
+        <button class="btn primary" @click="confirmImport('normal')">导入</button>
+      </div>
+    </div>
+  </div>
 
   <transition name="fade">
     <div
@@ -694,4 +964,78 @@ body {
 ::-webkit-scrollbar { width: 8px; }
 ::-webkit-scrollbar-thumb { background: #d6dae0; border-radius: 4px; }
 ::-webkit-scrollbar-thumb:hover { background: #c3c8d0; }
+
+/* ---------- 整合包分组 ---------- */
+.group-head {
+  display: flex; align-items: center; gap: 8px;
+  margin: 18px 0 8px;
+}
+.group-head h3 { margin: 0; font-size: 14px; color: #444c56; }
+
+.pack-list { list-style: none; margin: 0; padding: 0; }
+.pack-item {
+  position: relative;
+  display: flex; align-items: center; gap: 12px;
+  padding: 10px 12px; margin-bottom: 8px;
+  background: #fff; border: 1px solid #e6e8eb; border-radius: 8px;
+  transition: box-shadow .15s, border-color .15s;
+}
+.pack-item:hover { border-color: #c9d3e0; box-shadow: 0 2px 10px rgba(20,30,50,.08); }
+.pack-icon {
+  width: 36px; height: 36px; flex: 0 0 36px;
+  display: flex; align-items: center; justify-content: center;
+  background: #f0f3f8; border-radius: 8px; font-size: 20px; overflow: hidden;
+}
+.pack-icon img { width: 100%; height: 100%; object-fit: cover; }
+.pack-main { flex: 1; min-width: 0; }
+.pack-title { font-weight: 600; display: flex; align-items: center; gap: 8px; }
+.pack-ver { font-weight: 400; color: #6b7480; font-size: 12px; }
+.pack-sub { color: #6b7480; font-size: 12px; margin-top: 2px; }
+.badge-pack { background: #ede7ff; color: #6b46c1; }
+
+/* 悬停浮层 */
+.pack-pop {
+  position: absolute; left: 12px; top: calc(100% - 4px);
+  z-index: 50; width: 420px; max-width: 80vw;
+  background: #fff; border: 1px solid #d8dee6; border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(20,30,50,.16);
+  padding: 10px 12px; font-size: 12px; color: #333;
+}
+.pop-name { font-weight: 600; margin-bottom: 4px; }
+.pop-desc { color: #555; margin-bottom: 6px; line-height: 1.5; }
+.pop-row { display: flex; gap: 8px; line-height: 1.9; }
+.pop-row b { flex: 0 0 64px; color: #8891a0; font-weight: 500; }
+
+/* 拖拽区 */
+.drop-zone {
+  border: 2px dashed #ccd3dd; border-radius: 8px;
+  padding: 22px; text-align: center; color: #8891a0;
+  transition: border-color .15s, background .15s;
+}
+.drop-zone.over { border-color: #4f6ef7; background: #f2f5ff; color: #4f6ef7; }
+
+/* 模态框 */
+.modal-mask {
+  position: fixed; inset: 0; z-index: 1000;
+  background: rgba(20,26,36,.45);
+  display: flex; align-items: center; justify-content: center;
+}
+.modal {
+  width: 520px; max-width: 92vw; max-height: 86vh; overflow: auto;
+  background: #fff; border-radius: 10px; padding: 18px 20px;
+  box-shadow: 0 16px 48px rgba(10,20,40,.28);
+}
+.modal h3 { margin: 0 0 12px; font-size: 16px; }
+.modal-pack { display: flex; gap: 12px; align-items: center; margin-bottom: 10px; }
+.modal-icon {
+  width: 44px; height: 44px; flex: 0 0 44px;
+  display: flex; align-items: center; justify-content: center;
+  background: #f0f3f8; border-radius: 8px; font-size: 22px; overflow: hidden;
+}
+.modal-icon img { width: 100%; height: 100%; object-fit: cover; }
+.modal-title { font-weight: 600; }
+.modal-sub { color: #6b7480; font-size: 12px; margin-top: 2px; }
+.modal-desc { color: #555; font-size: 13px; line-height: 1.6; margin-bottom: 10px; }
+.modal-rows { border-top: 1px solid #eef1f5; padding-top: 8px; margin-bottom: 14px; }
+.modal-actions { display: flex; justify-content: flex-end; gap: 8px; }
 </style>
