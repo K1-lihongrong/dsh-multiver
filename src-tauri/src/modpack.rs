@@ -285,6 +285,109 @@ fn copy_tree_inner(
     Ok(())
 }
 
+// ===================== files[] 下载与校验 =====================
+
+/// 计算字节的 sha256 十六进制串。
+pub fn sha256_hex(data: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    let mut h = Sha256::new();
+    h.update(data);
+    let out = h.finalize();
+    let mut s = String::with_capacity(64);
+    for b in out {
+        s.push_str(&format!("{:02x}", b));
+    }
+    s
+}
+
+/// 下载单个 FileRef 并校验，落到 \`root\` 下的 \`f.path\`。
+///
+/// - 依次尝试 \`urls\`，任一成功即止
+/// - 校验 size 与 sha256，不符则视为失败
+/// - 任一环节失败 → 删除已落文件（若已写）并返回错误
+pub fn download_file_ref(root: &Path, f: &FileRef) -> Result<(), String> {
+    let target = safe_join(root, Path::new(&f.path))?;
+
+    let mut last_err = String::from("没有可用的下载地址");
+    for url in &f.urls {
+        match fetch_bytes(url) {
+            Ok(bytes) => {
+                if bytes.len() as u64 != f.size {
+                    last_err = format!(
+                        "{}：大小不符（期望 {} 字节，实际 {} 字节）",
+                        url,
+                        f.size,
+                        bytes.len()
+                    );
+                    continue;
+                }
+                let got = sha256_hex(&bytes);
+                if !got.eq_ignore_ascii_case(&f.sha256) {
+                    last_err = format!(
+                        "{}：sha256 不符（期望 {}，实际 {}）",
+                        url, f.sha256, got
+                    );
+                    continue;
+                }
+                if let Some(parent) = target.parent() {
+                    std::fs::create_dir_all(parent)
+                        .map_err(|e| format!("创建目录失败 {}: {}", parent.display(), e))?;
+                }
+                std::fs::write(&target, &bytes)
+                    .map_err(|e| format!("写入文件失败 {}: {}", target.display(), e))?;
+                return Ok(());
+            }
+            Err(e) => {
+                last_err = format!("{}：{}", url, e);
+            }
+        }
+    }
+
+    // 全部失败：清掉可能的半成品
+    let _ = std::fs::remove_file(&target);
+    Err(format!("下载失败（{}）", last_err))
+}
+
+/// 下载一批 FileRef，全部成功才返回 Ok；任一失败 → 清理本批已下文件。
+pub fn download_all(root: &Path, files: &[FileRef]) -> Result<(), String> {
+    let mut done: Vec<PathBuf> = Vec::new();
+    for f in files {
+        match download_file_ref(root, f) {
+            Ok(()) => {
+                if let Ok(p) = safe_join(root, Path::new(&f.path)) {
+                    done.push(p);
+                }
+            }
+            Err(e) => {
+                for p in &done {
+                    let _ = std::fs::remove_file(p);
+                }
+                return Err(format!("下载 {} 失败：{}", f.path, e));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// HTTP GET 取字节（阻塞）。
+fn fetch_bytes(url: &str) -> Result<Vec<u8>, String> {
+    let client = reqwest::blocking::Client::builder()
+        .timeout(std::time::Duration::from_secs(300))
+        .user_agent("dsh-multiver")
+        .build()
+        .map_err(|e| format!("创建 HTTP 客户端失败: {}", e))?;
+    let resp = client
+        .get(url)
+        .send()
+        .map_err(|e| format!("请求失败: {}", e))?;
+    if !resp.status().is_success() {
+        return Err(format!("HTTP {}", resp.status()));
+    }
+    resp.bytes()
+        .map(|b| b.to_vec())
+        .map_err(|e| format!("读取响应失败: {}", e))
+}
+
 // ===================== 导入编排 =====================
 
 /// 导入进度回调（阶段文案）。
@@ -946,6 +1049,50 @@ mod tests {
         let p = build_min_dspack(&tmp, r#"{"format":"dspack","version":9}"#, true);
         let err = extract(&p).unwrap_err();
         assert!(err.contains("不支持的容器版本 v9"), "实际错误: {}", err);
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    // ---------- files[] 下载校验 ----------
+
+    #[test]
+    fn sha256_known_vector() {
+        // "abc" 的 sha256
+        assert_eq!(
+            sha256_hex(b"abc"),
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
+    }
+
+    #[test]
+    fn download_rejects_path_traversal() {
+        let f = FileRef {
+            path: "../evil.txt".to_string(),
+            sha256: "x".to_string(),
+            size: 1,
+            urls: vec!["https://example.invalid/x".to_string()],
+        };
+        let tmp = std::env::temp_dir().join("dsh-multiver-test-dl-escape");
+        let _ = std::fs::create_dir_all(&tmp);
+        let err = download_file_ref(&tmp, &f).unwrap_err();
+        assert!(err.contains("非法路径"), "实际: {}", err);
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn download_all_cleans_on_failure() {
+        // 两个条目，第一个假 URL 必失败 → 应报错且不留下文件
+        let files = vec![FileRef {
+            path: "a.bin".to_string(),
+            sha256: "00".to_string(),
+            size: 1,
+            urls: vec!["http://127.0.0.1:9/nope".to_string()],
+        }];
+        let tmp = std::env::temp_dir().join("dsh-multiver-test-dl-clean");
+        let _ = std::fs::remove_dir_all(&tmp);
+        let _ = std::fs::create_dir_all(&tmp);
+        let err = download_all(&tmp, &files).unwrap_err();
+        assert!(err.contains("下载"), "实际: {}", err);
+        assert!(!tmp.join("a.bin").exists(), "失败后不应留下文件");
         let _ = std::fs::remove_dir_all(&tmp);
     }
 
