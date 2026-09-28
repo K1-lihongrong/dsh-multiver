@@ -285,6 +285,335 @@ fn copy_tree_inner(
     Ok(())
 }
 
+// ===================== 导入编排 =====================
+
+/// 导入进度回调（阶段文案）。
+pub type StageFn<'a> = &'a dyn Fn(&str);
+
+/// 导入用到的路径集合。
+pub struct ImportDirs<'a> {
+    pub versions_dir: &'a Path,
+    pub store_dir: &'a Path,
+    pub cache_dir: &'a Path,
+    pub state_dir: &'a Path,
+}
+
+/// 导入结果。
+#[derive(Debug)]
+pub struct ImportOutcome {
+    /// 实例目录名（versions/ 下的目录名）
+    pub instance_name: String,
+    /// 实例目录绝对路径
+    pub instance_dir: PathBuf,
+    /// 被安全过滤跳过的条目（供 UI 提示）
+    pub skipped: Vec<String>,
+    /// 实际使用的 dsh 版本
+    pub dsh_version: String,
+}
+
+/// Windows 上调用 pnpm 需走 cmd。
+#[cfg(windows)]
+fn pnpm_cmd() -> std::process::Command {
+    use std::os::windows::process::CommandExt;
+    const CREATE_NO_WINDOW: u32 = 0x08000000;
+    let mut c = std::process::Command::new("cmd");
+    c.arg("/C").arg("pnpm");
+    c.creation_flags(CREATE_NO_WINDOW);
+    c
+}
+
+#[cfg(not(windows))]
+fn pnpm_cmd() -> std::process::Command {
+    std::process::Command::new("pnpm")
+}
+
+/// 在指定目录跑 \`pnpm install\`（用包依赖），流式读 stderr 推阶段。
+fn run_pnpm_install(
+    dir: &Path,
+    dirs: &ImportDirs,
+    on_stage: StageFn,
+) -> Result<(), String> {
+    let mut cmd = pnpm_cmd();
+    cmd.current_dir(dir)
+        .arg("install")
+        .arg(format!("--config.store-dir={}", dirs.store_dir.to_string_lossy()))
+        .arg(format!("--config.cache-dir={}", dirs.cache_dir.to_string_lossy()))
+        .arg(format!("--config.state-dir={}", dirs.state_dir.to_string_lossy()))
+        .arg("--config.confirmModulesPurge=false")
+        .arg("--config.dangerouslyAllowAllBuilds=true")
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+
+    let mut child = cmd.spawn().map_err(|e| format!("启动 pnpm install 失败: {}", e))?;
+
+    let mut collected = String::new();
+    let mut last = String::new();
+    if let Some(stderr) = child.stderr.take() {
+        use std::io::BufRead;
+        let reader = std::io::BufReader::new(stderr);
+        for line in reader.lines().map_while(Result::ok) {
+            collected.push_str(&line);
+            collected.push('\n');
+            if let Some(stage) = crate::versions::parse_stage(&line) {
+                if stage != last {
+                    last = stage.to_string();
+                    on_stage(stage);
+                }
+            }
+        }
+    }
+    let status = child.wait();
+    if matches!(status, Ok(s) if s.success()) {
+        Ok(())
+    } else {
+        Err(format!("安装依赖失败：\n{}", collected.trim()))
+    }
+}
+
+/// 生成实例目录名：\`modpack-<name>-<version>\`。
+/// \`suffix\` 非空时（保留两份场景）追加 \`-<suffix>\`。
+pub fn instance_dir_name(m: &Manifest, suffix: Option<&str>) -> String {
+    let name = m.name.clone().unwrap_or_else(|| "unnamed".to_string());
+    let ver = m.version.clone().unwrap_or_else(|| "0.0.0".to_string());
+    let base = format!("modpack-{}-{}", sanitize(&name), sanitize(&ver));
+    match suffix {
+        Some(s) if !s.trim().is_empty() => format!("{}-{}", base, sanitize(s)),
+        _ => base,
+    }
+}
+
+/// 把标识/版本里的非法文件名字符替换为 \`-\`。
+fn sanitize(s: &str) -> String {
+    s.chars()
+        .map(|c| if c.is_ascii_alphanumeric() || matches!(c, '-' | '.' | '_') { c } else { '-' })
+        .collect()
+}
+
+/// 四阶段导入（不含下载 files[]，那部分独立）。
+///
+/// 任一阶段失败 → 删除整个新建实例目录，回到「目录不存在」状态。
+///
+/// \`dsh_version\` 由调用方在阶段 0 决定（本函数不负责弹框安装 dsh 本体，
+/// 但会调用 \`ensure_dsh\` 回调来装）。
+pub fn import(
+    extracted: &Extracted,
+    manifest: &Manifest,
+    dirs: &ImportDirs,
+    instance_name: &str,
+    dsh_version: &str,
+    ensure_dsh: &dyn Fn(&str) -> Result<(), String>,
+    on_stage: StageFn,
+) -> Result<ImportOutcome, String> {
+    let instance_dir = dirs.versions_dir.join(instance_name);
+    if instance_dir.exists() {
+        return Err(format!("实例目录已存在: {}", instance_dir.display()));
+    }
+
+    let mut skipped: Vec<String> = Vec::new();
+
+    // 用闭包包住全部阶段，失败统一回滚
+    let result = (|| -> Result<(), String> {
+        // ---- 阶段 1：落盘 ----
+        on_stage("正在创建实例目录...");
+        std::fs::create_dir_all(&instance_dir)
+            .map_err(|e| format!("创建实例目录失败: {}", e))?;
+
+        // 重建 package.json（manifest 权威）
+        let pkg = build_package_json(manifest)?;
+        std::fs::write(instance_dir.join("package.json"), pkg)
+            .map_err(|e| format!("写入 package.json 失败: {}", e))?;
+
+        // .npmrc：hoisted（必须，与现有版本安装一致）
+        std::fs::write(instance_dir.join(".npmrc"), "node-linker=hoisted\n")
+            .map_err(|e| format!("写入 .npmrc 失败: {}", e))?;
+
+        // overrides/ → profile 根（即实例目录）
+        on_stage("正在展开 profile 内容...");
+        let ov = extracted.dir.join("overrides");
+        copy_tree_checked(&ov, &instance_dir, &mut skipped)?;
+
+        // patch 兜底：文件不存在时用 manifest.patch 写入
+        let patch_file = instance_dir.join("cordis.patch.yml");
+        if !patch_file.exists() {
+            if let Some(p) = &manifest.patch {
+                let _ = std::fs::write(&patch_file, p);
+            }
+        }
+
+        // home/ → 隔离 home 根
+        let home_root = instance_dir.join("home");
+        std::fs::create_dir_all(&home_root)
+            .map_err(|e| format!("创建 home 目录失败: {}", e))?;
+        let hov = extracted.dir.join("home");
+        if hov.exists() {
+            on_stage("正在展开 home 内容...");
+            copy_tree_checked(&hov, &home_root, &mut skipped)?;
+        }
+
+        // ---- 阶段 2：运行时与依赖 ----
+        on_stage("正在准备 dsh 运行时...");
+        ensure_dsh(dsh_version)?;
+
+        // 用 dsh 本体所在的版本目录作为 dsh 来源；这里采用「独立安装」策略：
+        // 把 dsh 本体装进本实例（与现有版本目录同构）。
+        // 若本机已有该 dsh 版本，则从其 node_modules 复制 dsh 的 .bin 入口不可行
+        // （dsh 需要完整依赖树），故统一走 pnpm add 到本实例。
+        on_stage("正在安装 dsh 本体...");
+        install_dsh_into(&instance_dir, dirs, dsh_version, on_stage)?;
+
+        on_stage("正在安装整合包依赖...");
+        run_pnpm_install(&instance_dir, dirs, on_stage)?;
+
+        Ok(())
+    })();
+
+    match result {
+        Ok(()) => {
+            on_stage("导入完成");
+            Ok(ImportOutcome {
+                instance_name: instance_name.to_string(),
+                instance_dir,
+                skipped,
+                dsh_version: dsh_version.to_string(),
+            })
+        }
+        Err(e) => {
+            // 回滚：删除整个实例目录
+            let _ = std::fs::remove_dir_all(&instance_dir);
+            Err(e)
+        }
+    }
+}
+
+/// 把 dsh 本体装进实例目录（pnpm add @deepseek-ai/dsh@<version>）。
+fn install_dsh_into(
+    instance_dir: &Path,
+    dirs: &ImportDirs,
+    dsh_version: &str,
+    on_stage: StageFn,
+) -> Result<(), String> {
+    let spec = format!("@deepseek-ai/dsh@{}", dsh_version);
+    let mut cmd = pnpm_cmd();
+    cmd.current_dir(instance_dir)
+        .arg("add")
+        .arg(&spec)
+        .arg(format!("--config.store-dir={}", dirs.store_dir.to_string_lossy()))
+        .arg(format!("--config.cache-dir={}", dirs.cache_dir.to_string_lossy()))
+        .arg(format!("--config.state-dir={}", dirs.state_dir.to_string_lossy()))
+        .arg("--config.confirmModulesPurge=false")
+        .arg("--config.dangerouslyAllowAllBuilds=true")
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+
+    let mut child = cmd.spawn().map_err(|e| format!("启动 pnpm add 失败: {}", e))?;
+    let mut collected = String::new();
+    let mut last = String::new();
+    if let Some(stderr) = child.stderr.take() {
+        use std::io::BufRead;
+        let reader = std::io::BufReader::new(stderr);
+        for line in reader.lines().map_while(Result::ok) {
+            collected.push_str(&line);
+            collected.push('\n');
+            if let Some(stage) = crate::versions::parse_stage(&line) {
+                if stage != last {
+                    last = stage.to_string();
+                    on_stage(stage);
+                }
+            }
+        }
+    }
+    let status = child.wait();
+    if matches!(status, Ok(s) if s.success()) {
+        Ok(())
+    } else {
+        Err(format!("安装 dsh {} 失败：\n{}", dsh_version, collected.trim()))
+    }
+}
+
+// ===================== package.json 重建（依赖坐标转换） =====================
+
+/// 把 manifest 的「坐标 → 固定版本」转成 package.json 的「包名 → pnpm spec」。
+///
+/// 转换规则（协议 manifest v3 §5）：
+/// - \`"dsh-pet": "0.2.0"\`                       → \`"dsh-pet": "0.2.0"\`
+/// - \`"github:owner/repo": "<sha>"\`              → \`"repo": "github:owner/repo#<sha>"\`
+/// - \`"github:owner/repo#path:/pkg": "<sha>"\`    → \`"pkg": "github:owner/repo#<sha>&path:pkg"\`
+pub fn coord_to_dep(coord: &str, version: &str) -> (String, String) {
+    if let Some(rest) = coord.strip_prefix("github:") {
+        // rest 形如 owner/repo 或 owner/repo#path:/pkg
+        if let Some((repo_part, path_part)) = rest.split_once("#path:") {
+            let path = path_part.trim_start_matches('/');
+            // 包名取自 path 的最后一段（该仓库里的子包），而非仓库名
+            let pkg_name = path.rsplit('/').next().unwrap_or(path).to_string();
+            return (pkg_name, format!("github:{}#{}&path:{}", repo_part, version, path));
+        }
+        let pkg_name = rest.rsplit('/').next().unwrap_or(rest).to_string();
+        return (pkg_name, format!("github:{}#{}", rest, version));
+    }
+    // npm 坐标（含带 scope 的包名）：原样
+    (coord.to_string(), version.to_string())
+}
+
+/// 由 manifest 构建 package.json 的 JSON 文本（带缩进、无 BOM）。
+pub fn build_package_json(m: &Manifest) -> Result<String, String> {
+    let mut deps = serde_json::Map::new();
+
+    // profile 形态取顶层 dependencies；dshhome 形态取 defaultProfile 指向的那个 profile 的
+    let (bundles, dependencies): (&[String], &std::collections::HashMap<String, String>) =
+        if m.is_dshhome() {
+            let dp = m
+                .default_profile
+                .as_ref()
+                .ok_or_else(|| "dshhome 形态缺少 defaultProfile".to_string())?;
+            let unit = m
+                .profiles
+                .get(dp)
+                .ok_or_else(|| format!("defaultProfile \"{}\" 不在 profiles 中", dp))?;
+            (&unit.bundles, &unit.dependencies)
+        } else {
+            (&m.bundles, &m.dependencies)
+        };
+
+    // 按坐标字典序输出，保证可复现
+    let mut coords: Vec<(&String, &String)> = dependencies.iter().collect();
+    coords.sort_by(|a, b| a.0.cmp(b.0));
+    for (coord, ver) in coords {
+        let (name, spec) = coord_to_dep(coord, ver);
+        deps.insert(name, serde_json::Value::String(spec));
+    }
+
+    let name = format!(
+        "dsh-modpack-{}",
+        m.name.clone().unwrap_or_else(|| "unnamed".to_string())
+    );
+    let mut root = serde_json::Map::new();
+    root.insert("name".into(), serde_json::Value::String(name));
+    root.insert("private".into(), serde_json::Value::Bool(true));
+    root.insert(
+        "version".into(),
+        serde_json::Value::String(m.version.clone().unwrap_or_else(|| "0.0.0".to_string())),
+    );
+    root.insert("dependencies".into(), serde_json::Value::Object(deps));
+
+    // bundles 也写进 dsh.profile.bundles，便于 dsh 读取层栈
+    let mut dsh = serde_json::Map::new();
+    let mut profile = serde_json::Map::new();
+    profile.insert(
+        "bundles".into(),
+        serde_json::Value::Array(
+            bundles
+                .iter()
+                .map(|b| serde_json::Value::String(b.clone()))
+                .collect(),
+        ),
+    );
+    dsh.insert("profile".into(), serde_json::Value::Object(profile));
+    root.insert("dsh".into(), serde_json::Value::Object(dsh));
+
+    serde_json::to_string_pretty(&serde_json::Value::Object(root))
+        .map_err(|e| format!("生成 package.json 失败: {}", e))
+}
+
 // ===================== manifest 解析与校验 =====================
 
 /// 支持的 manifest 版本：现行 v5，兼容 v4。
@@ -618,6 +947,58 @@ mod tests {
         let err = extract(&p).unwrap_err();
         assert!(err.contains("不支持的容器版本 v9"), "实际错误: {}", err);
         let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    // ---------- 依赖坐标转换 ----------
+
+    #[test]
+    fn coord_npm_passthrough() {
+        let (name, spec) = coord_to_dep("dsh-pet", "0.2.0");
+        assert_eq!(name, "dsh-pet");
+        assert_eq!(spec, "0.2.0");
+    }
+
+    #[test]
+    fn coord_github_simple() {
+        let (name, spec) = coord_to_dep("github:DViridescent/dafy-whale-theme", "99e8c57");
+        assert_eq!(name, "dafy-whale-theme");
+        assert_eq!(spec, "github:DViridescent/dafy-whale-theme#99e8c57");
+    }
+
+    #[test]
+    fn coord_github_with_path() {
+        let (name, spec) = coord_to_dep("github:owner/repo#path:/pkg", "abc123");
+        assert_eq!(name, "pkg");
+        assert_eq!(spec, "github:owner/repo#abc123&path:pkg");
+    }
+
+    #[test]
+    fn package_json_has_deps_and_bundles() {
+        let m = Manifest::parse(r#"{
+            "manifestVersion": 5, "type": "profile", "name": "demo", "version": "1.0.0",
+            "bundles": ["@deepseek-ai/dsh-base"],
+            "dependencies": {"dsh-pet": "0.2.0", "github:a/b": "sha1"}
+        }"#).unwrap();
+        let txt = build_package_json(&m).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&txt).unwrap();
+        assert_eq!(v["name"], "dsh-modpack-demo");
+        assert_eq!(v["private"], true);
+        assert_eq!(v["dependencies"]["dsh-pet"], "0.2.0");
+        assert_eq!(v["dependencies"]["b"], "github:a/b#sha1");
+        assert_eq!(v["dsh"]["profile"]["bundles"][0], "@deepseek-ai/dsh-base");
+    }
+
+    #[test]
+    fn instance_name_sanitized() {
+        let m = Manifest::parse(r#"{
+            "manifestVersion": 5, "type": "profile", "name": "Better Pack", "version": "1.0.0",
+            "bundles": ["a"]
+        }"#).unwrap();
+        assert_eq!(instance_dir_name(&m, None), "modpack-Better-Pack-1.0.0");
+        assert_eq!(
+            instance_dir_name(&m, Some("20260928-143052")),
+            "modpack-Better-Pack-1.0.0-20260928-143052"
+        );
     }
 
     // ---------- 路径安全与落盘原语 ----------
