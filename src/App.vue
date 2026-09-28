@@ -3,6 +3,7 @@ import { ref, computed, onMounted, onUnmounted } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { ask, open } from "@tauri-apps/plugin-dialog";
+import { getCurrentWebview } from "@tauri-apps/api/webview";
 
 const state = ref(null);
 const installed = ref([]);
@@ -29,6 +30,7 @@ const importPath = ref("");        // 待导入的文件路径
 const importBusy = ref(false);
 const importStage = ref("");
 let unlistenCliImport = null;
+let unlistenDragDrop = null;
 
 // 列表分组
 const versionList = computed(() => installed.value.filter((v) => v.kind !== "modpack"));
@@ -126,37 +128,21 @@ function timestampSuffix() {
   );
 }
 
-/// 拖拽处理
-function onDrop(e) {
+/// 处理拖入的文件路径（来自 Tauri 原生拖放事件）。
+function handleDroppedPaths(paths) {
   dragging.value = false;
-  const files = e.dataTransfer?.files;
-  if (!files || !files.length) return;
-  if (files.length > 1) {
+  if (!paths || !paths.length) return;
+  if (paths.length > 1) {
     notify("一次只能导入一个 .dspack 文件");
     return;
   }
-  const f = files[0];
-  const name = f.name || "";
+  const path = paths[0];
+  const name = path.split(/[\\/]/).pop() || "";
   if (!name.toLowerCase().endsWith(".dspack")) {
     notify("只支持 .dspack 整合包文件");
     return;
   }
-  // Tauri 下 file 对象带 path
-  const path = f.path || f.name;
-  if (!path) {
-    notify("无法获取文件路径");
-    return;
-  }
   previewModpack(path);
-}
-
-function onDragOver(e) {
-  e.preventDefault();
-  dragging.value = true;
-}
-
-function onDragLeave() {
-  dragging.value = false;
 }
 
 /// 是否整合包实例
@@ -419,6 +405,24 @@ onMounted(async () => {
   unlistenCliImport = await listen("cli-import", (e) => {
     previewModpack(e.payload);
   });
+  // 原生拖放：Tauri 默认在 OS 层拦截拖放，HTML5 的 drop 事件收不到，
+  // 必须用 webview 的 onDragDropEvent。
+  try {
+    const webview = getCurrentWebview();
+    unlistenDragDrop = await webview.onDragDropEvent((event) => {
+      const p = event.payload;
+      if (p.type === "over") {
+        dragging.value = true;
+      } else if (p.type === "drop") {
+        handleDroppedPaths(p.paths);
+      } else {
+        // "leave"
+        dragging.value = false;
+      }
+    });
+  } catch (e) {
+    console.warn("注册拖放监听失败", e);
+  }
   await runEnvCheck();
   document.addEventListener("click", closeMenu);
 });
@@ -427,6 +431,7 @@ onUnmounted(() => {
   document.removeEventListener("click", closeMenu);
   if (unlistenProgress) unlistenProgress();
   if (unlistenCliImport) unlistenCliImport();
+  if (unlistenDragDrop) unlistenDragDrop();
 });
 </script>
 
@@ -595,13 +600,7 @@ onUnmounted(() => {
         <h2>导入整合包</h2>
         <button class="btn primary small" @click="pickAndPreview" :disabled="importBusy">选择 .dspack 文件</button>
       </div>
-      <div
-        class="drop-zone"
-        :class="{ over: dragging }"
-        @dragover="onDragOver"
-        @dragleave="onDragLeave"
-        @drop="onDrop"
-      >
+      <div class="drop-zone" :class="{ over: dragging }">
         把 .dspack 文件拖到这里，或点右上角选择文件
       </div>
       <div class="install-progress" v-if="importStage">
