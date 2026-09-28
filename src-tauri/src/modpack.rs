@@ -804,15 +804,32 @@ pub fn import(
         on_stage("正在准备 dsh 运行时...");
         ensure_dsh(dsh_version)?;
 
-        // 用 dsh 本体所在的版本目录作为 dsh 来源；这里采用「独立安装」策略：
-        // 把 dsh 本体装进本实例（与现有版本目录同构）。
-        // 若本机已有该 dsh 版本，则从其 node_modules 复制 dsh 的 .bin 入口不可行
-        // （dsh 需要完整依赖树），故统一走 pnpm add 到本实例。
-        on_stage("正在安装 dsh 本体...");
-        install_dsh_into(&instance_dir, dirs, dsh_version, on_stage)?;
+        // 判断能否复用本机已装的 dsh 版本。
+        //
+        // 仅当【本机已装该版本】且【本包无插件依赖】时复用：
+        // junction 是目录级链接，写其内部等于写目标，插件若装进去会污染本机版本。
+        // 纯技能包（dependencies 为空）不需要装插件，可安全复用。
+        let host_dsh = dirs.versions_dir.join(dsh_version);
+        let host_ready = host_dsh.join("node_modules").exists();
+        let no_deps = manifest_dependencies(manifest).is_empty();
 
-        on_stage("正在安装整合包依赖...");
-        run_pnpm_install(&instance_dir, dirs, on_stage)?;
+        if host_ready && no_deps {
+            on_stage(&format!("正在复用本机已装的 dsh {}...", dsh_version));
+            let link = instance_dir.join("node_modules");
+            if link.exists() {
+                let _ = std::fs::remove_dir_all(&link);
+            }
+            crate::versions::create_junction(&link, &host_dsh.join("node_modules"))
+                .map_err(|e| format!("复用本机 dsh 失败（创建链接）: {}", e))?;
+        } else {
+            on_stage("正在安装 dsh 本体...");
+            install_dsh_into(&instance_dir, dirs, dsh_version, on_stage)?;
+
+            if !no_deps {
+                on_stage("正在安装整合包依赖...");
+                run_pnpm_install(&instance_dir, dirs, on_stage)?;
+            }
+        }
 
         Ok(())
     })();
@@ -938,6 +955,18 @@ pub fn coord_to_dep(coord: &str, version: &str) -> (String, String) {
     }
     // npm 坐标（含带 scope 的包名）：原样
     (coord.to_string(), version.to_string())
+}
+
+/// 取 manifest 的依赖集合（profile 形态取顶层，dshhome 形态取 defaultProfile 指向的）。
+fn manifest_dependencies(m: &Manifest) -> std::collections::HashMap<String, String> {
+    if m.is_dshhome() {
+        match m.default_profile.as_ref().and_then(|dp| m.profiles.get(dp)) {
+            Some(u) => u.dependencies.clone(),
+            None => std::collections::HashMap::new(),
+        }
+    } else {
+        m.dependencies.clone()
+    }
 }
 
 /// 在实例的 home 下写 profile 定义。

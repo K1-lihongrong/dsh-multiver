@@ -424,19 +424,24 @@ fn read_link_target(path: &Path) -> Option<std::path::PathBuf> {
 
 /// 在 Windows 上创建目录 junction（mklink /J），无需管理员权限。
 /// 非 Windows 上退回 symlink_dir。
-fn create_junction(link: &Path, target: &Path) -> std::io::Result<()> {
+pub(crate) fn create_junction(link: &Path, target: &Path) -> std::io::Result<()> {
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
         const CREATE_NO_WINDOW: u32 = 0x08000000;
         // 分开传参给 cmd：cmd /C mklink /J <link> <target>。
         // 不要拼成单个字符串再 .arg()，否则 Rust 会二次转义导致路径解析失败。
+        //
+        // 注意：mklink 是 cmd 内建命令，对**正斜杠路径**解析异常（会把 E:/x 当参数切分），
+        // 因此这里统一把路径分隔符换成反斜杠。
+        let link_s = link.to_string_lossy().replace('/', "\\");
+        let target_s = target.to_string_lossy().replace('/', "\\");
         let out = std::process::Command::new("cmd")
             .arg("/C")
             .arg("mklink")
             .arg("/J")
-            .arg(link)
-            .arg(target)
+            .arg(&link_s)
+            .arg(&target_s)
             .creation_flags(CREATE_NO_WINDOW)
             .output()?;
         if out.status.success() {
