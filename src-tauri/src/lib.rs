@@ -458,10 +458,17 @@ fn launch_profile_for(versions_dir: &std::path::Path, version: &str) -> Option<S
     crate::modpack::read_meta(&dir).map(|m| m.launch_profile)
 }
 
-/// 计算某版本实际使用的 DSH_HOME（隔离版本用独立目录，否则用共享 home）
+/// 计算某版本实际使用的 DSH_HOME。
+///
+/// - 整合包实例（modpack- 前缀）：永远用实例自己的 home
+///   （profile 就建在那里，用共享 home 会找不到 → "profile does not exist"）
+/// - 隔离版本：用独立 home
+/// - 其余：共享 home
 fn resolve_home(cfg: &Config, dirs: &Dirs, version: &str) -> PathBuf {
     let vdir = dirs.versions.join(version);
-    if cfg.isolated_versions.iter().any(|v| v == version) {
+    let own_home = version.starts_with("modpack-")
+        || cfg.isolated_versions.iter().any(|v| v == version);
+    if own_home {
         let isolated_home = vdir.join("home");
         let _ = std::fs::create_dir_all(&isolated_home);
         isolated_home
