@@ -3,6 +3,7 @@ mod config;
 mod envcheck;
 mod jobobj;
 mod launcher;
+mod modpack;
 mod versions;
 
 use config::{Config, Dirs};

@@ -24,6 +24,9 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tauri-plugin-dialog = "2"
 
+# 整合包（.dspack）支持：容器解包与 manifest 解析，见 modpack.rs
+zip = "2"
+
 # 用于设置进程 AppUserModelID，稳定 Windows 任务栏图标分组（见 lib.rs）
 # 以及用 Job Object 绑定 dsh 子进程，根除孤儿进程（见 jobobj.rs）
 [target.'cfg(windows)'.dependencies]
