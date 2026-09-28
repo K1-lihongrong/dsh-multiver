@@ -19,6 +19,21 @@ pub struct VersionInfo {
     /// 非隔离版本共用 `<根>/home`，多版本混用可能导致插件/依赖版本错配
     /// （如 dsh 0.1.7 的 open-in-app 失效会连累旧版本），UI 应提示。
     pub shared_home: bool,
+
+    // ---- 整合包实例专属（kind == "modpack" 时有值）----
+    /// "version" | "modpack"
+    pub kind: String,
+    pub modpack_name: Option<String>,
+    pub modpack_version: Option<String>,
+    pub modpack_display_name: Option<String>,
+    pub modpack_description: Option<String>,
+    pub modpack_author: Option<String>,
+    pub modpack_icon: Option<String>,
+    pub packed_dsh_version: Option<String>,
+    pub modpack_type: Option<String>,
+    pub bundle_count: Option<usize>,
+    pub skill_count: Option<usize>,
+    pub launch_profile: Option<String>,
 }
 
 /// 在 Windows 上调用 pnpm 需要走 cmd，否则可能找不到 .cmd
@@ -52,17 +67,57 @@ pub fn list(versions_dir: &Path, default_version: Option<&str>, isolated: &[Stri
                 continue;
             }
             let version = entry.file_name().to_string_lossy().to_string();
+            let is_modpack = version.starts_with("modpack-");
             let is_default = default_version == Some(version.as_str());
-            let is_isolated = isolated.iter().any(|v| v == &version);
+            // 整合包实例天然隔离（有自己专属的 home）
+            let is_isolated = is_modpack || isolated.iter().any(|v| v == &version);
             let installed_at = dir_created_date(&path);
-            result.push(VersionInfo {
-                version,
-                path: path.to_string_lossy().to_string(),
-                is_default,
-                isolated: is_isolated,
-                installed_at,
-                shared_home: !is_isolated,
-            });
+
+            if is_modpack {
+                // 读标记文件填充整合包元数据；读不到则降级为最小信息
+                let meta = crate::modpack::read_meta(&path);
+                result.push(VersionInfo {
+                    version,
+                    path: path.to_string_lossy().to_string(),
+                    is_default: false,
+                    isolated: true,
+                    installed_at,
+                    shared_home: false,
+                    kind: "modpack".to_string(),
+                    modpack_name: meta.as_ref().map(|m| m.modpack_name.clone()),
+                    modpack_version: meta.as_ref().map(|m| m.modpack_version.clone()),
+                    modpack_display_name: meta.as_ref().map(|m| m.display_name.clone()),
+                    modpack_description: meta.as_ref().map(|m| m.description.clone()),
+                    modpack_author: meta.as_ref().map(|m| m.author.clone()),
+                    modpack_icon: meta.as_ref().map(|m| m.icon.clone()),
+                    packed_dsh_version: meta.as_ref().map(|m| m.packed_dsh_version.clone()),
+                    modpack_type: meta.as_ref().map(|m| m.modpack_type.clone()),
+                    bundle_count: meta.as_ref().map(|m| m.bundle_count),
+                    skill_count: meta.as_ref().map(|m| m.skill_count),
+                    launch_profile: meta.as_ref().map(|m| m.launch_profile.clone()),
+                });
+            } else {
+                result.push(VersionInfo {
+                    version,
+                    path: path.to_string_lossy().to_string(),
+                    is_default,
+                    isolated: is_isolated,
+                    installed_at,
+                    shared_home: !is_isolated,
+                    kind: "version".to_string(),
+                    modpack_name: None,
+                    modpack_version: None,
+                    modpack_display_name: None,
+                    modpack_description: None,
+                    modpack_author: None,
+                    modpack_icon: None,
+                    packed_dsh_version: None,
+                    modpack_type: None,
+                    bundle_count: None,
+                    skill_count: None,
+                    launch_profile: None,
+                });
+            }
         }
     }
     // 按版本号排序

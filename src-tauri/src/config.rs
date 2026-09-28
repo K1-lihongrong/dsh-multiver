@@ -55,6 +55,7 @@ impl Config {
 }
 
 /// 由根目录派生出的各个子目录
+#[derive(Clone)]
 pub struct Dirs {
     pub root: PathBuf,
     pub versions: PathBuf,

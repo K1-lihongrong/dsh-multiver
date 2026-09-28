@@ -285,6 +285,100 @@ fn copy_tree_inner(
     Ok(())
 }
 
+// ===================== 实例元数据标记 =====================
+
+/// 实例目录内记录的元数据（供 list() 快速读取，避免每次解包）。
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct InstanceMeta {
+    pub kind: String,
+    pub modpack_name: String,
+    pub modpack_version: String,
+    pub display_name: String,
+    pub description: String,
+    pub author: String,
+    pub icon: String,
+    pub packed_dsh_version: String,
+    pub modpack_type: String,
+    pub bundle_count: usize,
+    pub skill_count: usize,
+    /// 启动该实例应使用的 profile 名
+    pub launch_profile: String,
+    /// 导入日期 YYYY-MM-DD
+    pub imported_at: String,
+    /// 被安全过滤跳过的条目数
+    pub skipped_count: usize,
+}
+
+/// 标记文件名
+pub const META_FILE: &str = ".dsh-multiver-meta.json";
+
+/// 由 manifest 与导入结果构造标记。
+pub fn build_meta(m: &Manifest, outcome: &ImportOutcome) -> InstanceMeta {
+    let (bundles_len, skills_len) = if m.is_dshhome() {
+        let dp = m.default_profile.clone().unwrap_or_default();
+        let bl = m.profiles.get(&dp).map(|u| u.bundles.len()).unwrap_or(0);
+        (bl, m.raw.get("skills").and_then(|s| s.as_array()).map(|a| a.len()).unwrap_or(0))
+    } else {
+        (m.bundles.len(), 0)
+    };
+
+    InstanceMeta {
+        kind: "modpack".to_string(),
+        modpack_name: m.name.clone().unwrap_or_default(),
+        modpack_version: m.version.clone().unwrap_or_default(),
+        display_name: m.display_name_text(),
+        description: m.description_text(),
+        author: m.author.clone().unwrap_or_default(),
+        icon: m.icon.clone().unwrap_or_default(),
+        packed_dsh_version: outcome.dsh_version.clone(),
+        modpack_type: m.kind.clone(),
+        bundle_count: bundles_len,
+        skill_count: skills_len,
+        launch_profile: m.launch_profile().unwrap_or_else(|| "web".to_string()),
+        imported_at: today_local(),
+        skipped_count: outcome.skipped.len(),
+    }
+}
+
+/// 写标记文件到实例目录。
+pub fn write_meta(instance_dir: &Path, meta: &InstanceMeta) -> Result<(), String> {
+    let text = serde_json::to_string_pretty(meta).map_err(|e| format!("序列化元数据失败: {}", e))?;
+    std::fs::write(instance_dir.join(META_FILE), text)
+        .map_err(|e| format!("写入元数据失败: {}", e))
+}
+
+/// 读标记文件（失败返回 None）。
+pub fn read_meta(instance_dir: &Path) -> Option<InstanceMeta> {
+    let text = std::fs::read_to_string(instance_dir.join(META_FILE)).ok()?;
+    serde_json::from_str(&text).ok()
+}
+
+/// 今天（东八区）YYYY-MM-DD。
+fn today_local() -> String {
+    let secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+    let local = secs + 8 * 3600;
+    let days = local.div_euclid(86400);
+    let (y, m, d) = civil_from_days(days);
+    format!("{:04}-{:02}-{:02}", y, m, d)
+}
+
+/// 由「1970-01-01 起的天数」换算 (年, 月, 日)。算法同 versions.rs。
+fn civil_from_days(z: i64) -> (i64, u32, u32) {
+    let z = z + 719468;
+    let era = if z >= 0 { z } else { z - 146096 } / 146097;
+    let doe = (z - era * 146097) as u64;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    let y = yoe as i64 + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = (doy - (153 * mp + 2) / 5 + 1) as u32;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 } as u32;
+    (if m <= 2 { y + 1 } else { y }, m, d)
+}
+
 // ===================== files[] 下载与校验 =====================
 
 /// 计算字节的 sha256 十六进制串。

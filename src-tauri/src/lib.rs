@@ -76,6 +76,239 @@ fn list_installed(app: tauri::AppHandle) -> Vec<versions::VersionInfo> {
     versions::list(&dirs.versions, cfg.default_version.as_deref(), &cfg.isolated_versions)
 }
 
+/// 整合包导入预览（解包 + 解析 manifest，不落盘）。
+#[derive(serde::Serialize)]
+struct ModpackPreview {
+    name: String,
+    version: String,
+    display_name: String,
+    description: String,
+    author: String,
+    icon: String,
+    modpack_type: String,
+    manifest_version: u32,
+    container_version: u32,
+    /// 目标 dsh 版本（可能为空，表示用本机最新）
+    dsh_version: String,
+    /// dshVersions 兼容集（可能为空）
+    dsh_versions: Vec<String>,
+    /// 插件数（bundles）
+    bundle_count: usize,
+    /// 依赖数
+    dep_count: usize,
+    /// files[] 数量
+    files_count: usize,
+    /// 启动将使用的 profile
+    launch_profile: String,
+    /// 已解出的实例目录名（默认，不含冲突后缀）
+    instance_name: String,
+}
+
+/// 预览一个 .dspack：只解包并解析，不写任何用户文件。
+#[tauri::command]
+fn preview_dspack(path: String) -> Result<ModpackPreview, String> {
+    let p = std::path::PathBuf::from(&path);
+    let ex = modpack::extract(&p)?;
+    let result = (|| -> Result<ModpackPreview, String> {
+        let text = modpack::read_manifest_text(&ex.dir)?;
+        let m = modpack::Manifest::parse(&text).map_err(|errs| {
+            format!("manifest 校验失败：\n  · {}", errs.join("\n  · "))
+        })?;
+
+        let (bundle_count, dep_count) = if m.is_dshhome() {
+            let dp = m.default_profile.clone().unwrap_or_default();
+            match m.profiles.get(&dp) {
+                Some(u) => (u.bundles.len(), u.dependencies.len()),
+                None => (0, 0),
+            }
+        } else {
+            (m.bundles.len(), m.dependencies.len())
+        };
+
+        Ok(ModpackPreview {
+            name: m.name.clone().unwrap_or_default(),
+            version: m.version.clone().unwrap_or_default(),
+            display_name: m.display_name_text(),
+            description: m.description_text(),
+            author: m.author.clone().unwrap_or_default(),
+            icon: m.icon.clone().unwrap_or_default(),
+            modpack_type: m.kind.clone(),
+            manifest_version: m.manifest_version,
+            container_version: ex.marker.version,
+            dsh_version: m.dsh_version.clone().unwrap_or_default(),
+            dsh_versions: m.dsh_versions.clone().unwrap_or_default(),
+            bundle_count,
+            dep_count,
+            files_count: m.files.len(),
+            launch_profile: m.launch_profile().unwrap_or_else(|| "web".to_string()),
+            instance_name: modpack::instance_dir_name(&m, None),
+        })
+    })();
+    ex.cleanup();
+    result
+}
+
+/// 导入一个 .dspack。
+///
+/// 参数：
+/// - \`path\`：包文件路径
+/// - \`suffix\`：冲突时「保留两份」用的后缀（None 表示不保留两份；冲突时会先报错）
+/// - \`replace\`：冲突时是否重装（删旧建新）
+///
+/// 返回导入后的实例目录名。
+#[tauri::command]
+async fn import_dspack(
+    app: tauri::AppHandle,
+    path: String,
+    suffix: Option<String>,
+    replace: Option<bool>,
+) -> Result<String, String> {
+    use tauri::Emitter;
+
+    let mdir = manager_dir(&app);
+    let cfg = Config::load(&mdir);
+    let dirs = Dirs::new(cfg.resolve_root(&mdir));
+    let _ = dirs.ensure();
+
+    let app2 = app.clone();
+    let dirs2 = dirs.clone();
+    let result = tauri::async_runtime::spawn_blocking(move || -> Result<String, String> {
+        let on_stage = move |stage: &str| {
+            let _ = app2.emit("install-progress", stage.to_string());
+        };
+
+        let p = std::path::PathBuf::from(&path);
+        let ex = modpack::extract(&p)?;
+        let run = (|| -> Result<String, String> {
+            let text = modpack::read_manifest_text(&ex.dir)?;
+            let m = modpack::Manifest::parse(&text).map_err(|errs| {
+                format!("manifest 校验失败：\n  · {}", errs.join("\n  · "))
+            })?;
+
+            // 版本决策：dshVersions ∩ 已装；无交集用 dshVersion；全缺省用最新已装
+            let installed: Vec<String> = {
+                let mut v: Vec<String> = std::fs::read_dir(&dirs2.versions)
+                    .map(|rd| {
+                        rd.flatten()
+                            .filter(|e| e.path().is_dir() && e.path().join("node_modules").exists())
+                            .map(|e| e.file_name().to_string_lossy().to_string())
+                            .filter(|n| !n.starts_with("modpack-"))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                v.sort();
+                v
+            };
+            let target = decide_dsh_version(&m, &installed)?;
+
+            // 冲突检测
+            let base_name = modpack::instance_dir_name(&m, None);
+            let final_name = modpack::instance_dir_name(&m, suffix.as_deref());
+            let base_exists = dirs2.versions.join(&base_name).exists();
+            let final_exists = dirs2.versions.join(&final_name).exists();
+            if final_exists {
+                if replace.unwrap_or(false) {
+                    on_stage("正在移除旧实例...");
+                    std::fs::remove_dir_all(dirs2.versions.join(&final_name))
+                        .map_err(|e| format!("移除旧实例失败: {}", e))?;
+                } else {
+                    return Err(format!(
+                        "实例 {} 已存在。请选择「重装」或「保留两份」。",
+                        final_name
+                    ));
+                }
+            } else if base_exists && suffix.is_none() {
+                return Err(format!(
+                    "实例 {} 已存在。请选择「重装」或「保留两份」。",
+                    base_name
+                ));
+            }
+
+            let idirs = modpack::ImportDirs {
+                versions_dir: &dirs2.versions,
+                store_dir: &dirs2.store,
+                cache_dir: &dirs2.cache,
+                state_dir: &dirs2.state,
+            };
+
+            // 确保 dsh 本体可用（本函数会在实例内自装，故 ensure 仅做存在性提示）
+            let ensure = |_v: &str| Ok(());
+            let outcome = modpack::import(
+                &ex,
+                &m,
+                &idirs,
+                &final_name,
+                &target,
+                &ensure,
+                &on_stage,
+            )?;
+
+            // files[] 下载（落到实例目录）
+            if !m.files.is_empty() {
+                on_stage("正在下载整合包资源...");
+                modpack::download_all(&outcome.instance_dir, &m.files)?;
+            }
+
+            // 写元数据标记
+            let meta = modpack::build_meta(&m, &outcome);
+            modpack::write_meta(&outcome.instance_dir, &meta)?;
+
+            Ok(outcome.instance_name)
+        })();
+        ex.cleanup();
+        run
+    })
+    .await
+    .map_err(|e| format!("导入任务失败: {}", e))?;
+
+    result
+}
+
+/// 版本决策：返回应当使用的 dsh 版本。
+fn decide_dsh_version(
+    m: &modpack::Manifest,
+    installed: &[String],
+) -> Result<String, String> {
+    // 候选集：dshVersions（若存在）否则 [dshVersion]（若有）
+    let candidates: Vec<String> = match (&m.dsh_versions, &m.dsh_version) {
+        (Some(set), _) if !set.is_empty() => set.clone(),
+        (_, Some(v)) if !v.trim().is_empty() => vec![v.clone()],
+        _ => Vec::new(),
+    };
+
+    if candidates.is_empty() {
+        // 全缺省：用本机最新已装（字典序最大）
+        return installed
+            .last()
+            .cloned()
+            .ok_or_else(|| "本机未安装任何 dsh 版本，请先安装一个版本再导入".to_string());
+    }
+
+    // 交集：已装 ∩ 候选
+    let hit: Vec<&String> = candidates.iter().filter(|c| installed.contains(c)).collect();
+    if !hit.is_empty() {
+        // 命中多个：优先 dshVersion，其次集合内最新
+        if let Some(dv) = &m.dsh_version {
+            if hit.iter().any(|x| *x == dv) {
+                return Ok(dv.clone());
+            }
+        }
+        let mut sorted: Vec<String> = hit.into_iter().cloned().collect();
+        sorted.sort();
+        return Ok(sorted.last().cloned().unwrap());
+    }
+
+    // 无交集：按 dshVersion 提示（调用方负责弹框安装）；若没 dshVersion 取候选最新
+    if let Some(dv) = &m.dsh_version {
+        if !dv.trim().is_empty() {
+            return Ok(dv.clone());
+        }
+    }
+    let mut sorted = candidates.clone();
+    sorted.sort();
+    Ok(sorted.last().cloned().unwrap())
+}
+
 #[tauri::command]
 fn list_remote(app: tauri::AppHandle) -> Result<Vec<String>, String> {
     let mdir = manager_dir(&app);
@@ -769,6 +1002,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             get_state,
             list_installed,
+            preview_dspack,
+            import_dspack,
             list_remote,
             install_version,
             uninstall_version,
