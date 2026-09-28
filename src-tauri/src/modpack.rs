@@ -686,6 +686,12 @@ pub fn import(
             copy_tree_checked(&hov, &home_root, &mut skipped)?;
         }
 
+        // 创建 profile 定义（协议 §3.2.2：名称取 profileName，缺省 pack）
+        // dsh 启动时 --profile <名> 会在 $DSH_HOME/profiles/<名>/ 找 package.json，
+        // 缺失会直接报 "profile does not exist"。
+        on_stage("正在创建 profile...");
+        write_profile(&home_root, manifest)?;
+
         // ---- 阶段 2：运行时与依赖 ----
         on_stage("正在准备 dsh 运行时...");
         ensure_dsh(dsh_version)?;
@@ -823,6 +829,97 @@ pub fn coord_to_dep(coord: &str, version: &str) -> (String, String) {
     }
     // npm 坐标（含带 scope 的包名）：原样
     (coord.to_string(), version.to_string())
+}
+
+/// 在实例的 home 下写 profile 定义。
+///
+/// dsh 启动时 \`--profile <名>\` 会在 \`$DSH_HOME/profiles/<名>/package.json\` 找定义，
+/// 缺失会报 "profile does not exist"。
+///
+/// - profile 形态：profile 名取 manifest.profileName（缺省 "pack"），
+///   bundles/dependencies 用 manifest 顶层字段
+/// - dshhome 形态：为每个 profiles.<name> 写一份
+pub fn write_profile(home_root: &Path, m: &Manifest) -> Result<(), String> {
+    if m.is_dshhome() {
+        for (name, unit) in &m.profiles {
+            write_one_profile(home_root, name, &unit.bundles, &unit.dependencies)?;
+        }
+        Ok(())
+    } else {
+        let name = m
+            .profile_name
+            .clone()
+            .filter(|s| !s.trim().is_empty())
+            .unwrap_or_else(|| "pack".to_string());
+        write_one_profile(home_root, &name, &m.bundles, &m.dependencies)
+    }
+}
+
+fn write_one_profile(
+    home_root: &Path,
+    name: &str,
+    bundles: &[String],
+    dependencies: &std::collections::HashMap<String, String>,
+) -> Result<(), String> {
+    let dir = home_root.join("profiles").join(name);
+    std::fs::create_dir_all(&dir)
+        .map_err(|e| format!("创建 profile 目录失败 {}: {}", dir.display(), e))?;
+
+    // dependencies 用坐标转换后的结果（与实例 package.json 一致）
+    let mut deps = serde_json::Map::new();
+    let mut coords: Vec<(&String, &String)> = dependencies.iter().collect();
+    coords.sort_by(|a, b| a.0.cmp(b.0));
+    for (coord, ver) in coords {
+        let (dep_name, spec) = coord_to_dep(coord, ver);
+        deps.insert(dep_name, serde_json::Value::String(spec));
+    }
+
+    let mut root = serde_json::Map::new();
+    root.insert(
+        "name".into(),
+        serde_json::Value::String(format!("dsh-profile-{}", name)),
+    );
+    root.insert("private".into(), serde_json::Value::Bool(true));
+    root.insert("dependencies".into(), serde_json::Value::Object(deps));
+
+    let mut profile = serde_json::Map::new();
+    profile.insert(
+        "bundles".into(),
+        serde_json::Value::Array(
+            bundles
+                .iter()
+                .map(|b| serde_json::Value::String(b.clone()))
+                .collect(),
+        ),
+    );
+    let mut dsh = serde_json::Map::new();
+    dsh.insert("profile".into(), serde_json::Value::Object(profile));
+    root.insert("dsh".into(), serde_json::Value::Object(dsh));
+
+    let text = serde_json::to_string_pretty(&serde_json::Value::Object(root))
+        .map_err(|e| format!("生成 profile 定义失败: {}", e))?;
+    std::fs::write(dir.join("package.json"), text)
+        .map_err(|e| format!("写入 profile 定义失败: {}", e))?;
+
+    // dsh 的 profile 还需要这两个文件（见 dsh-app-boot 的 initProfile）：
+    // - cordis.patch.yml：用户 patch 层（空数组即可）
+    // - pnpm-workspace.yaml：out-of-tree 插件所需的 pnpm 配置
+    // 缺它们时 profile 能加载，但插件安装/覆盖行为异常。
+    let patch_path = dir.join("cordis.patch.yml");
+    if !patch_path.exists() {
+        let _ = std::fs::write(
+            &patch_path,
+            "# Your patch layer for this dsh profile, applied after every bundle layer:\n# a top-level YAML array of loader patch entries.\n[]\n",
+        );
+    }
+    let ws_path = dir.join("pnpm-workspace.yaml");
+    if !ws_path.exists() {
+        let _ = std::fs::write(
+            &ws_path,
+            "packages:\n  - .\n\nnodeLinker: hoisted\nautoInstallPeers: false\n",
+        );
+    }
+    Ok(())
 }
 
 /// 由 manifest 构建 package.json 的 JSON 文本（带缩进、无 BOM）。
