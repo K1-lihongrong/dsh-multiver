@@ -2,7 +2,7 @@
 import { ref, computed, onMounted, onUnmounted } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { ask, open } from "@tauri-apps/plugin-dialog";
+import { ask, open, save } from "@tauri-apps/plugin-dialog";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 
 const state = ref(null);
@@ -144,6 +144,24 @@ async function installFromMarket(p) {
   }
 }
 
+/// 导出整合包实例为 .dspack。
+async function exportModpack(instance) {
+  try {
+    const target = await save({
+      title: "导出整合包",
+      defaultPath: instance + ".dspack",
+      filters: [{ name: "DSH 整合包", extensions: ["dspack"] }],
+    });
+    if (!target) return;
+    installStage.value = "正在导出...";
+    const msg = await invoke("export_modpack", { instance, output: target });
+    notify(msg);
+  } catch (e) {
+    notify(String(e));
+  } finally {
+    installStage.value = "";
+  }
+}
 function fmtBytes(n) {
   if (n == null) return "";
   if (n < 1024) return n + " B";
@@ -676,6 +694,7 @@ onUnmounted(() => {
             <button class="btn primary" @click="run(v.version)" :disabled="!!runningVersion">{{ runningVersion === v.version ? "启动中..." : "运行" }}</button>
             <button class="btn" @click="openInBrowser(v.version)">浏览器打开</button>
             <button class="btn" @click="createShortcut(v.version)">桌面快捷方式</button>
+            <button class="btn" @click="exportModpack(v.version)" title="把该实例导出为 .dspack 整合包">导出</button>
             <button class="btn" @click="scanVersionSize(v.version)" :disabled="scanningVer === v.version">
               {{ scanningVer === v.version ? "扫描中..." : (verSizes[v.version] != null ? "重新扫描占用" : "扫描占用") }}
             </button>

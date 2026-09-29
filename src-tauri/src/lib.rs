@@ -6,6 +6,7 @@ mod launcher;
 mod maintenance;
 mod market;
 mod modpack;
+mod pack;
 #[cfg(test)]
 mod modpack_e2e_test;
 mod versions;
@@ -390,6 +391,57 @@ async fn import_dspack(
     result
 }
 
+/// 导出：把一个整合包实例打回 .dspack。
+///
+/// `instance` 是实例目录名（modpacks/ 下），`output` 是目标 .dspack 路径。
+#[tauri::command]
+async fn export_modpack(
+    app: tauri::AppHandle,
+    instance: String,
+    output: String,
+) -> Result<String, String> {
+    let mdir = manager_dir(&app);
+    let cfg = Config::load(&mdir);
+    let dirs = Dirs::new(cfg.resolve_root(&mdir));
+    let instance_dir = dirs.modpacks.join(&instance);
+    let out = std::path::PathBuf::from(output);
+
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        pack::export_instance(&instance_dir, &out)
+    })
+    .await
+    .map_err(|e| format!("导出任务失败: {}", e))?;
+
+    let outcome = result?;
+    if outcome.skipped.is_empty() {
+        Ok(format!("已导出 {} 个文件到 {}", outcome.file_count, outcome.output.display()))
+    } else {
+        Ok(format!(
+            "已导出 {} 个文件到 {}（跳过 {} 项敏感内容）",
+            outcome.file_count,
+            outcome.output.display(),
+            outcome.skipped.len()
+        ))
+    }
+}
+
+/// 导出用：列出可导出的整合包实例目录名（供前端下拉 / 校验）。
+#[tauri::command]
+fn list_modpack_instances(app: tauri::AppHandle) -> Vec<String> {
+    let mdir = manager_dir(&app);
+    let cfg = Config::load(&mdir);
+    let dirs = Dirs::new(cfg.resolve_root(&mdir));
+    let mut v: Vec<String> = std::fs::read_dir(&dirs.modpacks)
+        .map(|rd| {
+            rd.flatten()
+                .filter(|e| e.path().is_dir())
+                .map(|e| e.file_name().to_string_lossy().to_string())
+                .collect()
+        })
+        .unwrap_or_default();
+    v.sort();
+    v
+}
 /// 市场：拉取索引并返回整合包列表。
 #[tauri::command]
 async fn market_list() -> Result<Vec<market::MarketPack>, String> {
@@ -1230,6 +1282,20 @@ fn parse_yes_flag(args: &[String]) -> bool {
     args.iter().any(|a| a == "--yes")
 }
 
+/// 从命令行参数解析出 --export <实例名> <目标路径>。
+/// 返回 (instance, output)。
+fn parse_export(args: &[String]) -> Option<(String, String)> {
+    let mut it = args.iter();
+    while let Some(a) = it.next() {
+        if a == "--export" {
+            let inst = it.next().cloned()?;
+            let out = it.next().cloned()?;
+            return Some((inst, out));
+        }
+    }
+    None
+}
+
 /// 从命令行参数解析出 --launch-version <版本>（精简启动模式用）
 fn parse_launch_version(args: &[String]) -> Option<String> {
     let mut it = args.iter();
@@ -1335,12 +1401,44 @@ fn run_headless_import(path: &str) -> i32 {
         }
     }
 }
+/// 无头导出入口：不走 Tauri/GUI，直接导出并返回进程退出码。
+fn run_headless_export(instance: &str, output: &str) -> i32 {
+    let mdir = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(|x| x.to_path_buf()))
+        .unwrap_or_else(|| std::path::PathBuf::from("."));
+    let cfg = Config::load(&mdir);
+    let dirs = Dirs::new(cfg.resolve_root(&mdir));
+    let instance_dir = dirs.modpacks.join(instance);
+    if !instance_dir.is_dir() {
+        println!("ERROR: 实例不存在: {}", instance_dir.display());
+        return 1;
+    }
+    let out = std::path::PathBuf::from(output);
+    match pack::export_instance(&instance_dir, &out) {
+        Ok(o) => {
+            for s in &o.skipped {
+                println!("[skip] {}", s);
+            }
+            println!("OK: {} ({} 个文件)", o.output.display(), o.file_count);
+            0
+        }
+        Err(e) => {
+            println!("ERROR: {}", e);
+            1
+        }
+    }
+}
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    // 无头导入：--import <路径> --yes 时完全不启动 GUI/事件循环，
-    // 直接执行导入并以正确的进程退出码退出（供脚本自动化）。
+    // 无头导入/导出：完全不启动 GUI/事件循环，直接执行并以正确的进程退出码退出。
     {
         let args: Vec<String> = std::env::args().collect();
+        // --export <实例名> <目标路径>
+        if let Some((inst, out)) = parse_export(&args) {
+            let code = run_headless_export(&inst, &out);
+            std::process::exit(code);
+        }
         if let Some(path) = parse_import_path(&args) {
             if parse_yes_flag(&args) {
                 let code = run_headless_import(&path);
@@ -1361,6 +1459,8 @@ pub fn run() {
             import_dspack,
             market_list,
             market_install,
+            export_modpack,
+            list_modpack_instances,
             list_remote,
             install_version,
             uninstall_version,
