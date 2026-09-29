@@ -54,6 +54,16 @@ fn extract_missing_package(raw: &str) -> Option<String> {
     if name.is_empty() { None } else { Some(name) }
 }
 
+/// 在诊断文案末尾附加原始错误（供用户/作者定位问题）。
+/// 原始信息可能较长，但这是排查的关键——始终保留。
+fn append_raw(summary: String, raw: &str) -> String {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return summary;
+    }
+    format!("{}\n\n──── 原始信息（反馈时请附上）────\n{}", summary, trimmed)
+}
+
 /// 把原始安装错误转成结构化诊断，返回 (类别, 用户文案)。
 pub fn diagnose(raw: &str) -> (DiagKind, String) {
     let lower = raw.to_lowercase();
@@ -71,14 +81,20 @@ pub fn diagnose(raw: &str) -> (DiagKind, String) {
     if net_markers.iter().any(|m| lower.contains(m)) {
         return (
             DiagKind::Network,
-            "网络连接失败，无法从 npm 拉取依赖。\n\n建议：\n  · 检查网络 / 代理是否正常\n  · 稍后重试（源站可能暂时不可达）".to_string(),
+            append_raw(
+                "网络连接失败，无法从 npm 拉取依赖。\n\n建议：\n  · 检查网络 / 代理是否正常\n  · 稍后重试（源站可能暂时不可达）".to_string(),
+                raw,
+            ),
         );
     }
 
     if lower.contains("enospc") || lower.contains("no space left") {
         return (
             DiagKind::DiskFull,
-            "磁盘空间不足，无法写入依赖。\n\n建议：清理磁盘后重试。".to_string(),
+            append_raw(
+                "磁盘空间不足，无法写入依赖。\n\n建议：清理磁盘后重试。".to_string(),
+                raw,
+            ),
         );
     }
 
@@ -89,32 +105,57 @@ pub fn diagnose(raw: &str) -> (DiagKind, String) {
     {
         return (
             DiagKind::FileLocked,
-            "文件被其他进程占用，或权限不足。\n\n建议：\n  · 关闭正在运行的 dsh / 资源管理器窗口\n  · 稍后重试".to_string(),
+            append_raw(
+                "文件被其他进程占用，或权限不足。\n\n建议：\n  · 关闭正在运行的 dsh / 资源管理器窗口\n  · 稍后重试".to_string(),
+                raw,
+            ),
         );
     }
 
     if lower.contains("err_pnpm_no_matching_version") || lower.contains("no matching version found") {
         let pkg = extract_missing_package(raw).unwrap_or_default();
         let display = if pkg.is_empty() { "（未识别包名）".to_string() } else { pkg.clone() };
-        if pkg.starts_with("@deepseek-ai/dsh") {
-            return (
-                DiagKind::DshRuntime,
-                format!(
-                    "此包需要的 dsh 运行时组件 `{}` 在当前 npm 源上无法获取。\n\n常见原因：\n  · 该 dsh 版本已被官方下架或尚未发布完整\n  · npm 上处于「半发布」窗口期（部分子包已更、部分未更）\n\n建议：\n  · 稍后重试（可能只是暂时状态）\n  · 或让整合包作者改用其他 dsh 版本",
-                    display
-                ),
-            );
-        }
-        return (
-            DiagKind::PluginDep,
+        // 注意：仅凭包名无法断定责任方。
+        //   · `@deepseek-ai/dsh-*` 子包缺失：可能是官方下架/半发布，
+        //     也可能是某个插件的 peer/依赖声明写了过窄的预发布区间（如 >=0.1.7 <0.2.0-0），
+        //     该区间在只有预发布版本时无解。
+        //   · 非 dsh 包缺失：几乎总是上游插件自己的依赖声明问题。
+        // 因此文案保持中性，并始终附上原始错误供用户/作者定位。
+        let is_dsh = pkg.starts_with("@deepseek-ai/dsh");
+        let summary = if is_dsh {
             format!(
-                "上游插件的依赖声明在当前 npm 源上无匹配版本：`{}`。\n\n这通常是该插件自身的问题（peer / 依赖声明过窄，或写死了已下架的版本），与整合包本身无关。\n\n建议：\n  · 联系整合包作者反馈此插件\n  · 或等待上游插件修复",
+                "某个依赖在 npm 上无匹配版本：`{}`。\n\n\
+                 可能的原因（无法仅凭此错误断定）：\n\
+                  · 该 dsh 版本的子包已被官方下架，或尚未发布完整（半发布窗口期）\n\
+                  · 某个插件的依赖/peer 声明过窄（例如写了预发布区间 `>=0.1.7 <0.2.0-0`，\n\
+                   而该区间在只有预发布版本时无匹配项）\n\n\
+                 建议：\n\
+                  · 先稍后重试（可能只是源站暂时状态）\n\
+                  · 若反复失败，请把下方「原始信息」反馈给整合包作者",
                 display
-            ),
-        );
+            )
+        } else {
+            format!(
+                "上游依赖在 npm 上无匹配版本：`{}`。\n\n\
+                 这通常是该依赖（或其上级插件）自身的声明问题，与整合包本身无关。\n\n\
+                 建议：\n\
+                  · 联系整合包作者反馈\n\
+                  · 或等待上游修复",
+                display
+            )
+        };
+        let kind = if is_dsh {
+            DiagKind::DshRuntime
+        } else {
+            DiagKind::PluginDep
+        };
+        return (kind, append_raw(summary, raw));
     }
 
-    (DiagKind::Unknown, format!("安装失败：\n{}", raw))
+    (
+        DiagKind::Unknown,
+        format!("安装失败：\n{}", raw.trim()),
+    )
 }
 
 /// `.dspack` 根部的容器标记文件内容。
@@ -1474,8 +1515,11 @@ mod tests {
         let raw = "[ERR_PNPM_NO_MATCHING_VERSION] No matching version found for @deepseek-ai/dsh-home-paths@>=0.1.7 <0.2.0-0 while fetching it from https://registry.npmjs.org/";
         let (kind, msg) = diagnose(raw);
         assert_eq!(kind, DiagKind::DshRuntime);
-        assert!(msg.contains("dsh 运行时"), "文案应说明是运行时问题: {}", msg);
+        assert!(msg.contains("无匹配版本"), "文案应说明无匹配版本: {}", msg);
         assert!(msg.contains("dsh-home-paths"), "应给出具体包名: {}", msg);
+        // 关键：必须附原始信息，供反馈定位
+        assert!(msg.contains("原始信息"), "应附原始错误: {}", msg);
+        assert!(msg.contains("ERR_PNPM_NO_MATCHING_VERSION"), "原始错误应完整保留: {}", msg);
     }
 
     #[test]
@@ -1483,7 +1527,7 @@ mod tests {
         let raw = "[ERR_PNPM_NO_MATCHING_VERSION] No matching version found for some-plugin-sub@^2.0.0";
         let (kind, msg) = diagnose(raw);
         assert_eq!(kind, DiagKind::PluginDep);
-        assert!(msg.contains("上游插件"), "文案应指出是插件问题: {}", msg);
+        assert!(msg.contains("上游依赖"), "文案应指出是上游依赖问题: {}", msg);
     }
 
     #[test]
