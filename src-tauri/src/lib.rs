@@ -371,8 +371,15 @@ async fn uninstall_version(app: tauri::AppHandle, version: String) -> Result<Str
     regenerate_forward_script(&mdir, &cfg);
     // 删除目录可能很慢，放到后台线程
     let parent = dirs.parent_of(&version);
+    // WebView2 数据目录（<根>/webview/<版本>）也要一并清理，否则每卸载一次留一份缓存。
+    let webview_dir = dirs.webview.join(&version);
     let (ok, msg) = tauri::async_runtime::spawn_blocking(move || {
-        versions::uninstall(&parent, &version)
+        let result = versions::uninstall(&parent, &version);
+        // 实例目录删成功后，顺带清理 webview（失败不影响卸载结果）
+        if result.0 {
+            let _ = std::fs::remove_dir_all(&webview_dir);
+        }
+        result
     })
     .await
     .map_err(|e| format!("卸载任务失败: {}", e))?;
