@@ -1030,11 +1030,12 @@ body {
 .ver-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
 .ver-item {
   display: flex; align-items: center; justify-content: space-between;
+  flex-wrap: wrap; gap: 8px 12px;
   padding: 10px 14px; border: 1px solid #eceef1; border-radius: 9px;
   background: #fcfcfd; transition: border-color .15s, background .15s;
 }
 .ver-item:hover { border-color: #d6dae0; background: #fff; }
-.ver-main { display: flex; align-items: center; gap: 10px; }
+.ver-main { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; min-width: 0; }
 .ver-num { font-weight: 600; font-size: 14px; font-variant-numeric: tabular-nums; }
 .ver-meta { color: #9aa1ab; font-size: 11px; }
 .badge {
@@ -1047,7 +1048,10 @@ body {
   background: #fff4e5; border-color: #f0c98a; color: #c77d1a;
 }
 .btn.active:hover:not(:disabled) { background: #ffedcc; border-color: #e0b46a; }
-.ver-actions { display: flex; gap: 8px; align-items: center; }
+.ver-actions {
+  display: flex; gap: 6px; align-items: center;
+  flex-wrap: wrap; justify-content: flex-end;
+}
 
 .menu-wrap { position: relative; }
 .menu {
@@ -1068,8 +1072,9 @@ body {
 
 .btn {
   border: 1px solid #dcdfe4; background: #fff; color: #374151;
-  padding: 6px 14px; border-radius: 7px; font-size: 13px;
+  padding: 5px 10px; border-radius: 7px; font-size: 12px;
   cursor: pointer; transition: all .15s; font-family: inherit;
+  white-space: nowrap; flex-shrink: 0;
 }
 .btn:hover:not(:disabled) { border-color: #c3c8d0; background: #f7f8fa; }
 .btn:disabled { opacity: .5; cursor: not-allowed; }
@@ -1182,10 +1187,11 @@ body {
 .pack-list { list-style: none; margin: 0; padding: 0; }
 .pack-item {
   position: relative;
-  display: flex; align-items: center; gap: 12px;
-  padding: 10px 12px; margin-bottom: 8px;
-  background: #fff; border: 1px solid #e6e8eb; border-radius: 8px;
-  transition: box-shadow .15s, border-color .15s;
+  display: flex; align-items: center; justify-content: space-between;
+  flex-wrap: wrap; gap: 8px 12px;
+  padding: 10px 14px; margin-bottom: 8px;
+  background: #fcfcfd; border: 1px solid #eceef1; border-radius: 9px;
+  transition: box-shadow .15s, border-color .15s, background .15s;
 }
 .pack-item:hover { border-color: #c9d3e0; box-shadow: 0 2px 10px rgba(20,30,50,.08); }
 .pack-icon {
@@ -1194,7 +1200,7 @@ body {
   background: #f0f3f8; border-radius: 8px; font-size: 20px; overflow: hidden;
 }
 .pack-icon img { width: 100%; height: 100%; object-fit: cover; }
-.pack-main { flex: 1; min-width: 0; }
+.pack-main { flex: 1 1 auto; min-width: 0; }
 .pack-title { font-weight: 600; display: flex; align-items: center; gap: 8px; }
 .pack-ver { font-weight: 400; color: #6b7480; font-size: 12px; }
 .pack-sub { color: #6b7480; font-size: 12px; margin-top: 2px; }
@@ -1222,8 +1228,9 @@ body {
 
 /* 悬停浮层 */
 .pack-pop {
-  position: absolute; left: 12px; top: calc(100% - 4px);
-  z-index: 50; width: 420px; max-width: 80vw;
+  position: absolute; left: 0; top: calc(100% + 4px);
+  z-index: 50; width: 420px; max-width: min(420px, calc(100vw - 60px));
+  max-height: 320px; overflow-y: auto;
   background: #fff; border: 1px solid #d8dee6; border-radius: 8px;
   box-shadow: 0 8px 24px rgba(20,30,50,.16);
   padding: 10px 12px; font-size: 12px; color: #333;
