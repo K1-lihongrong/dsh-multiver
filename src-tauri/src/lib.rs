@@ -4,6 +4,7 @@ mod envcheck;
 mod jobobj;
 mod launcher;
 mod maintenance;
+mod market;
 mod modpack;
 #[cfg(test)]
 mod modpack_e2e_test;
@@ -389,6 +390,52 @@ async fn import_dspack(
     result
 }
 
+/// 市场：拉取索引并返回整合包列表。
+#[tauri::command]
+async fn market_list() -> Result<Vec<market::MarketPack>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        market::fetch_index(market::DEFAULT_INDEX_URL)
+    })
+    .await
+    .map_err(|e| format!("市场索引任务失败: {}", e))?
+}
+
+/// 市场：下载指定包并导入。
+///
+/// `pack` 由前端从 market_list 结果里原样回传（含 downloadUrl / sha256 / size）。
+/// 冲突时默认「保留两份」（自动 copy 后缀），与无头 CLI 一致。
+#[tauri::command]
+async fn market_install(
+    app: tauri::AppHandle,
+    pack: market::MarketPack,
+) -> Result<String, String> {
+    use tauri::Emitter;
+
+    let mdir = manager_dir(&app);
+    let cfg = Config::load(&mdir);
+    let dirs = Dirs::new(cfg.resolve_root(&mdir));
+    let _ = dirs.ensure();
+
+    let app2 = app.clone();
+    let dirs2 = dirs.clone();
+    let result = tauri::async_runtime::spawn_blocking(move || -> Result<String, String> {
+        let on_stage = move |stage: &str| {
+            let _ = app2.emit("install-progress", stage.to_string());
+        };
+
+        on_stage(&format!("正在下载 {}...", pack.display_name_text()));
+        let tmp = market::download_to_temp(&pack)?;
+
+        let r = import_core(&dirs2, &tmp.to_string_lossy(), None, false, &on_stage);
+        // 无论成败都清理临时文件
+        let _ = std::fs::remove_file(&tmp);
+        r
+    })
+    .await
+    .map_err(|e| format!("市场安装任务失败: {}", e))?;
+
+    result
+}
 /// 版本决策：返回应当使用的 dsh 版本。
 fn decide_dsh_version(
     m: &modpack::Manifest,
@@ -1312,6 +1359,8 @@ pub fn run() {
             list_installed,
             preview_dspack,
             import_dspack,
+            market_list,
+            market_install,
             list_remote,
             install_version,
             uninstall_version,

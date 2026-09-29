@@ -36,6 +36,121 @@ let unlistenDragDrop = null;
 const versionList = computed(() => installed.value.filter((v) => v.kind !== "modpack"));
 const modpackList = computed(() => installed.value.filter((v) => v.kind === "modpack"));
 
+// ---- 市场 ----
+const marketPacks = ref([]);       // 索引里的整合包
+const marketLoading = ref(false);
+const marketLoaded = ref(false);
+const marketQuery = ref("");       // 搜索词
+const marketCategory = ref("");    // 分类过滤（"" = 全部）
+const marketInstalling = ref("");  // 正在安装的包 id
+// 市场面板折叠状态（默认折叠，持久化）
+const marketCollapsed = ref(localStorage.getItem("dsh-multiver.marketCollapsed") !== "0");
+function toggleMarket() {
+  marketCollapsed.value = !marketCollapsed.value;
+  localStorage.setItem("dsh-multiver.marketCollapsed", marketCollapsed.value ? "1" : "0");
+  // 展开时首次加载（避免默认折叠也联网）
+  if (!marketCollapsed.value) loadMarket();
+}
+
+/// 已安装的 modpack（name@version 集合），用于市场「已安装」标记
+const installedKeys = computed(() => {
+  const s = new Set();
+  for (const v of modpackList.value) {
+    if (v.modpack_name && v.modpack_version) {
+      s.add(v.modpack_name + "@" + v.modpack_version);
+    }
+  }
+  return s;
+});
+
+/// 市场分类列表（去重、排序；uncategorized 排最后）
+const marketCategories = computed(() => {
+  const s = new Set();
+  for (const p of marketPacks.value) s.add(p.category || "uncategorized");
+  const arr = [...s].filter((c) => c !== "uncategorized").sort();
+  if (s.has("uncategorized")) arr.push("uncategorized");
+  return arr;
+});
+
+/// 过滤后的市场列表
+const filteredMarket = computed(() => {
+  const q = marketQuery.value.trim().toLowerCase();
+  return marketPacks.value.filter((p) => {
+    if (marketCategory.value && (p.category || "uncategorized") !== marketCategory.value) {
+      return false;
+    }
+    if (!q) return true;
+    const hay = [
+      p.name,
+      p.displayName ? (typeof p.displayName === "string" ? p.displayName : Object.values(p.displayName).join(" ")) : "",
+      p.description ? (typeof p.description === "string" ? p.description : Object.values(p.description).join(" ")) : "",
+      p.author || "",
+      p.owner || "",
+    ].join(" ").toLowerCase();
+    return hay.includes(q);
+  });
+});
+
+function packDisplayName(p) {
+  const d = p.displayName;
+  if (!d) return p.name;
+  if (typeof d === "string") return d;
+  return d["zh-CN"] || d["zh"] || d["en-US"] || d["en"] || Object.values(d)[0] || p.name;
+}
+
+function packDescription(p) {
+  const d = p.description;
+  if (!d) return "";
+  if (typeof d === "string") return d;
+  return d["zh-CN"] || d["zh"] || d["en-US"] || d["en"] || Object.values(d)[0] || "";
+}
+
+/// 该包是否已安装（按 name@version）
+function isPackInstalled(p) {
+  return installedKeys.value.has(p.name + "@" + p.version);
+}
+
+async function loadMarket(force) {
+  if (marketLoading.value) return;
+  if (marketLoaded.value && !force) return;
+  marketLoading.value = true;
+  try {
+    marketPacks.value = await invoke("market_list");
+    marketLoaded.value = true;
+  } catch (e) {
+    notify("获取市场列表失败：" + e);
+  } finally {
+    marketLoading.value = false;
+  }
+}
+
+async function installFromMarket(p) {
+  if (marketInstalling.value) return;
+  const label = packDisplayName(p);
+  if (!(await ask("安装整合包「" + label + " " + p.version + "」？", { title: "市场安装", kind: "info" }))) return;
+  marketInstalling.value = p.id;
+  installStage.value = "正在准备...";
+  try {
+    const name = await invoke("market_install", { pack: p });
+    await refresh();
+    notify("已安装：" + name);
+    const open = await ask("整合包「" + label + "」安装完成，是否立即打开？", { title: "安装完成", kind: "info" });
+    if (open) await run(name);
+  } catch (e) {
+    notify(String(e));
+  } finally {
+    marketInstalling.value = "";
+    installStage.value = "";
+  }
+}
+
+function fmtBytes(n) {
+  if (n == null) return "";
+  if (n < 1024) return n + " B";
+  if (n < 1024 * 1024) return (n / 1024).toFixed(1) + " KB";
+  return (n / 1024 / 1024).toFixed(1) + " MB";
+}
+
 /// 悬停浮层：当前展开的实例
 const hoverItem = ref(null);
 
@@ -398,6 +513,8 @@ async function openDir(which) {
 
 onMounted(async () => {
   await refresh();
+  // 若市场面板上次是展开的，启动即加载
+  if (!marketCollapsed.value) loadMarket();
   unlistenProgress = await listen("install-progress", (e) => {
     installStage.value = e.payload;
   });
@@ -609,6 +726,70 @@ onUnmounted(() => {
       </div>
     </section>
 
+    <!-- 市场 -->
+    <section class="panel">
+      <div class="panel-head">
+        <h2 class="collapsible" @click="toggleMarket">
+          <span class="caret">{{ marketCollapsed ? "▸" : "▾" }}</span>
+          整合包市场
+          <span class="badge-ok" v-if="marketLoaded">{{ marketPacks.length }}</span>
+        </h2>
+        <button class="btn small" @click.stop="loadMarket(true)" :disabled="marketLoading">
+          {{ marketLoading ? "加载中..." : "刷新" }}
+        </button>
+      </div>
+
+      <template v-if="!marketCollapsed">
+      <div class="market-toolbar">
+        <input
+          class="input market-search"
+          v-model="marketQuery"
+          placeholder="搜索名称 / 描述 / 作者..."
+        />
+        <select class="input market-cat" v-model="marketCategory">
+          <option value="">全部分类</option>
+          <option v-for="c in marketCategories" :key="c" :value="c">{{ c }}</option>
+        </select>
+      </div>
+
+      <div v-if="!marketLoaded && marketLoading" class="hint">正在加载市场索引...</div>
+      <div v-else-if="marketLoaded && !filteredMarket.length" class="empty">
+        {{ marketQuery || marketCategory ? "没有匹配的整合包" : "市场暂无整合包" }}
+      </div>
+
+      <ul class="market-list" v-if="filteredMarket.length">
+        <li v-for="p in filteredMarket" :key="p.id" class="market-item">
+          <div class="pack-icon"><span>📦</span></div>
+          <div class="market-main">
+            <div class="pack-title">
+              {{ packDisplayName(p) }}
+              <span class="pack-ver">{{ p.version }}</span>
+              <span class="badge badge-installed" v-if="isPackInstalled(p)">已安装</span>
+              <span class="badge badge-cat" v-if="p.category && p.category !== 'uncategorized'">{{ p.category }}</span>
+            </div>
+            <div class="pack-sub">
+              <span v-if="p.author">by {{ p.author }}</span>
+              <span v-if="p.dshVersion">· DSH {{ p.dshVersion }}</span>
+              <span v-else>· DSH 自选</span>
+              <span v-if="p.depCount != null">· {{ p.depCount }} 依赖</span>
+              <span v-if="p.bundleCount != null">· {{ p.bundleCount }} 插件</span>
+              <span>· {{ fmtBytes(p.size) }}</span>
+              <span v-if="p.updatedAt">· {{ p.updatedAt }}</span>
+            </div>
+            <div class="market-desc" v-if="packDescription(p)">{{ packDescription(p) }}</div>
+          </div>
+          <div class="ver-actions">
+            <button
+              class="btn primary"
+              @click="installFromMarket(p)"
+              :disabled="!!marketInstalling"
+            >{{ marketInstalling === p.id ? "安装中..." : (isPackInstalled(p) ? "再装一份" : "安装") }}</button>
+          </div>
+        </li>
+      </ul>
+      </template>
+    </section>
+
     <section class="panel">
       <div class="panel-head">
         <h2>可用版本</h2>
@@ -798,6 +979,9 @@ body {
   margin-bottom: 12px;
 }
 .panel-head h2 { font-size: 14px; margin: 0; font-weight: 600; color: #374151; }
+.panel-head h2.collapsible { cursor: pointer; user-select: none; display: flex; align-items: center; gap: 4px; }
+.panel-head h2.collapsible:hover { color: #1f2937; }
+.caret { font-size: 11px; color: #8891a0; width: 12px; display: inline-block; }
 .count {
   background: #eef1ff; color: #4f6ef7; font-size: 12px;
   padding: 1px 8px; border-radius: 10px; margin-left: 8px;
@@ -996,6 +1180,26 @@ body {
 .pack-ver { font-weight: 400; color: #6b7480; font-size: 12px; }
 .pack-sub { color: #6b7480; font-size: 12px; margin-top: 2px; }
 .badge-pack { background: #ede7ff; color: #6b46c1; }
+
+/* ---------- 市场 ---------- */
+.market-toolbar { display: flex; gap: 8px; margin-bottom: 10px; }
+.market-search { flex: 1; min-width: 0; }
+.market-cat { flex: 0 0 150px; }
+.market-list { list-style: none; margin: 0; padding: 0; }
+.market-item {
+  display: flex; align-items: flex-start; gap: 12px;
+  padding: 10px 12px; margin-bottom: 8px;
+  background: #fff; border: 1px solid #e6e8eb; border-radius: 8px;
+}
+.market-item:hover { border-color: #c9d3e0; box-shadow: 0 2px 10px rgba(20,30,50,.08); }
+.market-main { flex: 1; min-width: 0; }
+.market-desc {
+  color: #6b7480; font-size: 12px; margin-top: 4px; line-height: 1.5;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.badge-installed { background: #e8f5ec; color: #2f9e5f; }
+.badge-cat { background: #eef2f7; color: #5a6472; }
 
 /* 悬停浮层 */
 .pack-pop {

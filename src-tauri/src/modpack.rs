@@ -621,7 +621,7 @@ pub fn download_all(root: &Path, files: &[FileRef]) -> Result<(), String> {
 }
 
 /// HTTP GET 取字节（阻塞）。
-fn fetch_bytes(url: &str) -> Result<Vec<u8>, String> {
+pub fn fetch_bytes(url: &str) -> Result<Vec<u8>, String> {
     let client = reqwest::blocking::Client::builder()
         .timeout(std::time::Duration::from_secs(300))
         .user_agent("dsh-multiver")
