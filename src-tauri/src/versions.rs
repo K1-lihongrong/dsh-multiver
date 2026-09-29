@@ -21,6 +21,144 @@ pub struct VersionInfo {
     pub shared_home: bool,
 }
 
+/// 安装进度事件（推给前端渲染阶段进度条 + 动态数字）。
+#[derive(Debug, Clone, Serialize)]
+pub struct ProgressEvent {
+    /// 阶段序号（1-based）
+    pub step: usize,
+    /// 阶段总数（固定）
+    pub total: usize,
+    /// 阶段名（中文）
+    pub stage: String,
+    /// 阶段内动态细节（如 "已解析 234 个包"），可能为空
+    pub detail: String,
+    /// 当前阶段内的完成比例（0.0-1.0）。无法确定时为 0.0。
+    /// 用于让进度条在阶段内平滑推进（如写入阶段按 added/总数）。
+    pub fraction: f32,
+}
+
+/// 安装阶段序列（固定 8 步）。step 即阶段序号。
+pub const INSTALL_TOTAL_STEPS: usize = 8;
+
+/// 每个阶段名（下标 = step - 1）。
+const STAGE_NAMES: [&str; INSTALL_TOTAL_STEPS] = [
+    "准备目录",
+    "写入配置",
+    "启动 pnpm",
+    "解析依赖",
+    "下载依赖",
+    "写入文件",
+    "构建原生模块",
+    "完成",
+];
+
+/// 构造一个 ProgressEvent。
+fn progress(step: usize, detail: String, fraction: f32) -> ProgressEvent {
+    ProgressEvent {
+        step,
+        total: INSTALL_TOTAL_STEPS,
+        stage: STAGE_NAMES.get(step.saturating_sub(1)).copied().unwrap_or("").to_string(),
+        detail,
+        fraction: fraction.clamp(0.0, 1.0),
+    }
+}
+
+/// 进度解析器（保存跨行状态，如依赖总数），供 install 逐行喂入。
+pub struct ProgressParser {
+    /// 从 `Packages: +N` 解析出的依赖总数，用于计算阶段内 fraction。
+    total_packages: Option<u64>,
+    /// 已到达的最大 step，用于防止阶段回退
+    /// （pnpm 的 Packages/Progress 行交错出现会导致 step 反复横跳）。
+    max_step: usize,
+}
+
+impl ProgressParser {
+    pub fn new() -> Self {
+        Self { total_packages: None, max_step: 0 }
+    }
+
+    /// 归一化 step：不允许小于已达到的最大值（防回退）。
+    fn clamp_step(&mut self, step: usize) -> usize {
+        if step > self.max_step {
+            self.max_step = step;
+        }
+        self.max_step
+    }
+
+    /// 解析一行，返回 (step, detail, fraction)；无法识别返回 None。
+    /// step 单调不减（防 pnpm 交错输出导致的回退）。
+    pub fn parse(&mut self, line: &str) -> Option<(usize, String, f32)> {
+        // 先算出本行的「原始 step 与 detail」，最后统一 clamp。
+        let raw: Option<(usize, String, f32)> = 'p: {
+            // Packages: +445  → 记下总数（本身不推进阶段，只更新总数）
+            if line.starts_with("Packages:") {
+                if let Some(n) = extract_num(line, "+") {
+                    self.total_packages = Some(n);
+                }
+                // 不产生事件，避免与 Progress 行交错导致 step 回退
+                break 'p None;
+            }
+            // Progress: resolved 234, reused 222, downloaded 5, added 0
+            if let Some(rest) = line.strip_prefix("Progress:") {
+                let resolved = extract_num(rest, "resolved");
+                let downloaded = extract_num(rest, "downloaded");
+                let added = extract_num(rest, "added");
+                if let Some(a) = added {
+                    if a > 0 {
+                        break 'p Some((6, format!("已写入 {} 个包", a), self.frac(a)));
+                    }
+                }
+                if let Some(d) = downloaded {
+                    if d > 0 {
+                        break 'p Some((5, format!("已下载 {} 个包", d), self.frac(d)));
+                    }
+                }
+                if let Some(r) = resolved {
+                    // 解析阶段没有可靠总数（resolved 会超过实际包数），不细分
+                    break 'p Some((4, format!("已解析 {} 个包", r), 0.0));
+                }
+                break 'p None;
+            }
+            // 原生模块构建
+            if line.contains("node_modules/")
+                && (line.contains("postinstall") || line.contains("preinstall") || line.contains("install:"))
+            {
+                break 'p Some((7, String::new(), 0.0));
+            }
+            if line.contains("Done in") {
+                break 'p Some((8, String::new(), 0.0));
+            }
+            None
+        };
+
+        // 归一化：step 不倒退
+        raw.map(|(step, detail, frac)| {
+            let s = self.clamp_step(step);
+            (s, detail, frac)
+        })
+    }
+
+    /// 当前数字 / 总数 → fraction（总数未知时返回 0.0）。
+    fn frac(&self, cur: u64) -> f32 {
+        match self.total_packages {
+            Some(t) if t > 0 => (cur as f32 / t as f32).clamp(0.0, 1.0),
+            _ => 0.0,
+        }
+    }
+}
+
+/// 从字符串里提取 `<key> <数字>` 的数字（key 如 "resolved"）。
+fn extract_num(s: &str, key: &str) -> Option<u64> {
+    let idx = s.find(key)?;
+    let after = &s[idx + key.len()..];
+    let digits: String = after
+        .trim_start_matches(|c: char| !c.is_ascii_digit())
+        .chars()
+        .take_while(|c| c.is_ascii_digit())
+        .collect();
+    digits.parse().ok()
+}
+
 /// 在 Windows 上调用 pnpm 需要走 cmd，否则可能找不到 .cmd
 #[cfg(windows)]
 fn pnpm_command() -> Command {
@@ -126,7 +264,8 @@ fn version_cmp(a: &str, b: &str) -> std::cmp::Ordering {
     parse(a).cmp(&parse(b))
 }
 
-/// 安装阶段
+/// 安装阶段（旧版阶段文字；整合包分支仍在用，保留）
+#[allow(dead_code)]
 pub fn parse_stage(line: &str) -> Option<&'static str> {
     if line.contains("resolved") && line.contains("reused") {
         return Some("正在解析依赖...");
@@ -152,19 +291,83 @@ pub fn parse_stage(line: &str) -> Option<&'static str> {
     None
 }
 
-/// 安装指定版本。on_stage 用于推送阶段进度。返回 (是否成功, 消息)
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn progress_has_stage_names() {
+        let p1 = progress(1, String::new(), 0.0);
+        assert_eq!(p1.stage, "准备目录");
+        assert_eq!(p1.step, 1);
+        assert_eq!(p1.total, 8);
+        let p8 = progress(8, String::new(), 1.0);
+        assert_eq!(p8.stage, "完成");
+        assert_eq!(p8.fraction, 1.0);
+    }
+
+    #[test]
+    fn parses_pnpm_progress_lines() {
+        let mut p = ProgressParser::new();
+        // Packages 行不再产生事件，只记下总数
+        assert!(p.parse("Packages: +445").is_none());
+        // resolved 阶段
+        let (s, d, _) = p.parse("Progress: resolved 234, reused 222, downloaded 0, added 0").unwrap();
+        assert_eq!(s, 4);
+        assert!(d.contains("234"), "detail={}", d);
+        // downloaded 阶段
+        let (s, d, _) = p.parse("Progress: resolved 234, reused 222, downloaded 5, added 0").unwrap();
+        assert_eq!(s, 5);
+        assert!(d.contains("5"));
+        // added 阶段：fraction = 12/445
+        let (s, d, f) = p.parse("Progress: resolved 234, reused 222, downloaded 5, added 12").unwrap();
+        assert_eq!(s, 6);
+        assert!(d.contains("12"));
+        assert!((f - 12.0 / 445.0).abs() < 0.001, "frac={}", f);
+        // Done
+        let (s, _, _) = p.parse("Done in 47.6s using pnpm v11").unwrap();
+        assert_eq!(s, 8);
+    }
+
+    #[test]
+    fn step_never_goes_backwards() {
+        let mut p = ProgressParser::new();
+        // 先到 step 5（下载）
+        let (s, _, _) = p.parse("Progress: resolved 100, reused 0, downloaded 5, added 0").unwrap();
+        assert_eq!(s, 5);
+        // 交错出现 resolved 行（raw step 4）——不应回退
+        let (s2, _, _) = p.parse("Progress: resolved 200, reused 0, downloaded 0, added 0").unwrap();
+        assert_eq!(s2, 5, "阶段不应回退");
+        // 再到 step 6
+        let (s3, _, _) = p.parse("Progress: resolved 200, reused 0, downloaded 5, added 10").unwrap();
+        assert_eq!(s3, 6);
+        // 又出现 resolved 行（raw 4）——仍不回退
+        let (s4, _, _) = p.parse("Progress: resolved 300, reused 0, downloaded 0, added 0").unwrap();
+        assert_eq!(s4, 6, "阶段不应回退");
+    }
+
+    #[test]
+    fn extract_num_works() {
+        assert_eq!(extract_num("resolved 234, reused 222", "resolved"), Some(234));
+        assert_eq!(extract_num("resolved 234, reused 222", "reused"), Some(222));
+        assert_eq!(extract_num("no number here", "xyz"), None);
+    }
+}
+
+/// 安装指定版本。on_progress 用于推送阶段进度。返回 (是否成功, 消息)
 pub fn install(
     versions_dir: &Path,
     store_dir: &Path,
     cache_dir: &Path,
     state_dir: &Path,
     version: &str,
-    on_stage: &dyn Fn(&str),
+    on_progress: &dyn Fn(&ProgressEvent),
 ) -> (bool, String) {
     let target = versions_dir.join(version);
     if target.join("node_modules").exists() {
         return (false, format!("版本 {} 已安装", version));
     }
+    on_progress(&progress(1, String::new(), 0.0));
     if let Err(e) = std::fs::create_dir_all(&target) {
         return (false, format!("创建目录失败: {}", e));
     }
@@ -185,6 +388,8 @@ pub fn install(
         return (false, format!("写入 .npmrc 失败: {}", e));
     }
 
+    on_progress(&progress(2, String::new(), 0.0));
+
     let spec = format!("@deepseek-ai/dsh@{}", version);
     let mut cmd = pnpm_command();
     cmd.current_dir(&target)
@@ -200,7 +405,7 @@ pub fn install(
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped());
 
-    on_stage("正在启动 pnpm...");
+    on_progress(&progress(3, String::new(), 0.0));
 
     let mut child = match cmd.spawn() {
         Ok(c) => c,
@@ -210,28 +415,59 @@ pub fn install(
         }
     };
 
-    // 流式读取 stderr（pnpm 的进度输出走 stderr）
-    let mut last_stage = String::new();
+    // pnpm 的 Progress 行实际走 **stdout**（实测），错误信息走 stderr。
+    // 两个流都必须读（否则管道填满会假死），且都要解析进度。
+    // on_progress 是 &dyn Fn（非 Send），只能在主线程调用——
+    // 故两个读线程通过 channel 把「行」发回主线程，主线程统一解析 + 回调。
+    let (tx, rx) = std::sync::mpsc::channel::<String>();
+    let tx_out = tx.clone();
+    let h_out = child.stdout.take().map(move |stdout| {
+        std::thread::spawn(move || {
+            use std::io::BufRead;
+            let reader = std::io::BufReader::new(stdout);
+            for line in reader.lines().map_while(Result::ok) {
+                let _ = tx_out.send(line);
+            }
+        })
+    });
+    let h_err = child.stderr.take().map(move |stderr| {
+        std::thread::spawn(move || {
+            use std::io::BufRead;
+            let reader = std::io::BufReader::new(stderr);
+            for line in reader.lines().map_while(Result::ok) {
+                let _ = tx.send(line);
+            }
+        })
+    });
+
+    // 主线程消费两个流（所有 sender drop 后 rx 循环自然结束）
+    let mut last_step = 0usize;
+    let mut last_detail = String::new();
+    let mut last_frac = -1.0f32;
     let mut collected = String::new();
-    if let Some(stderr) = child.stderr.take() {
-        use std::io::BufRead;
-        let reader = std::io::BufReader::new(stderr);
-        for line in reader.lines().map_while(Result::ok) {
-            collected.push_str(&line);
-            collected.push('\n');
-            if let Some(stage) = parse_stage(&line) {
-                if stage != last_stage {
-                    last_stage = stage.to_string();
-                    on_stage(stage);
-                }
+    let mut parser = ProgressParser::new();
+    for line in rx {
+        collected.push_str(&line);
+        collected.push('\n');
+        if let Some((step, detail, frac)) = parser.parse(&line) {
+            let advanced = step > last_step;
+            let detail_changed = detail != last_detail;
+            let frac_moved = (frac - last_frac).abs() >= 0.01;
+            if advanced || detail_changed || frac_moved {
+                last_step = step;
+                last_detail = detail.clone();
+                last_frac = frac;
+                on_progress(&progress(step, detail, frac));
             }
         }
     }
+    if let Some(h) = h_out { let _ = h.join(); }
+    if let Some(h) = h_err { let _ = h.join(); }
 
     let status = child.wait();
     let ok = matches!(status, Ok(s) if s.success());
     if ok {
-        on_stage("安装完成");
+        on_progress(&progress(INSTALL_TOTAL_STEPS, String::new(), 1.0));
         (true, format!("已安装 {}", version))
     } else {
         // 失败时清理残缺目录

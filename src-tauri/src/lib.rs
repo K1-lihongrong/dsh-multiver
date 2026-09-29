@@ -92,13 +92,31 @@ async fn install_version(app: tauri::AppHandle, version: String) -> Result<Strin
     let cfg = Config::load(&mdir);
     let dirs = Dirs::new(cfg.resolve_root(&mdir));
     let _ = dirs.ensure();
+    // 启动参数 --debug-progress 时，把进度事件落盘到 <exe目录>/progress-debug.log
+    // 供排查进度问题（默认关闭，不产生任何文件）。
+    let debug_progress = std::env::args().any(|a| a == "--debug-progress");
+
     let app2 = app.clone();
     // 把阻塞的安装逻辑丢到后台线程池，避免占用主线程导致界面卡死
     let result = tauri::async_runtime::spawn_blocking(move || {
-        let on_stage = move |stage: &str| {
-            let _ = app2.emit("install-progress", stage.to_string());
+        let on_progress = move |ev: &versions::ProgressEvent| {
+            if debug_progress {
+                if let Ok(mdir) = std::env::current_exe() {
+                    if let Some(dir) = mdir.parent() {
+                        use std::io::Write;
+                        if let Ok(mut f) = std::fs::OpenOptions::new()
+                            .create(true).append(true)
+                            .open(dir.join("progress-debug.log"))
+                        {
+                            let _ = writeln!(f, "step={} total={} stage={:?} detail={:?} frac={:.2}",
+                                ev.step, ev.total, ev.stage, ev.detail, ev.fraction);
+                        }
+                    }
+                }
+            }
+            let _ = app2.emit("install-progress", ev.clone());
         };
-        versions::install(&dirs.versions, &dirs.store, &dirs.cache, &dirs.state, &version, &on_stage)
+        versions::install(&dirs.versions, &dirs.store, &dirs.cache, &dirs.state, &version, &on_progress)
     })
     .await
     .map_err(|e| format!("安装任务失败: {}", e))?;

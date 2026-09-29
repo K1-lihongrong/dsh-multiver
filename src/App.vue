@@ -13,6 +13,10 @@ const toastExpanded = ref(false);
 const installInput = ref("");
 const rootInput = ref("");
 const installStage = ref("");
+const installStep = ref(0);
+const installTotal = ref(0);
+const installDetail = ref("");
+const installFraction = ref(0);
 const runningVersion = ref(""); // 正在启动的版本号（用于禁用按钮 + 显示反馈）
 const envChecks = ref([]);
 const envChecked = ref(false);
@@ -31,6 +35,19 @@ function notify(msg) {
   if (!isLong) {
     toastTimer = setTimeout(() => { toast.value = ""; }, 6000);
   }
+}
+
+/// 各阶段的「起始百分比」与「权重百分比」（按实际耗时分配，和 ≈ 100）
+/// 索引 = step - 1。写入阶段（step 6）最耗时，权重最大。
+const STAGE_START = [0, 1, 2, 4, 10, 35, 90, 97];
+const STAGE_WEIGHT = [1, 1, 2, 6, 25, 55, 7, 3];
+
+/// 进度百分比（0-100），按加权阶段推进 + 阶段内 fraction 细分。
+function progressPct() {
+  const i = installStep.value - 1;
+  if (i < 0 || i >= STAGE_START.length) return 0;
+  const frac = Math.min(1, Math.max(0, installFraction.value));
+  return Math.round(STAGE_START[i] + STAGE_WEIGHT[i] * frac);
 }
 
 function dismissToast() {
@@ -271,7 +288,12 @@ async function openDir(which) {
 onMounted(async () => {
   await refresh();
   unlistenProgress = await listen("install-progress", (e) => {
-    installStage.value = e.payload;
+    const p = e.payload;
+    installStage.value = p.stage || "";
+    installStep.value = p.step || 0;
+    installTotal.value = p.total || 0;
+    installDetail.value = p.detail || "";
+    installFraction.value = p.fraction || 0;
   });
   await runEnvCheck();
   document.addEventListener("click", closeMenu);
@@ -388,7 +410,14 @@ onUnmounted(() => {
 
       <div class="install-progress" v-if="installStage">
         <div class="spinner"></div>
-        <span class="stage-text">{{ installStage }}</span>
+        <div class="prog-body">
+          <div class="prog-line">
+            <span class="stage-text">{{ installStage }}</span>
+            <span class="prog-detail" v-if="installDetail">{{ installDetail }}</span>
+            <span class="prog-count" v-if="installTotal">{{ installStep }}/{{ installTotal }}</span>
+          </div>
+          <div class="prog-bar"><div class="prog-fill" :style="{ width: progressPct() + '%' }"></div></div>
+        </div>
       </div>
 
       <div class="chips" v-if="remote.length">
@@ -615,10 +644,16 @@ body {
 .install-row input:focus { border-color: #4f6ef7; }
 
 .install-progress {
-  display: flex; align-items: center; gap: 10px;
+  display: flex; align-items: flex-start; gap: 10px;
   padding: 10px 14px; margin-bottom: 12px;
   background: #f5f7ff; border: 1px solid #e2e7ff; border-radius: 8px;
 }
+.prog-body { flex: 1; min-width: 0; }
+.prog-line { display: flex; align-items: center; gap: 10px; margin-bottom: 6px; }
+.prog-detail { font-size: 12px; color: #6b7280; }
+.prog-count { font-size: 12px; color: #9aa1ab; margin-left: auto; font-variant-numeric: tabular-nums; }
+.prog-bar { height: 6px; background: #e2e7ff; border-radius: 3px; overflow: hidden; }
+.prog-fill { height: 100%; background: #4f6ef7; border-radius: 3px; transition: width .3s ease; }
 .spinner {
   width: 15px; height: 15px; flex-shrink: 0;
   border: 2px solid #c9d4ff; border-top-color: #4f6ef7;
