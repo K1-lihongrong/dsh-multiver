@@ -2,7 +2,7 @@
 # 注意：--no-bundle 模式下 exe 名来自这里的包名（不是 tauri.conf.json 的 productName）。
 # 本分支（整合包支持）与主干（dsh-multiver）平行分叉，故 exe 独立命名，可并存。
 name = "dsh-modpack"
-version = "0.1.4"
+version = "0.1.5"
 description = "DSH modpack manager (parallel fork with .dspack import support)"
 authors = ["K1-lihongrong"]
 edition = "2021"
@@ -51,3 +51,4 @@ lto = true
 opt-level = 3
 panic = "abort"
 strip = true
+

@@ -1,15 +1,15 @@
 name: Build and Release
 
 on:
-  # 打 tag（v*）时自动触发
+  # 打 tag（modpack-v*）时自动触发（与主干 v* 区分）
   push:
     tags:
-      - 'v*'
+      - 'modpack-v*'
   # 允许手动触发
   workflow_dispatch:
     inputs:
       tag:
-        description: '要发布的 tag（如 v0.1.4）'
+        description: '要发布的 tag（如 modpack-v0.1.5）'
         required: true
         type: string
 
@@ -52,41 +52,52 @@ jobs:
 
       - name: Rename artifact
         run: |
-          Copy-Item "src-tauri\target\release\dsh-multiver.exe" "dsh-multiver.exe"
+          Copy-Item "src-tauri\target\release\dsh-modpack.exe" "dsh-modpack.exe"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: dsh-multiver-exe
-          path: dsh-multiver.exe
+          name: dsh-modpack-exe
+          path: dsh-modpack.exe
 
       - name: Create Release
         if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.event.inputs.tag || github.ref_name }}
-          name: DSH 版本管理器 ${{ github.event.inputs.tag || github.ref_name }}
-          files: dsh-multiver.exe
+          name: DSH 整合包管理器 ${{ github.event.inputs.tag || github.ref_name }}
+          files: dsh-modpack.exe
           generate_release_notes: false
           draft: false
           body: |
-            ## DSH 版本管理器 v0.1.4
+            ## DSH 整合包管理器 v0.1.5
 
-            ### 🐛 重要修复
+            > ⚠️ **这是「整合包分支」的发布**（`feat/dspack-integration`），**不是主干**。
+            > 它与主干「DSH 版本管理器」是**平行的两个产品**，互不替代。
 
-            - **修复确认对话框失效**：Tauri WebView2 中 window.confirm 静默失效，导致「卸载」「清理隔离数据」「复制共享数据」「运行非隔离版本」等所有需确认的操作**点了没反应**。现已改用系统原生对话框。
+            ## 与主干的区别
 
-            ### ✨ 新增
+            | | 主干 DSH 版本管理器 | 本分支 DSH 整合包管理器 |
+            | :--- | :--- | :--- |
+            | exe | `dsh-multiver.exe` | `dsh-modpack.exe` |
+            | 目标 | 管理 dsh **版本**（安装/切换/隔离） | 管理 dsh **整合包**（.dspack 导入/导出/市场） |
+            | 数据根布局 | 只认 `versions/` | 整合包实例放 `modpacks/`，与主干共用数据根时互不干扰 |
+            | 版本线 | v0.1.x | modpack-v0.1.x（独立） |
 
-            - **根除孤儿进程**：用 Windows Job Object 绑定 dsh 子进程，管理器进程退出（正常/被强杀/崩溃）时由系统**自动清理**所有 dsh 进程，不再残留占资源、锁文件。
-            - **共享 home 提示**：非隔离版本在列表中显示「共享 home」标记；运行前弹提示（多版本混用可能导致插件/依赖错配，建议对测试版开隔离），可在「路径设置」中关闭。
+            ## 本分支特色功能
 
-            ### 🎨 体验
+            - **整合包导入**：拖入/选择 `.dspack`，四阶段导入 + 失败全量回滚
+            - **整合包市场**：消费 `index.json`，列表 + 搜索/分类 + 一键下载安装
+            - **导出整合包**：把实例打回 `.dspack`（CLI `--export` + GUI 按钮）
+            - **无头 CLI 导入**：`--import <路径> --yes`（退出码 0/1，可脚本化）
+            - **复用本机 dsh 版本**：纯技能包秒装（junction）
+            - **整合包导入进度条**：dsh 本体/依赖安装阶段百分比 + 动态数字
 
-            - **消除误导性终端黑框**：创建快捷方式、环境检查、刷新版本列表、安装版本时不再弹出终端窗口（仅「浏览器打开」保留终端，以便查看 URL/token）。
+            ## 同时具备（与主干共享）
 
-            ### 🔧 其它
-
-            - 修复 lib.rs 中多余的 use tauri::Manager 警告
+            - 安装进度条、卸载状态反馈、失败换源重试、环境检查引导
+            - 多版本共存、省磁盘（pnpm store 硬链接）、内嵌窗口、桌面快捷方式、数据隔离
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+
