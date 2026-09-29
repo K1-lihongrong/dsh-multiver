@@ -44,6 +44,14 @@ pub struct ProgressEvent {
     pub stage: String,
     pub detail: String,
     pub fraction: f32,
+    /// 来源："version-install"（安装 dsh 版本）| "modpack-import"（导入整合包）
+    #[serde(default = "default_kind")]
+    pub kind: String,
+}
+
+#[allow(dead_code)]
+fn default_kind() -> String {
+    "version-install".to_string()
 }
 
 /// 安装阶段序列（固定 8 步）。
@@ -60,7 +68,7 @@ const STAGE_NAMES: [&str; INSTALL_TOTAL_STEPS] = [
     "完成",
 ];
 
-/// 构造一个 ProgressEvent。
+/// 构造一个 ProgressEvent（版本安装来源）。
 fn progress(step: usize, detail: String, fraction: f32) -> ProgressEvent {
     ProgressEvent {
         step,
@@ -68,7 +76,42 @@ fn progress(step: usize, detail: String, fraction: f32) -> ProgressEvent {
         stage: STAGE_NAMES.get(step.saturating_sub(1)).copied().unwrap_or("").to_string(),
         detail,
         fraction: fraction.clamp(0.0, 1.0),
+        kind: "version-install".to_string(),
     }
+}
+
+/// 构造一个「整合包导入」来源的 ProgressEvent（供 modpack 复用同一前端组件）。
+/// `stage` 直接给中文阶段名；`percent` 0-100（该阶段内）。
+pub fn import_progress(stage: &str, detail: String, percent: f32) -> ProgressEvent {
+    let p = percent.clamp(0.0, 100.0);
+    ProgressEvent {
+        step: 0,
+        total: 0,
+        stage: stage.to_string(),
+        detail,
+        fraction: (p / 100.0).clamp(0.0, 1.0),
+        kind: "modpack-import".to_string(),
+    }
+}
+
+/// 整合包导入：把 `ProgressParser` 的结果转成阶段名 + 百分比。
+/// 阶段映射（导入流程专属）：
+/// - 4 解析依赖 → 20%
+/// - 5 下载依赖 → 25-45%
+/// - 6 写入文件 → 45-95%
+/// - 7 构建原生模块 → 95%
+/// - 8 完成 → 100%
+pub fn import_progress_from_line(parser: &mut ProgressParser, line: &str) -> Option<ProgressEvent> {
+    let (step, detail, frac) = parser.parse(line)?;
+    let (stage, base, span) = match step {
+        4 => ("正在解析整合包依赖", 20.0, 5.0),
+        5 => ("正在下载整合包依赖", 25.0, 20.0),
+        6 => ("正在写入整合包依赖", 45.0, 50.0),
+        7 => ("正在构建原生模块", 95.0, 3.0),
+        _ => ("正在安装整合包依赖", 20.0, 75.0),
+    };
+    let percent = base + span * frac;
+    Some(import_progress(stage, detail, percent))
 }
 
 /// 进度解析器（保存跨行状态，如依赖总数），供 install 逐行喂入。

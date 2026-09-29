@@ -700,6 +700,7 @@ fn run_pnpm_install(
     dir: &Path,
     dirs: &ImportDirs,
     on_stage: StageFn,
+    on_progress: Option<&dyn Fn(&crate::versions::ProgressEvent)>,
 ) -> Result<(), String> {
     let mut cmd = pnpm_cmd();
     cmd.current_dir(dir)
@@ -714,48 +715,60 @@ fn run_pnpm_install(
 
     let mut child = cmd.spawn().map_err(|e| format!("启动 pnpm install 失败: {}", e))?;
 
-    use std::io::BufRead;
-    use std::sync::{Arc, Mutex};
-
-    let stdout_text = Arc::new(Mutex::new(String::new()));
-    let stdout_handle = child.stdout.take().map(|stdout| {
-        let c = stdout_text.clone();
+    // pnpm 的 Progress 行走 stdout，错误走 stderr。两流都读（防管道填满假死），
+    // 通过 channel 把行发回主线程统一解析（回调是 &dyn Fn，非 Send）。
+    let (tx, rx) = std::sync::mpsc::channel::<String>();
+    let tx_out = tx.clone();
+    let h_out = child.stdout.take().map(move |stdout| {
         std::thread::spawn(move || {
+            use std::io::BufRead;
             let reader = std::io::BufReader::new(stdout);
             for line in reader.lines().map_while(Result::ok) {
-                if let Ok(mut g) = c.lock() {
-                    g.push_str(&line);
-                    g.push('\n');
-                }
+                let _ = tx_out.send(line);
+            }
+        })
+    });
+    let h_err = child.stderr.take().map(move |stderr| {
+        std::thread::spawn(move || {
+            use std::io::BufRead;
+            let reader = std::io::BufReader::new(stderr);
+            for line in reader.lines().map_while(Result::ok) {
+                let _ = tx.send(line);
             }
         })
     });
 
-    let mut err_text = String::new();
-    let mut last = String::new();
-    if let Some(stderr) = child.stderr.take() {
-        let reader = std::io::BufReader::new(stderr);
-        for line in reader.lines().map_while(Result::ok) {
-            err_text.push_str(&line);
-            err_text.push('\n');
-            if let Some(stage) = crate::versions::parse_stage(&line) {
-                if stage != last {
-                    last = stage.to_string();
-                    on_stage(stage);
+    let mut collected = String::new();
+    let mut last_stage = String::new();
+    let mut parser = crate::versions::ProgressParser::new();
+    let mut last_pct = -1.0f32;
+    for line in rx {
+        collected.push_str(&line);
+        collected.push('\n');
+        if let Some(stage) = crate::versions::parse_stage(&line) {
+            if stage != last_stage {
+                last_stage = stage.to_string();
+                on_stage(stage);
+            }
+        }
+        if let Some(cb) = on_progress {
+            if let Some(ev) = crate::versions::import_progress_from_line(&mut parser, &line) {
+                let pct = ev.fraction * 100.0;
+                if (pct - last_pct).abs() >= 1.0 {
+                    last_pct = pct;
+                    cb(&ev);
                 }
             }
         }
     }
+    if let Some(h) = h_out { let _ = h.join(); }
+    if let Some(h) = h_err { let _ = h.join(); }
+
     let status = child.wait();
-    if let Some(h) = stdout_handle {
-        let _ = h.join();
-    }
-    let out_text = stdout_text.lock().map(|g| g.clone()).unwrap_or_default();
-    let combined = format!("{}{}", err_text.trim(), if out_text.trim().is_empty() { String::new() } else { format!("\n{}", out_text.trim()) });
     if matches!(status, Ok(s) if s.success()) {
         Ok(())
     } else {
-        let (_, msg) = diagnose(combined.trim());
+        let (_, msg) = diagnose(collected.trim());
         Err(format!("安装依赖失败：\n\n{}", msg))
     }
 }
@@ -811,6 +824,7 @@ pub fn import(
     dsh_version: &str,
     ensure_dsh: &dyn Fn(&str) -> Result<(), String>,
     on_stage: StageFn,
+    on_progress: Option<&dyn Fn(&crate::versions::ProgressEvent)>,
 ) -> Result<ImportOutcome, String> {
     let instance_dir = dirs.modpacks_dir.join(instance_name);
     if instance_dir.exists() {
@@ -898,11 +912,11 @@ pub fn import(
                 .map_err(|e| format!("复用本机 dsh 失败（创建链接）: {}", e))?;
         } else {
             on_stage("正在安装 dsh 本体...");
-            install_dsh_into(&instance_dir, dirs, dsh_version, on_stage)?;
+            install_dsh_into(&instance_dir, dirs, dsh_version, on_stage, on_progress)?;
 
             if !no_deps {
                 on_stage("正在安装整合包依赖...");
-                run_pnpm_install(&instance_dir, dirs, on_stage)?;
+                run_pnpm_install(&instance_dir, dirs, on_stage, on_progress)?;
             }
         }
 
@@ -942,6 +956,7 @@ fn install_dsh_into(
     dirs: &ImportDirs,
     dsh_version: &str,
     on_stage: StageFn,
+    on_progress: Option<&dyn Fn(&crate::versions::ProgressEvent)>,
 ) -> Result<(), String> {
     let spec = format!("@deepseek-ai/dsh@{}", dsh_version);
     let mut cmd = pnpm_cmd();
@@ -958,52 +973,60 @@ fn install_dsh_into(
 
     let mut child = cmd.spawn().map_err(|e| format!("启动 pnpm add 失败: {}", e))?;
 
-    // stdout 与 stderr 都要读：pnpm 的进度走 stderr，但部分错误（尤其经 cmd /C）
-    // 会走 stdout。两个流都用独立线程读到 EOF，避免管道填满导致假死。
-    use std::io::BufRead;
-    use std::sync::{Arc, Mutex};
-
-    // stdout 用独立线程读到 EOF（丢弃内容，仅防管道填满）
-    let stdout_text = Arc::new(Mutex::new(String::new()));
-    let stdout_handle = child.stdout.take().map(|stdout| {
-        let c = stdout_text.clone();
+    // pnpm 的 Progress 行走 stdout，错误走 stderr。两流都读（防管道填满假死），
+    // 通过 channel 把行发回主线程统一解析（回调是 &dyn Fn，非 Send）。
+    let (tx, rx) = std::sync::mpsc::channel::<String>();
+    let tx_out = tx.clone();
+    let h_out = child.stdout.take().map(move |stdout| {
         std::thread::spawn(move || {
+            use std::io::BufRead;
             let reader = std::io::BufReader::new(stdout);
             for line in reader.lines().map_while(Result::ok) {
-                if let Ok(mut g) = c.lock() {
-                    g.push_str(&line);
-                    g.push('\n');
-                }
+                let _ = tx_out.send(line);
+            }
+        })
+    });
+    let h_err = child.stderr.take().map(move |stderr| {
+        std::thread::spawn(move || {
+            use std::io::BufRead;
+            let reader = std::io::BufReader::new(stderr);
+            for line in reader.lines().map_while(Result::ok) {
+                let _ = tx.send(line);
             }
         })
     });
 
-    // stderr 在主线程逐行读（顺带推阶段）——pnpm 的进度与多数错误走 stderr
-    let mut err_text = String::new();
-    let mut last = String::new();
-    if let Some(stderr) = child.stderr.take() {
-        let reader = std::io::BufReader::new(stderr);
-        for line in reader.lines().map_while(Result::ok) {
-            err_text.push_str(&line);
-            err_text.push('\n');
-            if let Some(stage) = crate::versions::parse_stage(&line) {
-                if stage != last {
-                    last = stage.to_string();
-                    on_stage(stage);
+    let mut collected = String::new();
+    let mut last_stage = String::new();
+    let mut parser = crate::versions::ProgressParser::new();
+    let mut last_pct = -1.0f32;
+    for line in rx {
+        collected.push_str(&line);
+        collected.push('\n');
+        if let Some(stage) = crate::versions::parse_stage(&line) {
+            if stage != last_stage {
+                last_stage = stage.to_string();
+                on_stage(stage);
+            }
+        }
+        if let Some(cb) = on_progress {
+            if let Some(ev) = crate::versions::import_progress_from_line(&mut parser, &line) {
+                let pct = ev.fraction * 100.0;
+                if (pct - last_pct).abs() >= 1.0 {
+                    last_pct = pct;
+                    cb(&ev);
                 }
             }
         }
     }
+    if let Some(h) = h_out { let _ = h.join(); }
+    if let Some(h) = h_err { let _ = h.join(); }
+
     let status = child.wait();
-    if let Some(h) = stdout_handle {
-        let _ = h.join();
-    }
-    let out_text = stdout_text.lock().map(|g| g.clone()).unwrap_or_default();
-    let combined = format!("{}{}", err_text.trim(), if out_text.trim().is_empty() { String::new() } else { format!("\n{}", out_text.trim()) });
     if matches!(status, Ok(s) if s.success()) {
         Ok(())
     } else {
-        let (_, msg) = diagnose(combined.trim());
+        let (_, msg) = diagnose(collected.trim());
         Err(format!("安装 dsh {} 失败：\n\n{}", dsh_version, msg))
     }
 }

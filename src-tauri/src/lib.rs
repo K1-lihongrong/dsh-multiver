@@ -167,6 +167,7 @@ fn import_core(
     suffix: Option<&str>,
     replace: bool,
     on_stage: &dyn Fn(&str),
+    on_progress: Option<&dyn Fn(&versions::ProgressEvent)>,
 ) -> Result<String, String> {
     let p = std::path::PathBuf::from(path);
     let ex = modpack::extract(&p)?;
@@ -238,6 +239,7 @@ fn import_core(
             &target,
             &ensure,
             on_stage,
+            on_progress,
         )?;
 
         // files[] 下载（落到实例目录）
@@ -294,8 +296,12 @@ async fn import_dspack(
     let app2 = app.clone();
     let dirs2 = dirs.clone();
     let result = tauri::async_runtime::spawn_blocking(move || -> Result<String, String> {
+        let app_prog = app2.clone();
         let on_stage = move |stage: &str| {
             let _ = app2.emit("install-progress", stage.to_string());
+        };
+        let on_progress = move |ev: &versions::ProgressEvent| {
+            let _ = app_prog.emit("install-progress", ev.clone());
         };
 
         let p = std::path::PathBuf::from(&path);
@@ -368,6 +374,7 @@ async fn import_dspack(
                 &target,
                 &ensure,
                 &on_stage,
+                Some(&on_progress),
             )?;
 
             // files[] 下载（落到实例目录）
@@ -478,7 +485,7 @@ async fn market_install(
         on_stage(&format!("正在下载 {}...", pack.display_name_text()));
         let tmp = market::download_to_temp(&pack)?;
 
-        let r = import_core(&dirs2, &tmp.to_string_lossy(), None, false, &on_stage);
+        let r = import_core(&dirs2, &tmp.to_string_lossy(), None, false, &on_stage, None);
         // 无论成败都清理临时文件
         let _ = std::fs::remove_file(&tmp);
         r
@@ -1390,7 +1397,7 @@ fn run_headless_import(path: &str) -> i32 {
         Err(_) => None,
     };
 
-    match import_core(&dirs, path, suffix_owned.as_deref(), false, &on_stage) {
+    match import_core(&dirs, path, suffix_owned.as_deref(), false, &on_stage, None) {
         Ok(name) => {
             println!("OK: {}", name);
             0

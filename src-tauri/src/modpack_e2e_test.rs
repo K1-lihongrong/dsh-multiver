@@ -43,7 +43,7 @@ fn e2e_import_pokemon() {
 
     let on_stage = |s: &str| println!("  [stage] {}", s);
     let ensure = |_v: &str| Ok(());
-    let outcome = import(&ex, &m, &idirs, &name, &dsh_version, &ensure, &on_stage);
+    let outcome = import(&ex, &m, &idirs, &name, &dsh_version, &ensure, &on_stage, None);
 
     match outcome {
         Ok(o) => {
@@ -93,7 +93,7 @@ fn e2e_rollback_on_bad_version() {
     let on_stage = |_: &str| {};
     let ensure = |_v: &str| Ok(());
 
-    let res = import(&ex, &m, &idirs, name, "0.0.0-nonexistent", &ensure, &on_stage);
+    let res = import(&ex, &m, &idirs, name, "0.0.0-nonexistent", &ensure, &on_stage, None);
     let err = res.expect_err("不存在的 dsh 版本应导致失败");
     println!("失败信息：{}", err);
     let exists = versions.join(name).exists();

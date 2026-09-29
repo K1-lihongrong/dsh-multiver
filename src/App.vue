@@ -34,6 +34,8 @@ const importPreview = ref(null);   // 预览结果（确认框用）
 const importPath = ref("");        // 待导入的文件路径
 const importBusy = ref(false);
 const importStage = ref("");
+const importPercent = ref(0);
+const importDetail = ref("");
 let unlistenCliImport = null;
 let unlistenDragDrop = null;
 
@@ -220,6 +222,8 @@ async function confirmImport(mode) {
   importPreview.value = null;
   importBusy.value = true;
   importStage.value = "正在导入...";
+  importPercent.value = 0;
+  importDetail.value = "";
   try {
     let suffix = null;
     let replace = false;
@@ -561,15 +565,22 @@ onMounted(async () => {
   unlistenProgress = await listen("install-progress", (e) => {
     const p = e.payload;
     if (typeof p === "string") {
-      // 整合包导入：阶段文字（字符串）
+      // 整合包导入的阶段文字（字符串事件）
       importStage.value = p;
     } else if (p && typeof p === "object") {
-      // 版本安装：结构化进度（对象）
-      installStage.value = p.stage || "";
-      installStep.value = p.step || 0;
-      installTotal.value = p.total || 0;
-      installDetail.value = p.detail || "";
-      installFraction.value = p.fraction || 0;
+      if (p.kind === "modpack-import") {
+        // 整合包导入：结构化进度
+        importStage.value = p.stage || "";
+        importDetail.value = p.detail || "";
+        importPercent.value = Math.round((p.fraction || 0) * 100);
+      } else {
+        // 版本安装：结构化进度
+        installStage.value = p.stage || "";
+        installStep.value = p.step || 0;
+        installTotal.value = p.total || 0;
+        installDetail.value = p.detail || "";
+        installFraction.value = p.fraction || 0;
+      }
     }
   });
   // 命令行 --import：界面就绪后自动弹出导入确认
@@ -777,7 +788,14 @@ onUnmounted(() => {
       </div>
       <div class="install-progress" v-if="importStage">
         <div class="spinner"></div>
-        <span class="stage-text">{{ importStage }}</span>
+        <div class="prog-body">
+          <div class="prog-line">
+            <span class="stage-text">{{ importStage }}</span>
+            <span class="prog-detail" v-if="importDetail">{{ importDetail }}</span>
+            <span class="prog-count" v-if="importPercent">{{ importPercent }}%</span>
+          </div>
+          <div class="prog-bar"><div class="prog-fill" :style="{ width: importPercent + '%' }"></div></div>
+        </div>
       </div>
     </section>
 
