@@ -58,12 +58,18 @@ impl Config {
 #[derive(Clone)]
 pub struct Dirs {
     pub root: PathBuf,
+    /// 普通 dsh 版本（主干的地盘）
     pub versions: PathBuf,
+    /// 整合包实例（本分支的地盘）
+    ///
+    /// 与 versions/ 分开存放：主干（不含整合包支持）只扫描 versions/，
+    /// 不会把整合包实例误显示为普通版本、误删或误设为默认。
+    pub modpacks: PathBuf,
     pub home: PathBuf,
     pub store: PathBuf,
     pub cache: PathBuf,
     pub state: PathBuf,
-    /// WebView2 数据目录根（每个版本一个独立子目录，避免共享累积导致 431）
+    /// WebView2 数据目录根（每个实例一个独立子目录，避免共享累积导致 431）
     pub webview: PathBuf,
 }
 
@@ -71,6 +77,7 @@ impl Dirs {
     pub fn new(root: PathBuf) -> Self {
         Self {
             versions: root.join("versions"),
+            modpacks: root.join("modpacks"),
             home: root.join("home"),
             store: root.join("store"),
             cache: root.join("cache"),
@@ -83,11 +90,26 @@ impl Dirs {
     /// 确保各子目录存在
     pub fn ensure(&self) -> std::io::Result<()> {
         std::fs::create_dir_all(&self.versions)?;
+        std::fs::create_dir_all(&self.modpacks)?;
         std::fs::create_dir_all(&self.home)?;
         std::fs::create_dir_all(&self.store)?;
         std::fs::create_dir_all(&self.cache)?;
         std::fs::create_dir_all(&self.state)?;
         std::fs::create_dir_all(&self.webview)?;
         Ok(())
+    }
+
+    /// 实例所在的父目录：整合包（modpack- 前缀）→ modpacks/，其余 → versions/
+    pub fn parent_of(&self, name: &str) -> PathBuf {
+        if name.starts_with("modpack-") {
+            self.modpacks.clone()
+        } else {
+            self.versions.clone()
+        }
+    }
+
+    /// 实例目录的绝对路径（自动区分版本 / 整合包）
+    pub fn instance_dir(&self, name: &str) -> PathBuf {
+        self.parent_of(name).join(name)
     }
 }

@@ -125,6 +125,53 @@ pub fn list(versions_dir: &Path, default_version: Option<&str>, isolated: &[Stri
     result
 }
 
+/// 列出整合包实例（扫描 modpacks 目录）。
+///
+/// 实例全部视为 kind="modpack"，天然隔离（各有专属 home），不参与「默认版本」。
+pub fn list_modpacks(modpacks_dir: &Path) -> Vec<VersionInfo> {
+    let mut result = Vec::new();
+    if let Ok(entries) = std::fs::read_dir(modpacks_dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if !path.is_dir() {
+                continue;
+            }
+            // 必须含有 node_modules 才算有效实例
+            if !path.join("node_modules").exists() {
+                continue;
+            }
+            let version = entry.file_name().to_string_lossy().to_string();
+            let meta = crate::modpack::read_meta(&path);
+            result.push(VersionInfo {
+                version,
+                path: path.to_string_lossy().to_string(),
+                is_default: false,
+                isolated: true,
+                installed_at: dir_created_date(&path),
+                shared_home: false,
+                kind: "modpack".to_string(),
+                modpack_name: meta.as_ref().map(|m| m.modpack_name.clone()),
+                modpack_version: meta.as_ref().map(|m| m.modpack_version.clone()),
+                modpack_display_name: meta.as_ref().map(|m| m.display_name.clone()),
+                modpack_description: meta.as_ref().map(|m| m.description.clone()),
+                modpack_author: meta.as_ref().map(|m| m.author.clone()),
+                modpack_icon: meta.as_ref().map(|m| m.icon.clone()),
+                packed_dsh_version: meta.as_ref().map(|m| m.packed_dsh_version.clone()),
+                modpack_type: meta.as_ref().map(|m| m.modpack_type.clone()),
+                bundle_count: meta.as_ref().map(|m| m.bundle_count),
+                skill_count: meta.as_ref().map(|m| m.skill_count),
+                launch_profile: meta.as_ref().map(|m| m.launch_profile.clone()),
+            });
+        }
+    }
+    result
+}
+
+/// 版本号比较（供外部合并排序用）。
+pub fn version_cmp_pub(a: &str, b: &str) -> std::cmp::Ordering {
+    version_cmp(a, b)
+}
+
 /// 读取目录创建时间并格式化为 YYYY-MM-DD（本地时区）。
 /// 读不到（权限/文件系统不支持）则返回空字符串。
 fn dir_created_date(path: &Path) -> String {

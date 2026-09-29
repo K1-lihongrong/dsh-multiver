@@ -29,6 +29,7 @@ fn e2e_import_pokemon() {
 
     let idirs = ImportDirs {
         versions_dir: &versions,
+        modpacks_dir: &versions, // 测试里统一用 versions 目录
         store_dir: &store,
         cache_dir: &cache,
         state_dir: &state,
@@ -81,6 +82,7 @@ fn e2e_rollback_on_bad_version() {
 
     let idirs = ImportDirs {
         versions_dir: &versions,
+        modpacks_dir: &versions, // 测试里统一用 versions 目录
         store_dir: &store,
         cache_dir: &cache,
         state_dir: &state,

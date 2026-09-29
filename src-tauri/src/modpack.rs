@@ -636,8 +636,12 @@ fn fetch_bytes(url: &str) -> Result<Vec<u8>, String> {
 pub type StageFn<'a> = &'a dyn Fn(&str);
 
 /// 导入用到的路径集合。
+///
+/// `versions_dir`：普通 dsh 版本所在目录（复用本机 dsh 时从这里找）
+/// `modpacks_dir`：整合包实例的落点（与 versions/ 分开，避免主干误识别）
 pub struct ImportDirs<'a> {
     pub versions_dir: &'a Path,
+    pub modpacks_dir: &'a Path,
     pub store_dir: &'a Path,
     pub cache_dir: &'a Path,
     pub state_dir: &'a Path,
@@ -646,7 +650,7 @@ pub struct ImportDirs<'a> {
 /// 导入结果。
 #[derive(Debug)]
 pub struct ImportOutcome {
-    /// 实例目录名（versions/ 下的目录名）
+    /// 实例目录名（modpacks/ 下的目录名）
     pub instance_name: String,
     /// 实例目录绝对路径
     pub instance_dir: PathBuf,
@@ -789,7 +793,7 @@ pub fn import(
     ensure_dsh: &dyn Fn(&str) -> Result<(), String>,
     on_stage: StageFn,
 ) -> Result<ImportOutcome, String> {
-    let instance_dir = dirs.versions_dir.join(instance_name);
+    let instance_dir = dirs.modpacks_dir.join(instance_name);
     if instance_dir.exists() {
         return Err(format!("实例目录已存在: {}", instance_dir.display()));
     }

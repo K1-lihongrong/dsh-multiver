@@ -75,7 +75,11 @@ fn list_installed(app: tauri::AppHandle) -> Vec<versions::VersionInfo> {
     let mdir = manager_dir(&app);
     let cfg = Config::load(&mdir);
     let dirs = Dirs::new(cfg.resolve_root(&mdir));
-    versions::list(&dirs.versions, cfg.default_version.as_deref(), &cfg.isolated_versions)
+    // 合并扫描：普通版本（versions/）+ 整合包实例（modpacks/）
+    let mut all = versions::list(&dirs.versions, cfg.default_version.as_deref(), &cfg.isolated_versions);
+    all.extend(versions::list_modpacks(&dirs.modpacks));
+    all.sort_by(|a, b| versions::version_cmp_pub(&a.version, &b.version));
+    all
 }
 
 /// 整合包导入预览（解包 + 解析 manifest，不落盘）。
@@ -206,12 +210,12 @@ async fn import_dspack(
             // 冲突检测
             let base_name = modpack::instance_dir_name(&m, None);
             let final_name = modpack::instance_dir_name(&m, suffix.as_deref());
-            let base_exists = dirs2.versions.join(&base_name).exists();
-            let final_exists = dirs2.versions.join(&final_name).exists();
+            let base_exists = dirs2.modpacks.join(&base_name).exists();
+            let final_exists = dirs2.modpacks.join(&final_name).exists();
             if final_exists {
                 if replace.unwrap_or(false) {
                     on_stage("正在移除旧实例...");
-                    std::fs::remove_dir_all(dirs2.versions.join(&final_name))
+                    std::fs::remove_dir_all(dirs2.modpacks.join(&final_name))
                         .map_err(|e| format!("移除旧实例失败: {}", e))?;
                 } else {
                     return Err(format!(
@@ -228,6 +232,7 @@ async fn import_dspack(
 
             let idirs = modpack::ImportDirs {
                 versions_dir: &dirs2.versions,
+                modpacks_dir: &dirs2.modpacks,
                 store_dir: &dirs2.store,
                 cache_dir: &dirs2.cache,
                 state_dir: &dirs2.state,
@@ -365,8 +370,9 @@ async fn uninstall_version(app: tauri::AppHandle, version: String) -> Result<Str
     // 卸载可能清掉了默认版本 / 隔离标记：重生成转发脚本（无默认版本时会删除 dsh.cmd）
     regenerate_forward_script(&mdir, &cfg);
     // 删除目录可能很慢，放到后台线程
+    let parent = dirs.parent_of(&version);
     let (ok, msg) = tauri::async_runtime::spawn_blocking(move || {
-        versions::uninstall(&dirs.versions, &version)
+        versions::uninstall(&parent, &version)
     })
     .await
     .map_err(|e| format!("卸载任务失败: {}", e))?;
@@ -379,6 +385,10 @@ fn set_default(app: tauri::AppHandle, version: Option<String>) -> Result<String,
     let mut cfg = Config::load(&mdir);
     let dirs = Dirs::new(cfg.resolve_root(&mdir));
     if let Some(v) = &version {
+        // 默认版本只允许指向普通 dsh 版本（整合包实例不参与终端 dsh 转发）
+        if v.starts_with("modpack-") {
+            return Err("整合包实例不能设为默认版本".to_string());
+        }
         if !versions::exists(&dirs.versions, v) {
             return Err(format!("版本 {} 未安装", v));
         }
@@ -429,9 +439,9 @@ fn path_bin_dir(manager: &PathBuf) -> PathBuf {
 ///
 /// - 整合包实例：`<包名> <包版本>（DSH <内嵌版本>）`
 /// - 普通版本：`DSH <版本>`
-fn bar_label_for(versions_dir: &std::path::Path, version: &str) -> String {
+fn bar_label_for(dirs: &Dirs, version: &str) -> String {
     if version.starts_with("modpack-") {
-        if let Some(m) = crate::modpack::read_meta(&versions_dir.join(version)) {
+        if let Some(m) = crate::modpack::read_meta(&dirs.instance_dir(version)) {
             let name = if m.display_name.is_empty() {
                 m.modpack_name.clone()
             } else {
@@ -450,11 +460,11 @@ fn bar_label_for(versions_dir: &std::path::Path, version: &str) -> String {
 ///
 /// - 整合包实例（modpack- 前缀）：读元数据的 launch_profile
 /// - 普通版本：None（走 dsh web）
-fn launch_profile_for(versions_dir: &std::path::Path, version: &str) -> Option<String> {
+fn launch_profile_for(dirs: &Dirs, version: &str) -> Option<String> {
     if !version.starts_with("modpack-") {
         return None;
     }
-    let dir = versions_dir.join(version);
+    let dir = dirs.instance_dir(version);
     crate::modpack::read_meta(&dir).map(|m| m.launch_profile)
 }
 
@@ -465,7 +475,7 @@ fn launch_profile_for(versions_dir: &std::path::Path, version: &str) -> Option<S
 /// - 隔离版本：用独立 home
 /// - 其余：共享 home
 fn resolve_home(cfg: &Config, dirs: &Dirs, version: &str) -> PathBuf {
-    let vdir = dirs.versions.join(version);
+    let vdir = dirs.instance_dir(version);
     let own_home = version.starts_with("modpack-")
         || cfg.isolated_versions.iter().any(|v| v == version);
     if own_home {
@@ -491,12 +501,12 @@ async fn launch_window(
     let mdir = manager_dir(&app);
     let cfg = Config::load(&mdir);
     let dirs = Dirs::new(cfg.resolve_root(&mdir));
-    let vdir = dirs.versions.join(&version);
+    let vdir = dirs.instance_dir(&version);
     if !vdir.join("node_modules").exists() {
         return Err(format!("版本 {} 未安装", version));
     }
     let home = resolve_home(&cfg, &dirs, &version);
-    let profile = launch_profile_for(&dirs.versions, &version);
+    let profile = launch_profile_for(&dirs, &version);
 
     // 阻塞部分（起进程 + 等端口/URL，最多 30s）丢到后台线程，避免冻结界面
     let vdir2 = vdir.clone();
@@ -536,7 +546,7 @@ async fn launch_window(
     let label = window_label_gen(&version, generation);
 
     // 顶部小栏标签：整合包显示「包名 版本（DSH x.y.z）」，普通版本显示「DSH x.y.z」
-    let bar_label = bar_label_for(&dirs.versions, &version);
+    let bar_label = bar_label_for(&dirs, &version);
     let title = format!("DSH {}", version);
     let init_script = build_topbar_script(&bar_label, &url);
     let parsed = url.parse().map_err(|e| format!("URL 解析失败: {}", e))?;
@@ -599,7 +609,7 @@ fn create_shortcut(app: tauri::AppHandle, version: String) -> Result<String, Str
     let mdir = manager_dir(&app);
     let cfg = Config::load(&mdir);
     let dirs = Dirs::new(cfg.resolve_root(&mdir));
-    if !versions::exists(&dirs.versions, &version) {
+    if !dirs.instance_dir(&version).join("node_modules").exists() {
         return Err(format!("版本 {} 未安装", version));
     }
     let exe = std::env::current_exe().map_err(|e| format!("无法定位程序路径: {}", e))?;
@@ -624,7 +634,7 @@ async fn open_in_browser(
     let mdir = manager_dir(&app);
     let cfg = Config::load(&mdir);
     let dirs = Dirs::new(cfg.resolve_root(&mdir));
-    let vdir = dirs.versions.join(&version);
+    let vdir = dirs.instance_dir(&version);
     if !vdir.join("node_modules").exists() {
         return Err(format!("版本 {} 未安装", version));
     }
@@ -672,7 +682,7 @@ async fn open_in_browser(
     }
 
     // 3) 启动（新控制台，不传 --no-open，让 dsh 打开系统浏览器）
-    let profile = launch_profile_for(&dirs.versions, &version);
+    let profile = launch_profile_for(&dirs, &version);
     let (ok, msg) = launcher::spawn_web_console(
         &vdir,
         &home,
@@ -703,12 +713,12 @@ async fn restart_version(
     let mdir = manager_dir(&app);
     let cfg = Config::load(&mdir);
     let dirs = Dirs::new(cfg.resolve_root(&mdir));
-    let vdir = dirs.versions.join(&version);
+    let vdir = dirs.instance_dir(&version);
     if !vdir.join("node_modules").exists() {
         return Err(format!("版本 {} 未安装", version));
     }
     let home = resolve_home(&cfg, &dirs, &version);
-    let profile = launch_profile_for(&dirs.versions, &version);
+    let profile = launch_profile_for(&dirs, &version);
 
     // 找到该版本当前的窗口（label 带代次，从 map 里取）
     let (label, _old_gen, mut old_child, _old_job) = procs
@@ -836,14 +846,14 @@ fn set_isolated(app: tauri::AppHandle, version: String, isolated: bool) -> Resul
     let mdir = manager_dir(&app);
     let mut cfg = Config::load(&mdir);
     let dirs = Dirs::new(cfg.resolve_root(&mdir));
-    if !versions::exists(&dirs.versions, &version) {
+    if !dirs.instance_dir(&version).join("node_modules").exists() {
         return Err(format!("版本 {} 未安装", version));
     }
     cfg.isolated_versions.retain(|v| v != &version);
     if isolated {
         cfg.isolated_versions.push(version.clone());
         // 预创建隔离目录
-        let _ = std::fs::create_dir_all(dirs.versions.join(&version).join("home"));
+        let _ = std::fs::create_dir_all(dirs.instance_dir(&version).join("home"));
     }
     cfg.save(&mdir).map_err(|e| e.to_string())?;
     // 隔离状态变了：若改的是当前默认版本，重生成转发脚本（DSH_HOME 会变）
@@ -861,10 +871,10 @@ async fn scan_version_size(app: tauri::AppHandle, version: String) -> Result<u64
     let mdir = manager_dir(&app);
     let cfg = Config::load(&mdir);
     let dirs = Dirs::new(cfg.resolve_root(&mdir));
-    let versions_dir = dirs.versions.clone();
+    let parent = dirs.parent_of(&version);
     let v = version.clone();
     let size = tauri::async_runtime::spawn_blocking(move || {
-        versions::version_size(&versions_dir, &v)
+        versions::version_size(&parent, &v)
     })
     .await
     .map_err(|e| format!("扫描失败: {}", e))?;
@@ -876,7 +886,7 @@ async fn scan_isolated_size(app: tauri::AppHandle, version: String) -> Result<u6
     let mdir = manager_dir(&app);
     let cfg = Config::load(&mdir);
     let dirs = Dirs::new(cfg.resolve_root(&mdir));
-    let home = versions::isolated_home(&dirs.versions, &version);
+    let home = versions::isolated_home(&dirs.parent_of(&version), &version);
     // 目录扫描可能很慢，放到后台线程
     let size = tauri::async_runtime::spawn_blocking(move || versions::dir_size(&home))
         .await
@@ -893,7 +903,7 @@ async fn copy_shared_to_isolated(app: tauri::AppHandle, version: String) -> Resu
         return Err(format!("{} 未开启隔离", version));
     }
     let shared = dirs.home.clone();
-    let isolated = versions::isolated_home(&dirs.versions, &version);
+    let isolated = versions::isolated_home(&dirs.parent_of(&version), &version);
     let (ok, msg, _) = tauri::async_runtime::spawn_blocking(move || {
         versions::copy_shared_to_isolated(&shared, &isolated)
     })
@@ -908,7 +918,7 @@ async fn clear_isolated_data(app: tauri::AppHandle, version: String) -> Result<S
     let cfg = Config::load(&mdir);
     let dirs = Dirs::new(cfg.resolve_root(&mdir));
     let (ok, msg) = tauri::async_runtime::spawn_blocking(move || {
-        versions::clear_isolated(&dirs.versions, &version)
+        versions::clear_isolated(&dirs.parent_of(&version), &version)
     })
     .await
     .map_err(|e| format!("清理任务失败: {}", e))?;
@@ -920,7 +930,7 @@ fn open_isolated_dir(app: tauri::AppHandle, version: String) -> Result<(), Strin
     let mdir = manager_dir(&app);
     let cfg = Config::load(&mdir);
     let dirs = Dirs::new(cfg.resolve_root(&mdir));
-    let home = versions::isolated_home(&dirs.versions, &version);
+    let home = versions::isolated_home(&dirs.parent_of(&version), &version);
     let _ = std::fs::create_dir_all(&home);
     let (ok, msg) = actions::open_folder(&home);
     if ok { Ok(()) } else { Err(msg) }
@@ -947,6 +957,7 @@ fn open_dir(app: tauri::AppHandle, which: String) -> Result<(), String> {
     let target = match which.as_str() {
         "root" => dirs.root.clone(),
         "versions" => dirs.versions.clone(),
+        "modpacks" => dirs.modpacks.clone(),
         "home" => dirs.home.clone(),
         "store" => dirs.store.clone(),
         "cache" => dirs.cache.clone(),
