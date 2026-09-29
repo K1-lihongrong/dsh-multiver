@@ -552,12 +552,13 @@ body {
 
 .ver-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
 .ver-item {
-  display: flex; align-items: center; justify-content: space-between;
+  display: flex; align-items: center; flex-wrap: wrap;
+  gap: 6px 12px;
   padding: 10px 14px; border: 1px solid #eceef1; border-radius: 9px;
   background: #fcfcfd; transition: border-color .15s, background .15s;
 }
 .ver-item:hover { border-color: #d6dae0; background: #fff; }
-.ver-main { display: flex; align-items: center; gap: 10px; }
+.ver-main { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; min-width: 0; flex: 1 1 auto; }
 .ver-num { font-weight: 600; font-size: 14px; font-variant-numeric: tabular-nums; }
 .ver-meta { color: #9aa1ab; font-size: 11px; }
 .badge {
@@ -570,7 +571,10 @@ body {
   background: #fff4e5; border-color: #f0c98a; color: #c77d1a;
 }
 .btn.active:hover:not(:disabled) { background: #ffedcc; border-color: #e0b46a; }
-.ver-actions { display: flex; gap: 8px; align-items: center; }
+.ver-actions {
+  display: flex; gap: 6px; align-items: center;
+  flex-wrap: wrap; justify-content: flex-start;
+}
 
 .menu-wrap { position: relative; }
 .menu {
@@ -593,6 +597,7 @@ body {
   border: 1px solid #dcdfe4; background: #fff; color: #374151;
   padding: 6px 14px; border-radius: 7px; font-size: 13px;
   cursor: pointer; transition: all .15s; font-family: inherit;
+  white-space: nowrap; flex-shrink: 0;
 }
 .btn:hover:not(:disabled) { border-color: #c3c8d0; background: #f7f8fa; }
 .btn:disabled { opacity: .5; cursor: not-allowed; }

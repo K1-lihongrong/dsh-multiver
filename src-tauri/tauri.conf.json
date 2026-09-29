@@ -13,10 +13,10 @@
     "windows": [
       {
         "title": "DSH 版本管理器",
-        "width": 900,
-        "height": 720,
-        "minWidth": 720,
-        "minHeight": 560,
+        "width": 1100,
+        "height": 760,
+        "minWidth": 480,
+        "minHeight": 520,
         "resizable": true
       }
     ],
