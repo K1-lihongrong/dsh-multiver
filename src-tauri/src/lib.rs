@@ -155,6 +155,118 @@ fn preview_dspack(path: String) -> Result<ModpackPreview, String> {
     result
 }
 
+/// 导入核心逻辑（不依赖前端）：解包、决策版本、冲突处理、落盘、下载、写元数据。
+///
+/// `on_stage`：阶段进度回调（GUI 走 emit，无头 CLI 走 println）。
+/// 返回导入后的实例目录名。
+fn import_core(
+    dirs: &Dirs,
+    path: &str,
+    suffix: Option<&str>,
+    replace: bool,
+    on_stage: &dyn Fn(&str),
+) -> Result<String, String> {
+    let p = std::path::PathBuf::from(path);
+    let ex = modpack::extract(&p)?;
+    let run = (|| -> Result<String, String> {
+        let text = modpack::read_manifest_text(&ex.dir)?;
+        let m = modpack::Manifest::parse(&text).map_err(|errs| {
+            format!("manifest 校验失败：\n  · {}", errs.join("\n  · "))
+        })?;
+
+        // 版本决策：dshVersions ∩ 已装；无交集用 dshVersion；全缺省用最新已装
+        let installed: Vec<String> = {
+            let mut v: Vec<String> = std::fs::read_dir(&dirs.versions)
+                .map(|rd| {
+                    rd.flatten()
+                        .filter(|e| e.path().is_dir() && e.path().join("node_modules").exists())
+                        .map(|e| e.file_name().to_string_lossy().to_string())
+                        .filter(|n| !n.starts_with("modpack-"))
+                        .collect()
+                })
+                .unwrap_or_default();
+            v.sort();
+            v
+        };
+        let target = decide_dsh_version(&m, &installed)?;
+
+        // 冲突检测
+        let base_name = modpack::instance_dir_name(&m, None);
+        let final_name = modpack::instance_dir_name(&m, suffix);
+        // 冲突检测：modpacks/ 与 versions/（旧位置）任一存在即算冲突
+        let exists_at = |n: &str| {
+            dirs.modpacks.join(n).exists() || dirs.versions.join(n).exists()
+        };
+        let base_exists = exists_at(&base_name);
+        let final_exists = exists_at(&final_name);
+        if final_exists {
+            if replace {
+                on_stage("正在移除旧实例...");
+                let _ = std::fs::remove_dir_all(dirs.modpacks.join(&final_name));
+                std::fs::remove_dir_all(dirs.versions.join(&final_name))
+                    .map_err(|e| format!("移除旧实例失败: {}", e))?;
+            } else {
+                return Err(format!(
+                    "实例 {} 已存在。请选择「重装」或「保留两份」。",
+                    final_name
+                ));
+            }
+        } else if base_exists && suffix.is_none() {
+            return Err(format!(
+                "实例 {} 已存在。请选择「重装」或「保留两份」。",
+                base_name
+            ));
+        }
+
+        let idirs = modpack::ImportDirs {
+            versions_dir: &dirs.versions,
+            modpacks_dir: &dirs.modpacks,
+            store_dir: &dirs.store,
+            cache_dir: &dirs.cache,
+            state_dir: &dirs.state,
+        };
+
+        // 确保 dsh 本体可用（本函数会在实例内自装，故 ensure 仅做存在性提示）
+        let ensure = |_v: &str| Ok(());
+        let outcome = modpack::import(
+            &ex,
+            &m,
+            &idirs,
+            &final_name,
+            &target,
+            &ensure,
+            on_stage,
+        )?;
+
+        // files[] 下载（落到实例目录）
+        if !m.files.is_empty() {
+            on_stage("正在下载整合包资源...");
+            modpack::download_all(&outcome.instance_dir, &m.files)?;
+        }
+
+        // 写元数据标记
+        let meta = modpack::build_meta(&m, &outcome);
+        modpack::write_meta(&outcome.instance_dir, &meta)?;
+
+        Ok(outcome.instance_name)
+    })();
+    ex.cleanup();
+    run
+}
+
+/// 为一个已存在的实例名找一个可用的「保留两份」后缀（copy、copy2、copy3...）。
+/// 在 modpacks/ 与 versions/ 都不存在时返回。
+fn next_available_suffix(dirs: &Dirs, base_name: &str) -> Option<String> {
+    let exists = |n: &str| dirs.modpacks.join(n).exists() || dirs.versions.join(n).exists();
+    for i in 1..=999u32 {
+        let s = if i == 1 { "copy".to_string() } else { format!("copy{}", i) };
+        let cand = format!("{}-{}", base_name, s);
+        if !exists(&cand) {
+            return Some(s);
+        }
+    }
+    None
+}
 /// 导入一个 .dspack。
 ///
 /// 参数：
@@ -1066,6 +1178,11 @@ fn parse_import_path(args: &[String]) -> Option<String> {
     None
 }
 
+/// 命令行是否带 --yes（无头导入：跳过 GUI 预览，直接导入）。
+fn parse_yes_flag(args: &[String]) -> bool {
+    args.iter().any(|a| a == "--yes")
+}
+
 /// 从命令行参数解析出 --launch-version <版本>（精简启动模式用）
 fn parse_launch_version(args: &[String]) -> Option<String> {
     let mut it = args.iter();
@@ -1123,8 +1240,67 @@ fn set_windows_app_user_model_id(app: &tauri::AppHandle) {
 #[cfg(not(windows))]
 fn set_windows_app_user_model_id(_app: &tauri::AppHandle) {}
 
+/// 无头导入入口：完全不走 Tauri/GUI，直接执行导入并返回进程退出码。
+/// 由 run() 在启动 Tauri 之前调用（检测到 --import <路径> --yes）。
+/// 进度逐行打到 stdout，最后一行 OK:/ERROR: 供脚本解析。
+fn run_headless_import(path: &str) -> i32 {
+    // 不能用 manager_dir（依赖 AppHandle）；直接用 exe 所在目录。
+    let mdir = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(|x| x.to_path_buf()))
+        .unwrap_or_else(|| std::path::PathBuf::from("."));
+    let cfg = Config::load(&mdir);
+    let dirs = Dirs::new(cfg.resolve_root(&mdir));
+    let _ = dirs.ensure();
+
+    let on_stage = |stage: &str| {
+        println!("[stage] {}", stage);
+        use std::io::Write;
+        let _ = std::io::stdout().flush();
+    };
+
+    // 冲突处理：探测基础实例名；若已存在则自动挑一个可用后缀（保留两份）。
+    let probe = modpack::extract(&std::path::PathBuf::from(path)).and_then(|ex| {
+        let t = modpack::read_manifest_text(&ex.dir)?;
+        let m = modpack::Manifest::parse(&t).map_err(|e| e.join("; "))?;
+        ex.cleanup();
+        Ok(modpack::instance_dir_name(&m, None))
+    });
+    let suffix_owned: Option<String> = match &probe {
+        Ok(base) => {
+            if dirs.modpacks.join(base).exists() || dirs.versions.join(base).exists() {
+                next_available_suffix(&dirs, base)
+            } else {
+                None
+            }
+        }
+        Err(_) => None,
+    };
+
+    match import_core(&dirs, path, suffix_owned.as_deref(), false, &on_stage) {
+        Ok(name) => {
+            println!("OK: {}", name);
+            0
+        }
+        Err(e) => {
+            println!("ERROR: {}", e);
+            1
+        }
+    }
+}
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // 无头导入：--import <路径> --yes 时完全不启动 GUI/事件循环，
+    // 直接执行导入并以正确的进程退出码退出（供脚本自动化）。
+    {
+        let args: Vec<String> = std::env::args().collect();
+        if let Some(path) = parse_import_path(&args) {
+            if parse_yes_flag(&args) {
+                let code = run_headless_import(&path);
+                std::process::exit(code);
+            }
+        }
+    }
     let procs: ProcMap = Arc::new(Mutex::new(HashMap::new()));
     let procs_setup = procs.clone();
     tauri::Builder::default()
