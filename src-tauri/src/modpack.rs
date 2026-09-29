@@ -246,7 +246,7 @@ pub fn extract(dspack_path: &Path) -> Result<Extracted, String> {
         }
         let text = std::fs::read_to_string(&marker_path)
             .map_err(|e| format!("读取 dspack.json 失败: {}", e))?;
-        let marker: DspackMarker = serde_json::from_str(&text)
+        let marker: DspackMarker = serde_json::from_str(strip_bom(&text))
             .map_err(|e| format!("dspack.json 格式非法: {}", e))?;
 
         if marker.format != "dspack" {
@@ -280,7 +280,14 @@ pub fn read_manifest_text(dir: &Path) -> Result<String, String> {
     if !p.is_file() {
         return Err("整合包内缺少 manifest.json".to_string());
     }
-    std::fs::read_to_string(&p).map_err(|e| format!("读取 manifest.json 失败: {}", e))
+    let text = std::fs::read_to_string(&p)
+        .map_err(|e| format!("读取 manifest.json 失败: {}", e))?;
+    Ok(strip_bom(&text).to_string())
+}
+
+/// 去掉可能存在的 UTF-8 BOM（部分打包工具会写）。
+pub fn strip_bom(s: &str) -> &str {
+    s.strip_prefix('\u{feff}').unwrap_or(s)
 }
 
 // ===================== 路径安全与落盘原语 =====================
@@ -462,21 +469,24 @@ pub const META_FILE: &str = ".dsh-multiver-meta.json";
 
 /// 由 manifest 与导入结果构造标记。
 pub fn build_meta(m: &Manifest, outcome: &ImportOutcome) -> InstanceMeta {
-    let (bundles_len, skills_len) = if m.is_dshhome() {
-        let dp = m.default_profile.clone().unwrap_or_default();
-        let bl = m.profiles.get(&dp).map(|u| u.bundles.len()).unwrap_or(0);
-        (bl, m.raw.get("skills").and_then(|s| s.as_array()).map(|a| a.len()).unwrap_or(0))
-    } else {
-        // profile 形态：manifest 无 skills 字段，技能由 bundle 携带并落盘到
-        // home/skills/<名>/。故直接数实际落盘的技能子目录数。
-        let n = std::fs::read_dir(outcome.instance_dir.join("home").join("skills"))
+    // 技能数：统一数实际落盘的 home/skills/ 子目录数。
+    // - profile 形态：技能由 bundle 携带，落 home/skills/
+    // - dshhome 形态：overrides/skills/ 已落 home/skills/（协议 §2.3）
+    let count_skills = || -> usize {
+        std::fs::read_dir(outcome.instance_dir.join("home").join("skills"))
             .map(|rd| {
                 rd.filter_map(|e| e.ok())
                     .filter(|e| e.path().is_dir())
                     .count()
             })
-            .unwrap_or(0);
-        (m.bundles.len(), n)
+            .unwrap_or(0)
+    };
+    let (bundles_len, skills_len) = if m.is_dshhome() {
+        let dp = m.default_profile.clone().unwrap_or_default();
+        let bl = m.profiles.get(&dp).map(|u| u.bundles.len()).unwrap_or(0);
+        (bl, count_skills())
+    } else {
+        (m.bundles.len(), count_skills())
     };
 
     InstanceMeta {
@@ -825,23 +835,34 @@ pub fn import(
         std::fs::write(instance_dir.join(".npmrc"), "node-linker=hoisted\n")
             .map_err(|e| format!("写入 .npmrc 失败: {}", e))?;
 
-        // overrides/ → profile 根（即实例目录）
-        on_stage("正在展开 profile 内容...");
-        let ov = extracted.dir.join("overrides");
-        copy_tree_checked(&ov, &instance_dir, &mut skipped)?;
-
-        // patch 兜底：文件不存在时用 manifest.patch 写入
-        let patch_file = instance_dir.join("cordis.patch.yml");
-        if !patch_file.exists() {
-            if let Some(p) = &manifest.patch {
-                let _ = std::fs::write(&patch_file, p);
-            }
-        }
-
-        // home/ → 隔离 home 根
+        // overrides/ 落点随形态（协议 §2.3）：
+        // - profile 形态：→ profile 根（即实例目录）
+        // - dshhome 形态：→ $DSH_HOME 根平铺（即实例的 home/）
         let home_root = instance_dir.join("home");
         std::fs::create_dir_all(&home_root)
             .map_err(|e| format!("创建 home 目录失败: {}", e))?;
+
+        let ov = extracted.dir.join("overrides");
+        let ov_target = if manifest.is_dshhome() {
+            on_stage("正在展开 DSH_HOME 内容...");
+            &home_root
+        } else {
+            on_stage("正在展开 profile 内容...");
+            &instance_dir
+        };
+        copy_tree_checked(&ov, ov_target, &mut skipped)?;
+
+        // patch 兜底：文件不存在时用 manifest.patch 写入（仅 profile 形态）
+        if !manifest.is_dshhome() {
+            let patch_file = instance_dir.join("cordis.patch.yml");
+            if !patch_file.exists() {
+                if let Some(p) = &manifest.patch {
+                    let _ = std::fs::write(&patch_file, p);
+                }
+            }
+        }
+
+        // home/ → 隔离 home 根（profile 形态专属；dshhome 形态的 overrides 已落到这里）
         let hov = extracted.dir.join("home");
         if hov.exists() {
             on_stage("正在展开 home 内容...");
@@ -1566,6 +1587,12 @@ mod tests {
     }
 
     // ---------- files[] 下载校验 ----------
+
+    #[test]
+    fn strip_bom_removes_leading_bom() {
+        assert_eq!(strip_bom("\u{feff}{}"), "{}");
+        assert_eq!(strip_bom("{}"), "{}");
+    }
 
     #[test]
     fn sha256_known_vector() {
