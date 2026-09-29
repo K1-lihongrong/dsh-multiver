@@ -181,7 +181,7 @@ fn parse_url(line: &str) -> Option<String> {
 /// 目标为 <exe_path> --launch-version <版本号>，用 PowerShell COM 生成（零依赖）。
 pub fn create_desktop_shortcut(exe_path: &Path, version: &str) -> Result<String, String> {
     let desktop = desktop_dir().ok_or_else(|| "无法定位桌面目录".to_string())?;
-    let lnk_name = format!("DSH {}.lnk", version);
+    let lnk_name = format!("DSH 整合包 {}.lnk", version);
     let lnk_path = desktop.join(&lnk_name);
 
     let script = build_shortcut_script(&lnk_path, exe_path, version);

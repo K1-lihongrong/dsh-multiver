@@ -547,7 +547,7 @@ async fn launch_window(
 
     // 顶部小栏标签：整合包显示「包名 版本（DSH x.y.z）」，普通版本显示「DSH x.y.z」
     let bar_label = bar_label_for(&dirs, &version);
-    let title = format!("DSH {}", version);
+    let title = format!("DSH 整合包 {}", version);
     let init_script = build_topbar_script(&bar_label, &url);
     let parsed = url.parse().map_err(|e| format!("URL 解析失败: {}", e))?;
 
@@ -1168,7 +1168,7 @@ pub fn run() {
                             let mdir = manager_dir(&app_handle);
                             let root = Config::load(&mdir).resolve_root(&mdir);
                             log_launch_error(&root, &format!("版本 {} 启动失败: {}", version_for_launch, e));
-                            eprintln!("[dsh-multiver] 启动失败: {}", e);
+                            eprintln!("[dsh-modpack] 启动失败: {}", e);
                             // 启动失败时把主窗口显示出来，避免用户看到"什么都没有"
                             if let Some(main) = app_handle.get_webview_window("main") {
                                 let _ = main.show();

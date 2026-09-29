@@ -937,7 +937,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "dsh-multiver"
+name = "dsh-modpack"
 version = "0.1.4"
 dependencies = [
  "reqwest 0.12.28",

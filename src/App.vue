@@ -440,7 +440,7 @@ onUnmounted(() => {
   <header class="topbar">
     <div class="brand">
       <span class="dot"></span>
-      <h1>DSH 版本管理器</h1>
+      <h1>DSH 整合包管理器</h1>
     </div>
     <div class="root-line" v-if="state">
       <span class="label">根目录</span>
