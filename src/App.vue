@@ -1029,13 +1029,13 @@ body {
 
 .ver-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
 .ver-item {
-  display: flex; align-items: center; justify-content: space-between;
-  flex-wrap: wrap; gap: 8px 12px;
+  display: flex; align-items: center; flex-wrap: wrap;
+  gap: 6px 12px;
   padding: 10px 14px; border: 1px solid #eceef1; border-radius: 9px;
   background: #fcfcfd; transition: border-color .15s, background .15s;
 }
 .ver-item:hover { border-color: #d6dae0; background: #fff; }
-.ver-main { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; min-width: 0; }
+.ver-main { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; min-width: 0; flex: 1 1 auto; }
 .ver-num { font-weight: 600; font-size: 14px; font-variant-numeric: tabular-nums; }
 .ver-meta { color: #9aa1ab; font-size: 11px; }
 .badge {
@@ -1050,7 +1050,7 @@ body {
 .btn.active:hover:not(:disabled) { background: #ffedcc; border-color: #e0b46a; }
 .ver-actions {
   display: flex; gap: 6px; align-items: center;
-  flex-wrap: wrap; justify-content: flex-end;
+  flex-wrap: wrap; justify-content: flex-start;
 }
 
 .menu-wrap { position: relative; }
@@ -1187,8 +1187,8 @@ body {
 .pack-list { list-style: none; margin: 0; padding: 0; }
 .pack-item {
   position: relative;
-  display: flex; align-items: center; justify-content: space-between;
-  flex-wrap: wrap; gap: 8px 12px;
+  display: flex; align-items: center; flex-wrap: wrap;
+  gap: 6px 12px;
   padding: 10px 14px; margin-bottom: 8px;
   background: #fcfcfd; border: 1px solid #eceef1; border-radius: 9px;
   transition: box-shadow .15s, border-color .15s, background .15s;
