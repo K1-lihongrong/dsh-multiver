@@ -18,6 +18,7 @@ const installTotal = ref(0);
 const installDetail = ref("");
 const installFraction = ref(0);
 const runningVersion = ref(""); // 正在启动的版本号（用于禁用按钮 + 显示反馈）
+const uninstalling = ref("");   // 正在卸载的版本号（用于禁用按钮 + 显示反馈）
 const envChecks = ref([]);
 const envChecked = ref(false);
 const envPassed = ref(false);
@@ -122,11 +123,19 @@ async function install(v) {
 }
 
 async function uninstall(v) {
+  if (uninstalling.value) return; // 已有版本在卸载，忽略重复点击
   if (!(await ask("确定卸载版本 " + v + " ?", { title: "卸载版本", kind: "warning" }))) return;
+  uninstalling.value = v;
+  notify("正在卸载 " + v + "...");
   try {
-    notify(await invoke("uninstall_version", { version: v }));
+    const msg = await invoke("uninstall_version", { version: v });
+    notify(msg);
     await refresh();
-  } catch (e) { notify("" + e); }
+  } catch (e) {
+    notify("" + e);
+  } finally {
+    uninstalling.value = "";
+  }
 }
 
 async function setDefault(v) {
@@ -389,7 +398,7 @@ onUnmounted(() => {
               @click="toggleIsolated(v.version, false)"
               title="开启隔离（该版本使用独立数据目录）"
             >隔离</button>
-            <button class="btn danger" @click="uninstall(v.version)">卸载</button>
+            <button class="btn danger" @click="uninstall(v.version)" :disabled="!!uninstalling">{{ uninstalling === v.version ? "卸载中..." : "卸载" }}</button>
           </div>
         </li>
       </ul>
