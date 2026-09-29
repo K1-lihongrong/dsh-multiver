@@ -3,6 +3,7 @@ mod config;
 mod envcheck;
 mod jobobj;
 mod launcher;
+mod maintenance;
 mod modpack;
 #[cfg(test)]
 mod modpack_e2e_test;
@@ -210,12 +211,17 @@ async fn import_dspack(
             // 冲突检测
             let base_name = modpack::instance_dir_name(&m, None);
             let final_name = modpack::instance_dir_name(&m, suffix.as_deref());
-            let base_exists = dirs2.modpacks.join(&base_name).exists();
-            let final_exists = dirs2.modpacks.join(&final_name).exists();
+            // 冲突检测：modpacks/ 与 versions/（旧位置）任一存在即算冲突
+            let exists_at = |n: &str| {
+                dirs2.modpacks.join(n).exists() || dirs2.versions.join(n).exists()
+            };
+            let base_exists = exists_at(&base_name);
+            let final_exists = exists_at(&final_name);
             if final_exists {
                 if replace.unwrap_or(false) {
                     on_stage("正在移除旧实例...");
-                    std::fs::remove_dir_all(dirs2.modpacks.join(&final_name))
+                    let _ = std::fs::remove_dir_all(dirs2.modpacks.join(&final_name));
+                    std::fs::remove_dir_all(dirs2.versions.join(&final_name))
                         .map_err(|e| format!("移除旧实例失败: {}", e))?;
                 } else {
                     return Err(format!(
@@ -1004,6 +1010,21 @@ fn log_launch_error(root: &std::path::Path, msg: &str) {
     }
 }
 
+/// 把后台维护的日志写入 <根>/logs/maintenance.log。
+fn log_maintenance(root: &std::path::Path, msg: &str) {
+    use std::io::Write;
+    let dir = root.join("logs");
+    let _ = std::fs::create_dir_all(&dir);
+    let path = dir.join("maintenance.log");
+    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&path) {
+        let ts = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        let _ = writeln!(f, "[{}] {}", ts, msg);
+    }
+}
+
 /// 由版本号生成合法的窗口 label 前缀（不含代次）。
 /// Tauri 要求 label 只含字母数字和 `-` `/` `:` `_`，而版本号含 `.`，故替换为 `_`。
 fn window_label_prefix(version: &str) -> String {
@@ -1184,6 +1205,44 @@ pub fn run() {
                     }
                 });
             }
+
+            // 后台维护（不阻塞界面）：
+            //  1) 立即清理孤立 webview 目录（毫秒级）
+            //  2) 延迟 + 7 天节流跑 pnpm store prune（重 IO，独立线程 + 低优先级）
+            {
+                let app_handle = app.handle().clone();
+                std::thread::spawn(move || {
+                    let mdir = manager_dir(&app_handle);
+                    let root = Config::load(&mdir).resolve_root(&mdir);
+                    let dirs = Dirs::new(root.clone());
+                    let _ = dirs.ensure();
+
+                    // 1) 孤立 webview：每次启动都能跑（成本极低）
+                    let removed = maintenance::cleanup_orphan_webviews(
+                        &dirs.versions,
+                        &dirs.modpacks,
+                        &dirs.webview,
+                    );
+                    if !removed.is_empty() {
+                        log_maintenance(&root, &format!("清理孤立 webview：{:?}", removed));
+                    }
+
+                    // 2) store prune：距上次 >= 7 天才跑，且延迟 30 秒错开启动 IO
+                    if maintenance::should_prune_store(&root) {
+                        std::thread::sleep(std::time::Duration::from_secs(30));
+                        match maintenance::run_store_prune(&dirs.store, &dirs.cache, &dirs.state) {
+                            Ok(()) => {
+                                maintenance::mark_pruned(&root);
+                                log_maintenance(&root, "store prune 完成");
+                            }
+                            Err(e) => {
+                                log_maintenance(&root, &format!("store prune 失败（下次重试）: {}", e));
+                            }
+                        }
+                    }
+                });
+            }
+
             Ok(())
         })
         .build(tauri::generate_context!())

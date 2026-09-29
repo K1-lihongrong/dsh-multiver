@@ -99,9 +99,17 @@ impl Dirs {
         Ok(())
     }
 
-    /// 实例所在的父目录：整合包（modpack- 前缀）→ modpacks/，其余 → versions/
+    /// 实例所在的父目录。
+    ///
+    /// 默认：整合包（modpack- 前缀）→ modpacks/，其余 → versions/。
+    /// **兼容旧位置**：2026-09-29 之前导入的整合包实例留在 versions/ 下，
+    /// 若 modpacks/ 下不存在、而 versions/ 下存在同名目录，则用 versions/。
+    /// 这样旧实例的启动/卸载/扫描等操作仍能正确定位。
     pub fn parent_of(&self, name: &str) -> PathBuf {
         if name.starts_with("modpack-") {
+            if !self.modpacks.join(name).exists() && self.versions.join(name).exists() {
+                return self.versions.clone();
+            }
             self.modpacks.clone()
         } else {
             self.versions.clone()
