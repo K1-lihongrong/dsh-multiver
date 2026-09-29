@@ -553,10 +553,10 @@ async fn install_version(app: tauri::AppHandle, version: String) -> Result<Strin
     let app2 = app.clone();
     // 把阻塞的安装逻辑丢到后台线程池，避免占用主线程导致界面卡死
     let result = tauri::async_runtime::spawn_blocking(move || {
-        let on_stage = move |stage: &str| {
-            let _ = app2.emit("install-progress", stage.to_string());
+        let on_progress = move |ev: &versions::ProgressEvent| {
+            let _ = app2.emit("install-progress", ev.clone());
         };
-        versions::install(&dirs.versions, &dirs.store, &dirs.cache, &dirs.state, &version, &on_stage)
+        versions::install(&dirs.versions, &dirs.store, &dirs.cache, &dirs.state, &version, &on_progress)
     })
     .await
     .map_err(|e| format!("安装任务失败: {}", e))?;

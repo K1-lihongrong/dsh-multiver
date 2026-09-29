@@ -14,6 +14,11 @@ const toastExpanded = ref(false);
 const installInput = ref("");
 const rootInput = ref("");
 const installStage = ref("");
+const installStep = ref(0);
+const installTotal = ref(0);
+const installDetail = ref("");
+const installFraction = ref(0);
+const uninstalling = ref(""); // 正在卸载的版本号
 const runningVersion = ref(""); // 正在启动的版本号（用于禁用按钮 + 显示反馈）
 const envChecks = ref([]);
 const envChecked = ref(false);
@@ -294,6 +299,18 @@ function notify(msg) {
   }
 }
 
+/// 各阶段起始百分比与权重（按耗时分配，和 ≈ 100）。索引 = step - 1。
+const STAGE_START = [0, 1, 2, 4, 10, 35, 90, 97];
+const STAGE_WEIGHT = [1, 1, 2, 6, 25, 55, 7, 3];
+
+/// 版本安装进度百分比（0-100）。
+function progressPct() {
+  const i = installStep.value - 1;
+  if (i < 0 || i >= STAGE_START.length) return 0;
+  const frac = Math.min(1, Math.max(0, installFraction.value));
+  return Math.round(STAGE_START[i] + STAGE_WEIGHT[i] * frac);
+}
+
 function dismissToast() {
   if (toastTimer) clearTimeout(toastTimer);
   toast.value = "";
@@ -366,11 +383,19 @@ async function install(v) {
 }
 
 async function uninstall(v) {
-  if (!(await ask("确定卸载版本 " + v + " ?", { title: "卸载版本", kind: "warning" }))) return;
+  if (uninstalling.value) return;
+  if (!(await ask("确定卸载 " + v + " ?", { title: "卸载", kind: "warning" }))) return;
+  uninstalling.value = v;
+  notify("正在卸载 " + v + "...");
   try {
-    notify(await invoke("uninstall_version", { version: v }));
+    const msg = await invoke("uninstall_version", { version: v });
+    notify(msg);
     await refresh();
-  } catch (e) { notify("" + e); }
+  } catch (e) {
+    notify("" + e);
+  } finally {
+    uninstalling.value = "";
+  }
 }
 
 async function setDefault(v) {
@@ -534,7 +559,18 @@ onMounted(async () => {
   // 若市场面板上次是展开的，启动即加载
   if (!marketCollapsed.value) loadMarket();
   unlistenProgress = await listen("install-progress", (e) => {
-    installStage.value = e.payload;
+    const p = e.payload;
+    if (typeof p === "string") {
+      // 整合包导入：阶段文字（字符串）
+      importStage.value = p;
+    } else if (p && typeof p === "object") {
+      // 版本安装：结构化进度（对象）
+      installStage.value = p.stage || "";
+      installStep.value = p.step || 0;
+      installTotal.value = p.total || 0;
+      installDetail.value = p.detail || "";
+      installFraction.value = p.fraction || 0;
+    }
   });
   // 命令行 --import：界面就绪后自动弹出导入确认
   unlistenCliImport = await listen("cli-import", (e) => {
@@ -655,7 +691,7 @@ onUnmounted(() => {
               @click="toggleIsolated(v.version, false)"
               title="开启隔离（该版本使用独立数据目录）"
             >隔离</button>
-            <button class="btn danger" @click="uninstall(v.version)">卸载</button>
+            <button class="btn danger" @click="uninstall(v.version)" :disabled="!!uninstalling">{{ uninstalling === v.version ? "卸载中..." : "卸载" }}</button>
           </div>
         </li>
       </ul>
@@ -711,7 +747,7 @@ onUnmounted(() => {
                 <button class="menu-item danger" @click="clearIsolated(v.version)">清理隔离数据</button>
               </div>
             </div>
-            <button class="btn danger" @click="uninstall(v.version)">卸载</button>
+            <button class="btn danger" @click="uninstall(v.version)" :disabled="!!uninstalling">{{ uninstalling === v.version ? "卸载中..." : "卸载" }}</button>
           </div>
 
           <!-- 悬停浮层详情 -->
@@ -824,7 +860,14 @@ onUnmounted(() => {
 
       <div class="install-progress" v-if="installStage">
         <div class="spinner"></div>
-        <span class="stage-text">{{ installStage }}</span>
+        <div class="prog-body">
+          <div class="prog-line">
+            <span class="stage-text">{{ installStage }}</span>
+            <span class="prog-detail" v-if="installDetail">{{ installDetail }}</span>
+            <span class="prog-count" v-if="installTotal">{{ installStep }}/{{ installTotal }}</span>
+          </div>
+          <div class="prog-bar"><div class="prog-fill" :style="{ width: progressPct() + '%' }"></div></div>
+        </div>
       </div>
 
       <div class="chips" v-if="remote.length">
@@ -1092,10 +1135,16 @@ body {
 .install-row input:focus { border-color: #4f6ef7; }
 
 .install-progress {
-  display: flex; align-items: center; gap: 10px;
+  display: flex; align-items: flex-start; gap: 10px;
   padding: 10px 14px; margin-bottom: 12px;
   background: #f5f7ff; border: 1px solid #e2e7ff; border-radius: 8px;
 }
+.prog-body { flex: 1; min-width: 0; }
+.prog-line { display: flex; align-items: center; gap: 10px; margin-bottom: 6px; }
+.prog-detail { font-size: 12px; color: #6b7280; }
+.prog-count { font-size: 12px; color: #9aa1ab; margin-left: auto; font-variant-numeric: tabular-nums; }
+.prog-bar { height: 6px; background: #e2e7ff; border-radius: 3px; overflow: hidden; }
+.prog-fill { height: 100%; background: #4f6ef7; border-radius: 3px; transition: width .3s ease; }
 .spinner {
   width: 15px; height: 15px; flex-shrink: 0;
   border: 2px solid #c9d4ff; border-top-color: #4f6ef7;
