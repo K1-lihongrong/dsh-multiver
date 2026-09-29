@@ -114,6 +114,28 @@ pub fn write_forward_script(dir: &Path, content: &str) -> std::io::Result<String
     Ok(path.to_string_lossy().to_string())
 }
 
+/// 用系统默认浏览器打开 URL（跨平台）。
+pub fn open_url(url: &str) -> (bool, String) {
+    #[cfg(windows)]
+    let result = {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x08000000;
+        Command::new("cmd")
+            .args(["/C", "start", "", url])
+            .creation_flags(CREATE_NO_WINDOW)
+            .spawn()
+    };
+    #[cfg(target_os = "macos")]
+    let result = Command::new("open").arg(url).spawn();
+    #[cfg(all(unix, not(target_os = "macos")))]
+    let result = Command::new("xdg-open").arg(url).spawn();
+
+    match result {
+        Ok(_) => (true, String::new()),
+        Err(e) => (false, e.to_string()),
+    }
+}
+
 /// 打开文件夹
 pub fn open_folder(path: &Path) -> (bool, String) {
     #[cfg(windows)]

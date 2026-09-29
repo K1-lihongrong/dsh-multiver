@@ -377,6 +377,11 @@ async function resetRoot() {
   await applyRoot();
 }
 
+async function openUrl(url) {
+  try { await invoke("open_url", { url }); }
+  catch (e) { notify("打开链接失败：" + e); }
+}
+
 async function openDir(which) {
   try { await invoke("open_dir", { which }); }
   catch (e) { notify("" + e); }
@@ -426,11 +431,27 @@ onUnmounted(() => {
         <button class="btn small" @click="runEnvCheck" :disabled="loading">重新检查</button>
       </div>
       <ul class="env-list" v-if="envChecks.length">
-        <li v-for="c in envChecks" :key="c.name" class="env-item">
-          <span class="env-icon" :class="c.ok ? 'ok' : 'err'">{{ c.ok ? "✓" : "✕" }}</span>
-          <span class="env-name">{{ c.name }}</span>
-          <span class="env-detail">{{ c.detail }}</span>
-          <span class="env-critical" v-if="!c.ok && !c.critical">（非致命）</span>
+        <li
+          v-for="c in envChecks"
+          :key="c.name"
+          class="env-item"
+          :class="{ 'env-item-fail': !c.ok }"
+        >
+          <div class="env-row">
+            <span class="env-icon" :class="c.ok ? 'ok' : 'err'">{{ c.ok ? "✓" : "✕" }}</span>
+            <span class="env-name">{{ c.name }}</span>
+            <span class="env-detail">{{ c.detail }}</span>
+            <span class="env-critical" v-if="!c.ok && !c.critical">（非致命）</span>
+          </div>
+          <!-- 未通过：显示安装引导 -->
+          <div class="env-guide" v-if="!c.ok && c.install_hint">
+            <span class="env-guide-text">{{ c.install_hint }}</span>
+            <button
+              v-if="c.install_url"
+              class="btn small primary"
+              @click="openUrl(c.install_url)"
+            >打开下载页</button>
+          </div>
         </li>
       </ul>
       <div v-else class="hint">正在检查环境...</div>
@@ -721,7 +742,7 @@ body {
 
 .env-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
 .env-item {
-  display: flex; align-items: center; gap: 10px;
+  display: flex; flex-direction: column; align-items: stretch; gap: 0;
   padding: 8px 12px; border-radius: 8px; background: #fafbfc;
   font-size: 13px;
 }
@@ -735,6 +756,15 @@ body {
 .env-name { font-weight: 600; color: #374151; min-width: 90px; }
 .env-detail { color: #6b7280; font-size: 12px; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .env-critical { color: #e5484d; font-size: 11px; }
+.env-item-fail { background: #fff8f8; }
+.env-row { display: flex; align-items: center; gap: 10px; }
+.env-guide {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  margin-top: 8px; margin-left: 28px;
+  padding: 8px 10px; background: #fff; border: 1px solid #f0d0d0;
+  border-radius: 6px; font-size: 12px; color: #6b7280; line-height: 1.5;
+}
+.env-guide-text { flex: 1; min-width: 200px; }
 .badge-ok { background: #e8f5ec; color: #2f9e5f; font-size: 11px; padding: 2px 8px; border-radius: 10px; margin-left: 6px; }
 .badge-err { background: #fdf2f2; color: #d9534f; font-size: 11px; padding: 2px 8px; border-radius: 10px; margin-left: 6px; }
 

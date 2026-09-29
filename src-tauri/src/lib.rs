@@ -691,6 +691,16 @@ fn set_root(app: tauri::AppHandle, root: Option<String>) -> Result<String, Strin
     Ok(format!("根目录已设为 {}", dirs.root.to_string_lossy()))
 }
 
+/// 用系统默认浏览器打开一个 URL（环境配置引导用）。
+#[tauri::command]
+fn open_url(url: String) -> Result<(), String> {
+    if !url.starts_with("http://") && !url.starts_with("https://") {
+        return Err("只允许打开 http/https 链接".to_string());
+    }
+    let (ok, msg) = actions::open_url(&url);
+    if ok { Ok(()) } else { Err(msg) }
+}
+
 #[tauri::command]
 fn open_dir(app: tauri::AppHandle, which: String) -> Result<(), String> {
     let mdir = manager_dir(&app);
@@ -834,6 +844,7 @@ pub fn run() {
             restart_version,
             set_root,
             open_dir,
+            open_url,
             get_manager_dir,
             check_env,
             set_isolated,
