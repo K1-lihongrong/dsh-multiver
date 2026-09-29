@@ -362,6 +362,7 @@ pub fn install(
     state_dir: &Path,
     version: &str,
     on_progress: &dyn Fn(&ProgressEvent),
+    registry: Option<&str>,
 ) -> (bool, String) {
     let target = versions_dir.join(version);
     if target.join("node_modules").exists() {
@@ -401,8 +402,14 @@ pub fn install(
         .arg(format!("--config.cache-dir={}", cache_dir.to_string_lossy()))
         .arg(format!("--config.state-dir={}", state_dir.to_string_lossy()))
         .arg("--config.confirmModulesPurge=false")
-        .arg("--config.dangerouslyAllowAllBuilds=true")
-        .stdout(std::process::Stdio::piped())
+        .arg("--config.dangerouslyAllowAllBuilds=true");
+    // 可选：自定义 npm 源（换源重试用）
+    if let Some(reg) = registry {
+        if !reg.trim().is_empty() {
+            cmd.arg(format!("--config.registry={}", reg.trim()));
+        }
+    }
+    cmd.stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped());
 
     on_progress(&progress(3, String::new(), 0.0));
@@ -474,6 +481,30 @@ pub fn install(
         let _ = std::fs::remove_dir_all(&target);
         (false, friendly_error(collected.trim()))
     }
+}
+
+/// 错误分类（供前端决定弹哪种提示）。
+pub fn classify_error(raw: &str) -> &'static str {
+    // 私有包下架：ERR_PNPM_FETCH_404 且涉及 @deepseek-ai/*
+    if (raw.contains("ERR_PNPM_FETCH_404") || raw.contains("Not Found - 404"))
+        && raw.contains("@deepseek-ai")
+    {
+        return "private-package";
+    }
+    // 版本不完整（子包缺失）
+    if raw.contains("ERR_PNPM_NO_MATCHING_VERSION") || raw.contains("No matching version found") {
+        return "incomplete-version";
+    }
+    // 网络类
+    if raw.contains("ERR_PNPM_FETCH")
+        || raw.contains("UND_ERR")
+        || raw.contains("ETIMEDOUT")
+        || raw.contains("ECONNRESET")
+        || raw.contains("ENOTFOUND")
+    {
+        return "network";
+    }
+    "unknown"
 }
 
 /// 把原始错误转成更易懂的提示

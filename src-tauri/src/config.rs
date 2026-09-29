@@ -11,6 +11,11 @@ pub struct Config {
     /// 开启数据隔离的版本号列表（这些版本使用独立的 DSH_HOME）
     #[serde(default)]
     pub isolated_versions: Vec<String>,
+    /// 已知安装失败的版本号（依赖已下架的私有包等）。
+    /// 列表里这些版本标灰 + 提示，避免用户反复踩坑。
+    /// 安装成功后自动移除；用户可在界面手动清除。
+    #[serde(default)]
+    pub broken_versions: Vec<String>,
 }
 
 impl Default for Config {
@@ -19,6 +24,7 @@ impl Default for Config {
             root_dir: None,
             default_version: None,
             isolated_versions: Vec::new(),
+            broken_versions: Vec::new(),
         }
     }
 }
