@@ -467,7 +467,16 @@ pub fn build_meta(m: &Manifest, outcome: &ImportOutcome) -> InstanceMeta {
         let bl = m.profiles.get(&dp).map(|u| u.bundles.len()).unwrap_or(0);
         (bl, m.raw.get("skills").and_then(|s| s.as_array()).map(|a| a.len()).unwrap_or(0))
     } else {
-        (m.bundles.len(), 0)
+        // profile 形态：manifest 无 skills 字段，技能由 bundle 携带并落盘到
+        // home/skills/<名>/。故直接数实际落盘的技能子目录数。
+        let n = std::fs::read_dir(outcome.instance_dir.join("home").join("skills"))
+            .map(|rd| {
+                rd.filter_map(|e| e.ok())
+                    .filter(|e| e.path().is_dir())
+                    .count()
+            })
+            .unwrap_or(0);
+        (m.bundles.len(), n)
     };
 
     InstanceMeta {
