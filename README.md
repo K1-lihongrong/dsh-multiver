@@ -34,6 +34,14 @@
 
 📖 **完整操作说明见 [使用手册](docs/使用手册.md)** —— 含环境准备、各项功能、常见问题排查。
 
+🐧 **Linux 支持**：规划中，见 [Linux 适配开发计划](docs/Linux适配开发计划.md)。当前版本仅支持 Windows。
+
+🐧 **Linux 支持**：规划中，见 [Linux 适配开发计划](docs/Linux适配开发计划.md)。当前版本仅支持 Windows。
+
+🐧 **Linux 支持**：规划中，见 [Linux 适配开发计划](docs/Linux适配开发计划.md)。当前版本仅支持 Windows。
+
+🐧 **Linux 支持**：规划中，见 [Linux 适配开发计划](docs/Linux适配开发计划.md)。当前版本仅支持 Windows。
+
 ## 使用
 
 1. 双击 `dsh-multiver.exe`
