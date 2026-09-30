@@ -822,15 +822,15 @@ onUnmounted(() => {
             <span class="ver-meta" v-if="verSizes[v.version] != null">占用 {{ fmtSize(verSizes[v.version]) }}</span>
           </div>
           <div class="ver-actions">
-            <button class="btn primary" @click="run(v.version)" :disabled="!!runningVersion || batchBusy">{{ runningVersion === v.version ? "启动中..." : "运行" }}</button>
-            <button class="btn" @click="openInBrowser(v.version)" :disabled="batchBusy" title="在新终端启动并在系统浏览器打开">浏览器打开</button>
-            <button class="btn" @click="setDefault(v.version)" :disabled="v.is_default || batchBusy">设为默认</button>
-            <button class="btn" @click="createShortcut(v.version)" :disabled="batchBusy" title="在桌面创建 DSH 快捷方式">桌面快捷方式</button>
-            <button class="btn" @click="scanVersionSize(v.version)" :disabled="scanningVer === v.version || batchBusy" title="统计该版本占用的磁盘空间">
+            <button class="btn primary" @click="run(v.version)" :disabled="!!runningVersion || uninstalling === v.version">{{ runningVersion === v.version ? "启动中..." : "运行" }}</button>
+            <button class="btn" @click="openInBrowser(v.version)" :disabled="uninstalling === v.version" title="在新终端启动并在系统浏览器打开">浏览器打开</button>
+            <button class="btn" @click="setDefault(v.version)" :disabled="v.is_default || uninstalling === v.version">设为默认</button>
+            <button class="btn" @click="createShortcut(v.version)" :disabled="uninstalling === v.version" title="在桌面创建 DSH 快捷方式">桌面快捷方式</button>
+            <button class="btn" @click="scanVersionSize(v.version)" :disabled="scanningVer === v.version || uninstalling === v.version" title="统计该版本占用的磁盘空间">
               {{ scanningVer === v.version ? "扫描中..." : (verSizes[v.version] != null ? "重新扫描占用" : "扫描占用") }}
             </button>
             <div class="menu-wrap" v-if="v.isolated">
-              <button class="btn active" @click.stop="toggleMenu(v.version)" :disabled="batchBusy">
+              <button class="btn active" @click.stop="toggleMenu(v.version)" :disabled="uninstalling === v.version">
                 已隔离 ▾
               </button>
               <div class="menu" v-if="openMenu === v.version" @click.stop>
@@ -849,7 +849,7 @@ onUnmounted(() => {
               v-else
               class="btn"
               @click="toggleIsolated(v.version, false)"
-              :disabled="batchBusy"
+              :disabled="uninstalling === v.version"
               title="开启隔离（该版本使用独立数据目录）"
             >隔离</button>
             <button class="btn danger" @click="uninstall(v.version)" :disabled="!!uninstalling || batchBusy">{{ uninstalling === v.version ? "卸载中..." : "卸载" }}</button>
@@ -907,15 +907,15 @@ onUnmounted(() => {
             </div>
           </div>
           <div class="ver-actions">
-            <button class="btn primary" @click="run(v.version)" :disabled="!!runningVersion || batchBusy">{{ runningVersion === v.version ? "启动中..." : "运行" }}</button>
-            <button class="btn" @click="openInBrowser(v.version)" :disabled="batchBusy">浏览器打开</button>
-            <button class="btn" @click="createShortcut(v.version)" :disabled="batchBusy">桌面快捷方式</button>
-            <button class="btn" @click="exportModpack(v.version)" :disabled="batchBusy" title="把该实例导出为 .dspack 整合包">导出</button>
-            <button class="btn" @click="scanVersionSize(v.version)" :disabled="scanningVer === v.version || batchBusy">
+            <button class="btn primary" @click="run(v.version)" :disabled="!!runningVersion || uninstalling === v.version">{{ runningVersion === v.version ? "启动中..." : "运行" }}</button>
+            <button class="btn" @click="openInBrowser(v.version)" :disabled="uninstalling === v.version">浏览器打开</button>
+            <button class="btn" @click="createShortcut(v.version)" :disabled="uninstalling === v.version">桌面快捷方式</button>
+            <button class="btn" @click="exportModpack(v.version)" :disabled="uninstalling === v.version" title="把该实例导出为 .dspack 整合包">导出</button>
+            <button class="btn" @click="scanVersionSize(v.version)" :disabled="scanningVer === v.version || uninstalling === v.version">
               {{ scanningVer === v.version ? "扫描中..." : (verSizes[v.version] != null ? "重新扫描占用" : "扫描占用") }}
             </button>
             <div class="menu-wrap">
-              <button class="btn active" @click.stop="toggleMenu(v.version)" :disabled="batchBusy">已隔离 ▾</button>
+              <button class="btn active" @click.stop="toggleMenu(v.version)" :disabled="uninstalling === v.version">已隔离 ▾</button>
               <div class="menu" v-if="openMenu === v.version" @click.stop>
                 <button class="menu-item" @click="openIsolatedDir(v.version)">打开数据目录</button>
                 <button class="menu-item" @click="scanSize(v.version)" :disabled="scanning === v.version">
