@@ -421,6 +421,7 @@ pub fn install(
     state_dir: &Path,
     version: &str,
     on_progress: &dyn Fn(&ProgressEvent),
+    registry: Option<&str>,
 ) -> (bool, String) {
     let target = versions_dir.join(version);
     if target.join("node_modules").exists() {
@@ -460,8 +461,14 @@ pub fn install(
         .arg(format!("--config.cache-dir={}", cache_dir.to_string_lossy()))
         .arg(format!("--config.state-dir={}", state_dir.to_string_lossy()))
         .arg("--config.confirmModulesPurge=false")
-        .arg("--config.dangerouslyAllowAllBuilds=true")
-        .stdout(std::process::Stdio::piped())
+        .arg("--config.dangerouslyAllowAllBuilds=true");
+    // 可选：自定义 npm 源（换源重试用）
+    if let Some(reg) = registry {
+        if !reg.trim().is_empty() {
+            cmd.arg(format!("--config.registry={}", reg.trim()));
+        }
+    }
+    cmd.stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped());
 
     on_progress(&progress(3, String::new(), 0.0));
@@ -538,6 +545,26 @@ pub fn install(
 fn friendly_error(raw: &str) -> String {
     let (_, msg) = crate::modpack::diagnose(raw);
     msg
+}
+
+/// 错误分类（供前端决定弹哪种提示）。
+///
+/// 复用整合包模块的统一诊断器（modpack::diagnose），把 DiagKind 映射为
+/// 前端期望的四类字符串；另补一条「官方子包 404 下架」判定（diagnose 未覆盖）。
+pub fn classify_error(raw: &str) -> &'static str {
+    // 官方子包下架：404 且涉及 @deepseek-ai（优先判定，diagnose 未覆盖此情形）
+    let lower = raw.to_lowercase();
+    if (lower.contains("err_pnpm_fetch_404") || lower.contains("not found - 404"))
+        && lower.contains("@deepseek-ai")
+    {
+        return "private-package";
+    }
+    match crate::modpack::diagnose(raw).0 {
+        crate::modpack::DiagKind::Network => "network",
+        crate::modpack::DiagKind::DshRuntime => "incomplete-version",
+        crate::modpack::DiagKind::PluginDep => "incomplete-version",
+        _ => "unknown",
+    }
 }
 
 /// 卸载指定版本

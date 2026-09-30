@@ -14,6 +14,21 @@ const toastExpanded = ref(false);
 const installInput = ref("");
 const rootInput = ref("");
 const installStage = ref("");
+// 换源重试弹窗
+const retryOpen = ref(false);
+const retryVersion = ref("");
+const retryError = ref("");
+const retryRegistry = ref("https://registry.npmjs.org/");
+const retryCustom = ref("");
+// 错误分类："network" | "private-package" | "incomplete-version" | "unknown"
+const retryKind = ref("unknown");
+// 可选 npm 源（值 = registry url）
+const REGISTRIES = [
+  { label: "npm 官方源（推荐）", value: "https://registry.npmjs.org/" },
+  { label: "阿里云 npmmirror", value: "https://registry.npmmirror.com" },
+  { label: "腾讯云", value: "https://mirrors.cloud.tencent.com/npm/" },
+  { label: "华为云", value: "https://repo.huaweicloud.com/repository/npm/" },
+];
 const installStep = ref(0);
 const installTotal = ref(0);
 const installDetail = ref("");
@@ -346,6 +361,15 @@ async function runEnvCheck() {
   }
 }
 
+/// 用系统默认浏览器打开链接（环境引导用）
+async function openUrl(url) {
+  try {
+    await invoke("open_url", { url });
+  } catch (e) {
+    notify("" + e);
+  }
+}
+
 async function loadRemote() {
   loading.value = true;
   try {
@@ -354,6 +378,47 @@ async function loadRemote() {
     notify("获取可用版本失败: " + e);
   } finally {
     loading.value = false;
+  }
+}
+
+/// 错误分类（与 Rust 侧 classify_error 对应）。
+function classifyError(msg) {
+  const s = String(msg);
+  if ((s.includes("ERR_PNPM_FETCH_404") || s.includes("Not Found - 404")) && s.includes("@deepseek-ai")) {
+    return "private-package";
+  }
+  if (s.includes("ERR_PNPM_NO_MATCHING_VERSION") || s.includes("No matching version found")) {
+    return "incomplete-version";
+  }
+  if (
+    s.includes("网络") ||
+    s.includes("ERR_PNPM_FETCH") ||
+    s.includes("ETIMEDOUT") ||
+    s.includes("UND_ERR") ||
+    s.includes("ECONNRESET") ||
+    s.includes("ENOTFOUND")
+  ) {
+    return "network";
+  }
+  return "unknown";
+}
+
+/// 该版本是否被标记为「已知安装失败」
+function isBroken(v) {
+  return !!(state.value && state.value.broken_versions && state.value.broken_versions.includes(v));
+}
+
+/// 清除「已知安装失败」标记
+async function clearBroken() {
+  if (!state.value || !state.value.broken_versions || !state.value.broken_versions.length) {
+    return notify("没有需要清除的标记");
+  }
+  try {
+    await invoke("clear_broken", { version: null });
+    await refresh();
+    notify("已清除失败标记");
+  } catch (e) {
+    notify("" + e);
   }
 }
 
@@ -372,18 +437,46 @@ async function install(v) {
     return;
   }
 
+  await doInstall(ver, null);
+}
+
+/// 执行安装（registry 为 null 时用 pnpm 默认源）。
+/// 失败且疑似网络/私有包问题时，弹出「换源重试」框（不静默重试）。
+async function doInstall(ver, registry) {
   loading.value = true;
   installStage.value = "准备中...";
   try {
-    const msg = await invoke("install_version", { version: ver });
+    const msg = await invoke("install_version", {
+      version: ver,
+      registry: registry || null,
+    });
     notify(msg);
     await refresh();
   } catch (e) {
-    notify("" + e);
+    const msg = String(e);
+    const kind = classifyError(msg);
+    await refresh().catch(() => {});
+    retryKind.value = kind;
+    retryVersion.value = ver;
+    retryError.value = msg;
+    retryRegistry.value = registry || "https://registry.npmjs.org/";
+    retryCustom.value = "";
+    if (kind === "network" || kind === "private-package" || kind === "incomplete-version") {
+      retryOpen.value = true;
+    } else {
+      notify(msg);
+    }
   } finally {
     loading.value = false;
     installStage.value = "";
   }
+}
+
+/// 用户在换源框里点「重试」
+async function retryInstall() {
+  const reg = (retryCustom.value.trim() || retryRegistry.value).trim();
+  retryOpen.value = false;
+  await doInstall(retryVersion.value, reg || null);
 }
 
 async function uninstall(v) {
@@ -646,6 +739,10 @@ onUnmounted(() => {
           <span class="env-name">{{ c.name }}</span>
           <span class="env-detail">{{ c.detail }}</span>
           <span class="env-critical" v-if="!c.ok && !c.critical">（非致命）</span>
+          <div class="env-guide" v-if="!c.ok && (c.install_hint || c.install_url)">
+            <div class="env-hint" v-if="c.install_hint">{{ c.install_hint }}</div>
+            <button class="btn small" v-if="c.install_url" @click="openUrl(c.install_url)">打开下载页</button>
+          </div>
         </li>
       </ul>
       <div v-else class="hint">正在检查环境...</div>
@@ -893,11 +990,17 @@ onUnmounted(() => {
           v-for="v in remote.slice(0, 40)"
           :key="v"
           class="chip"
+          :class="{ 'chip-broken': isBroken(v) }"
+          :title="isBroken(v) ? '此版本上次安装失败（依赖已下架），点下方可清除标记' : ''"
           @click="install(v)"
           :disabled="loading"
         >{{ v }}</button>
       </div>
       <div v-else class="hint">点击“刷新列表”从 npm 拉取所有可安装版本</div>
+      <div class="broken-hint" v-if="state && state.broken_versions && state.broken_versions.length">
+        灰色版本曾被标记为无法安装（依赖已下架）：{{ state.broken_versions.join("、") }}
+        <button class="btn small" @click="clearBroken">清除标记</button>
+      </div>
     </section>
 
     <section class="panel">
@@ -1007,6 +1110,62 @@ onUnmounted(() => {
       <button class="toast-close" @click.stop="dismissToast">×</button>
     </div>
   </transition>
+
+  <!-- 安装失败弹窗（按错误类型分类） -->
+  <div class="modal-mask" v-if="retryOpen" @click.self="retryOpen = false">
+    <div class="modal">
+      <!-- 网络类 -->
+      <template v-if="retryKind === 'network'">
+        <h3>安装失败（网络问题）</h3>
+        <div class="modal-desc">
+          安装 <b>{{ retryVersion }}</b> 时网络请求失败。可换个 npm 源重试：
+        </div>
+        <div class="field">
+          <label>选择源</label>
+          <select v-model="retryRegistry" class="input">
+            <option v-for="r in REGISTRIES" :key="r.value" :value="r.value">{{ r.label }}</option>
+          </select>
+        </div>
+        <div class="field">
+          <label>或自定义源（填写后优先）</label>
+          <input v-model="retryCustom" class="input" placeholder="https://.../npm/" />
+        </div>
+      </template>
+
+      <!-- 私有包 / 版本不完整 -->
+      <template v-else>
+        <h3>此版本无法安装</h3>
+        <div class="modal-desc">
+          安装 <b>{{ retryVersion }}</b> 失败：该版本依赖的官方子包已下架（或未完整发布），
+          任何 npm 源都无法获取。<b>建议换用更新的版本</b>。
+        </div>
+        <details class="retry-detail">
+          <summary>其他安装方式（进阶）</summary>
+          <div class="adv-body">
+            <p><b>1. 配置官方私有源令牌</b>（需官方授权）：</p>
+            <pre>//registry.npmjs.org/:_authToken=&lt;你的 NPM_TOKEN&gt;
+@deepseek-ai:registry=https://registry.npmjs.org/</pre>
+            <p>将上面两行写入 <code>%USERPROFILE%\.npmrc</code>，再回本工具重试。</p>
+            <p><b>2. 从源码构建</b>：</p>
+            <pre>git clone https://github.com/deepseek-ai/deepseek-harness.git
+cd deepseek-harness
+pnpm install &amp;&amp; pnpm build</pre>
+            <p>源码构建不受 npm 包发布状态影响，但需自行维护版本。</p>
+          </div>
+        </details>
+      </template>
+
+      <details class="retry-detail">
+        <summary>原始错误</summary>
+        <pre>{{ retryError }}</pre>
+      </details>
+      <div class="modal-actions">
+        <button class="btn" @click="retryOpen = false">{{ retryKind === 'network' ? '取消' : '知道了' }}</button>
+        <button v-if="retryKind === 'network'" class="btn primary" @click="retryInstall">换源重试</button>
+        <button v-else class="btn primary" @click="retryOpen = false">好</button>
+      </div>
+    </div>
+  </div>
 </div>
 </template>
 
@@ -1339,4 +1498,44 @@ body {
 .modal-desc { color: #555; font-size: 13px; line-height: 1.6; margin-bottom: 10px; }
 .modal-rows { border-top: 1px solid #eef1f5; padding-top: 8px; margin-bottom: 14px; }
 .modal-actions { display: flex; justify-content: flex-end; gap: 8px; }
+
+/* ---------- 换源重试弹窗 ---------- */
+.modal .input {
+  width: 100%; box-sizing: border-box;
+  padding: 8px 12px; border: 1px solid #dcdfe4;
+  border-radius: 7px; font-size: 13px; font-family: inherit; outline: none;
+  background: #fff;
+}
+.modal .input:focus { border-color: #4f6ef7; }
+.retry-detail { margin-bottom: 12px; font-size: 12px; color: #6b7280; }
+.retry-detail summary { cursor: pointer; }
+.adv-body { margin-top: 6px; line-height: 1.6; }
+.adv-body p { margin: 8px 0 4px; }
+.adv-body pre {
+  margin: 4px 0; padding: 8px; background: #f7f8fa; border-radius: 6px;
+  font-size: 11px; white-space: pre-wrap; word-break: break-all;
+}
+.adv-body code { background: #eef1f5; padding: 1px 4px; border-radius: 3px; }
+.retry-detail pre {
+  margin: 6px 0 0; padding: 8px; max-height: 160px; overflow: auto;
+  background: #f7f8fa; border-radius: 6px; font-size: 11px;
+  white-space: pre-wrap; word-break: break-all;
+}
+
+/* ---------- 失败版本标记 ---------- */
+.chip-broken {
+  opacity: .5; text-decoration: line-through;
+  border-style: dashed; cursor: not-allowed;
+}
+.broken-hint {
+  margin-top: 10px; font-size: 12px; color: #9aa1ab;
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+}
+
+/* ---------- 环境引导 ---------- */
+.env-guide {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  margin-top: 4px; margin-left: 22px;
+}
+.env-hint { font-size: 12px; color: #6b7280; line-height: 1.5; }
 </style>

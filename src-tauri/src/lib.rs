@@ -52,6 +52,7 @@ struct AppState {
     state_dir: String,
     default_version: Option<String>,
     manager_dir: String,
+    broken_versions: Vec<String>,
 }
 
 #[tauri::command]
@@ -70,6 +71,7 @@ fn get_state(app: tauri::AppHandle) -> AppState {
         state_dir: dirs.state.to_string_lossy().to_string(),
         default_version: cfg.default_version.clone(),
         manager_dir: mdir.to_string_lossy().to_string(),
+        broken_versions: cfg.broken_versions.clone(),
     }
 }
 
@@ -551,25 +553,70 @@ fn list_remote(app: tauri::AppHandle) -> Result<Vec<String>, String> {
 }
 
 #[tauri::command]
-async fn install_version(app: tauri::AppHandle, version: String) -> Result<String, String> {
+async fn install_version(
+    app: tauri::AppHandle,
+    version: String,
+    registry: Option<String>,
+) -> Result<String, String> {
     use tauri::Emitter;
     let mdir = manager_dir(&app);
     let cfg = Config::load(&mdir);
     let dirs = Dirs::new(cfg.resolve_root(&mdir));
     let _ = dirs.ensure();
     let app2 = app.clone();
+    let version_for_record = version.clone();
     // 把阻塞的安装逻辑丢到后台线程池，避免占用主线程导致界面卡死
     let result = tauri::async_runtime::spawn_blocking(move || {
         let on_progress = move |ev: &versions::ProgressEvent| {
             let _ = app2.emit("install-progress", ev.clone());
         };
-        versions::install(&dirs.versions, &dirs.store, &dirs.cache, &dirs.state, &version, &on_progress)
+        versions::install(&dirs.versions, &dirs.store, &dirs.cache, &dirs.state, &version, &on_progress, registry.as_deref())
     })
     .await
     .map_err(|e| format!("安装任务失败: {}", e))?;
 
     let (ok, msg) = result;
-    if ok { Ok(msg) } else { Err(msg) }
+    // 维护 broken_versions：失败且分类为「私有包/不完整」时记入；成功时移除。
+    if ok {
+        if cfg.broken_versions.iter().any(|v| v == &version_for_record) {
+            let mut c = cfg.clone();
+            c.broken_versions.retain(|v| v != &version_for_record);
+            let _ = c.save(&mdir);
+        }
+        Ok(msg)
+    } else {
+        let kind = versions::classify_error(&msg);
+        if kind == "private-package" || kind == "incomplete-version" {
+            if !cfg.broken_versions.iter().any(|v| v == &version_for_record) {
+                let mut c = cfg.clone();
+                c.broken_versions.push(version_for_record.clone());
+                let _ = c.save(&mdir);
+            }
+        }
+        Err(msg)
+    }
+}
+
+/// 清除「已知安装失败」标记（用户手动重试前可调用）。
+#[tauri::command]
+fn clear_broken(app: tauri::AppHandle, version: Option<String>) -> Result<(), String> {
+    let mdir = manager_dir(&app);
+    let mut cfg = Config::load(&mdir);
+    match version {
+        Some(v) => cfg.broken_versions.retain(|x| x != &v),
+        None => cfg.broken_versions.clear(),
+    }
+    cfg.save(&mdir).map_err(|e| format!("保存配置失败: {}", e))
+}
+
+/// 用系统默认浏览器打开一个 URL（环境配置引导用）。
+#[tauri::command]
+fn open_url(url: String) -> Result<(), String> {
+    if !url.starts_with("http://") && !url.starts_with("https://") {
+        return Err("只允许打开 http/https 链接".to_string());
+    }
+    let (ok, msg) = actions::open_url(&url);
+    if ok { Ok(()) } else { Err(msg) }
 }
 
 #[tauri::command]
@@ -1470,6 +1517,7 @@ pub fn run() {
             list_modpack_instances,
             list_remote,
             install_version,
+            clear_broken,
             uninstall_version,
             set_default,
             run_version,
@@ -1478,6 +1526,7 @@ pub fn run() {
             restart_version,
             set_root,
             open_dir,
+            open_url,
             get_manager_dir,
             check_env,
             set_isolated,
