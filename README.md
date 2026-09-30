@@ -1,21 +1,56 @@
-# dsh-multiver
+# DSH 整合包管理器（dsh-modpack）
 
-一个**轻量、便携**的 DeepSeek Harness（dsh）版本管理器，用于在同一台机器上安装、切换、运行多个 dsh 版本。
+一个**轻量、便携**的 DeepSeek Harness（dsh）桌面工具，既能管理多个 dsh 版本，又能一键导入、运行、导出 **DSH-PackForge 整合包**（`.dspack`）。
+
+> 本项目是 [dsh-multiver](https://github.com/K1-lihongrong/dsh-multiver) 的**平行分支**，在其基础上增加了整合包生态支持。
+> 主干 `dsh-multiver` 专注版本管理；本分支产物为 `dsh-modpack.exe`，两者可并存。
+
+## 亮点
+
+**整合包（本分支新增）**
+
+- 📦 **一键导入** `.dspack` 整合包：拖拽 / 文件对话框 / 命令行三种入口，四阶段导入 + 失败全量回滚
+- 🛒 **整合包市场**：直接浏览市场索引，搜索/分类、查看已安装标记、一键下载安装
+- 📤 **导出整合包**：把本地实例导出为 `.dspack`，便于分享
+- 🖥️ **无头 CLI**：`--import <路径> --yes` 不启 GUI，进度逐行输出，退出码 0/1，可脚本化
+- 🔒 **目录隔离**：整合包实例放在 `modpacks/`，与普通版本 `versions/` 分开，互不干扰
+- ⚡ **智能复用**：纯技能包可 junction 复用本机已装 dsh，导入从 20s+ 降到秒级
+- 🧭 **错误诊断**：安装失败按类别（网络/插件依赖/运行时/文件占用/磁盘）给出针对性建议
+
+**版本管理（继承主干）**
 
 - 🪶 **极致轻量**：约 4.5 MB 单 exe，无需安装，双击即用
 - 💾 **省磁盘**：用 pnpm store 硬链接，多个版本共享依赖文件
-- 🩺 **安装前自检**：自动检查 Node / pnpm / 磁盘 / 源连通
-- 📊 **细粒度进度**：实时显示「解析依赖 → 下载 → 写入 → 构建原生模块 → 完成」
+- 🩺 **安装前自检**：自动检查 Node / pnpm / 磁盘 / 源连通，缺失时给下载引导
+- 📊 **细粒度进度**：实时显示安装阶段与依赖进度百分比
+- 🔁 **换源重试**：安装失败可切换 npm 源（官方 / 阿里云 / 腾讯云 / 华为云）重试
 - 🔒 **可选数据隔离**：每个版本可用独立数据目录，测试插件不污染主力环境
-- ⚙️ **完全自定义**：数据根目录、DSH_HOME、store 位置都可在界面配置
-- 🖥️ **内嵌窗口运行**：点「运行」在应用内直接打开 dsh Web 界面（每个版本独立 WebView2 缓存，互不污染），也可一键在系统浏览器打开
-- 🚀 **桌面快捷方式**：为任意版本在桌面生成 `DSH <版本号>.lnk`，双击直达对应版本
+- 🖥️ **内嵌窗口运行**：在应用内直接打开 dsh Web 界面，也可一键在系统浏览器打开
+- 🚀 **桌面快捷方式**：为任意实例在桌面生成快捷方式，双击直达
 
 ## 截图
 
-主界面 —— 环境自检、已安装版本、可用版本与安装：
+> 下列截图占位，待补。放入 `docs/screenshots/` 后即可显示。
+
+主界面 —— 环境自检、已安装实例（版本 / 整合包分组）、批量操作：
 
 ![主界面](docs/screenshots/main.jpg)
+
+整合包市场 —— 浏览、搜索、一键安装：
+
+![整合包市场](docs/screenshots/market.jpg)
+
+导入整合包 —— 拖入 `.dspack` 后的预览确认框：
+
+![导入预览](docs/screenshots/import-preview.jpg)
+
+整合包卡片详情 —— 悬停查看作者 / 插件数 / 技能数：
+
+![整合包详情](docs/screenshots/modpack-card.jpg)
+
+安装失败换源重试：
+
+![换源重试](docs/screenshots/retry-registry.jpg)
 
 数据隔离（独立数据目录）与路径设置：
 
@@ -23,92 +58,121 @@
 
 ## 下载
 
-从 [Releases](https://github.com/K1-lihongrong/dsh-multiver/releases) 下载最新的 `dsh-multiver.exe`，放到任意目录，双击运行。
+从 [Releases](https://github.com/K1-lihongrong/dsh-multiver/releases) 下载最新的 `dsh-modpack.exe`（整合包分支版本 tag 形如 `modpack-v0.1.5`），放到任意目录，双击运行。
 
 > 需要系统已安装 **WebView2**（Windows 11 及 Windows 10 1803+ 自带）。
 
 ## 使用
 
-1. 双击 `dsh-multiver.exe`
-2. 界面顶部会**自动检查环境**（Node / pnpm / 磁盘 / 源）
-3. 点「刷新列表」从 npm 拉取可安装的版本
-4. 点版本号安装，观察阶段式进度
-5. 点「运行」即可在应用**内嵌窗口**中打开该版本的 `dsh web`，或点「浏览器打开」在系统浏览器中打开
+### 导入整合包
 
-数据默认存放在 **exe 所在目录**下（`versions/`、`home/`、`store/`），也可在界面「路径设置」里改到任意位置。
+三种入口，任选其一：
+
+1. **拖拽**：把 `.dspack` 文件拖到窗口上
+2. **文件对话框**：点「导入整合包」区的「选择 .dspack 文件」
+3. **命令行**：`dsh-modpack.exe --import <路径.dspack>`（弹 GUI 预览框，需人工确认）
+
+导入流程：预检 → 解包落盘 → 安装依赖 → 下载资源 → 完成。任一阶段失败会**整体回滚**（回到未导入状态）。同名同版本已存在时，可选「重装 / 保留两份 / 取消」。
+
+### 无头 CLI 导入（可自动化）
+
+加 `--yes` 进入无头模式：不启动 GUI，进度逐行打到 stdout，末行 `OK: <实例名>` 或 `ERROR: <原因>`，退出码 0/1。冲突时默认「保留两份」（自动加后缀）。
+
+```bash
+dsh-modpack.exe --import "path\to\pack.dspack" --yes
+```
+
+### 市场
+
+展开「市场」面板即可浏览市场索引：搜索 / 按分类过滤 / 已安装标记 / 一键下载安装。
+
+### 导出整合包
+
+在整合包卡片上点「导出」，把本地实例打包为 `.dspack`（CLI：`--export <实例> <目标路径>`）。
+
+### 运行整合包
+
+导入的整合包是**独立隔离实例**，点「运行」即在应用内嵌窗口打开其 Web 界面（启动 `dsh --profile <profile名>`）。顶部小栏显示包名、版本与内嵌 DSH 版本。
+
+### 版本管理
+
+与主干一致：
+
+1. 双击 `dsh-modpack.exe`，界面顶部**自动检查环境**
+2. 点「刷新列表」从 npm 拉取可安装的 dsh 版本
+3. 点版本号安装（支持失败换源重试）
+4. 点「运行」在内嵌窗口打开，或「浏览器打开」用系统浏览器
+
+数据默认存放在 **exe 所在目录**下，也可在「路径设置」里改。
 
 ### 运行方式
 
-安装完成后，每个版本都有三种启动途径：
+每个实例都有三种启动途径：
 
-- **运行（内嵌窗口）**：在应用内直接打开 dsh Web 界面（默认 1100×760）。每个版本使用独立的 WebView2 数据目录（`<数据根>/webview/<版本>`），长期累积的 cookie/缓存互不污染，也不会因请求头膨胀触发 dsh 的 `431 / Failed to load plugins`。关闭窗口会自动终止该版本进程；同一版本再次运行会先结束旧实例再重新打开。
-- **浏览器打开**：用一个新控制台窗口启动 dsh，并让 dsh 自动打开系统默认浏览器（端口固定在 `3080`）。若端口被占用，会弹出对话框让你选择「换随机端口」或取消；若该版本已在内嵌窗口运行，也会先弹窗确认是否再开一个。
-- **桌面快捷方式**：点按钮为当前版本在桌面生成 `DSH <版本号>.lnk`，双击即可直达该版本——适合常玩的版本直接放桌面。
+- **运行（内嵌窗口）**：应用内直接打开 dsh Web 界面。每个实例使用独立的 WebView2 数据目录（`<数据根>/webview/<实例>`），互不污染，也不会因请求头膨胀触发 `431 / Failed to load plugins`。关闭窗口自动终止该实例进程。
+- **浏览器打开**：新控制台启动 dsh 并打开系统浏览器（端口固定 `3080`，占用时弹框选择换端口或取消）。
+- **桌面快捷方式**：为实例在桌面生成快捷方式，双击直达。
+
+### 批量操作
+
+版本列表与整合包列表都支持多选：勾选后底部出现批量操作栏，可「全选本组 / 清除选择 / 批量卸载」（一次确认，逐个执行，失败项汇总提示）。
 
 ### 终端短命令
 
-在某个版本上点「设为默认」后，会在 `%APPDATA%\npm\` 生成 `dsh.cmd` 转发脚本（该目录已在系统 PATH）。之后在**任意终端**直接敲 `dsh` 即可运行已设为默认的版本。
+对**普通版本**点「设为默认」后，会在 `%APPDATA%\npm\` 生成 `dsh.cmd` 转发脚本。之后在任意终端敲 `dsh` 即命中默认版本。
 
-特别是，dsh 的 Web 界面也可以用终端短命令启动 —— 执行：
+> 整合包实例天然隔离，不参与「设为默认」（终端转发机制只认 `versions/` 下的普通版本）。
 
-```bash
-dsh web
+## 与主干 dsh-multiver 的区别
+
+| 项 | dsh-multiver（主干） | dsh-modpack（本分支） |
+| :--- | :--- | :--- |
+| 定位 | dsh 版本管理 | 版本管理 + **整合包生态** |
+| 产物 | `dsh-multiver.exe` | `dsh-modpack.exe` |
+| tag 前缀 | `v*` | `modpack-v*` |
+| 整合包实例目录 | — | `modpacks/`（不混入 `versions/`） |
+| 市场 / 导出 / 无头 CLI | — | ✅ |
+
+两者**可共存、共用数据根**：主干只扫描 `versions/`，分支的整合包放在 `modpacks/`，互不干扰，共享 `store/` 省磁盘。
+
+## 目录结构
+
 ```
-
-这条命令会把请求转发到已「设为默认」的版本并启动它的 Web 界面，效果与界面上的「运行」按钮一致。其他 dsh 子命令（如 `dsh doctor`、`dsh --version`）同样会命中默认版本。
-
-### 数据隔离
-
-点某个版本的「隔离」按钮，可为它开启独立数据目录（`versions/<版本号>/home/`）。隔离版本的会话、插件、配置与共享环境互不干扰，适合测试不兼容插件。
-
-隔离版本的「已隔离 ▾」菜单还提供：
-
-- 打开隔离目录
-- 扫描占用大小
-- 复制共享数据到此（不覆盖已存在文件）
-- 清理隔离数据
-
-## 与其他 dsh 工具的区别
-
-dsh 生态里已有几个相关工具，`dsh-multiver` 的定位与它们不同：
-
-| 工具 | 定位 | 数据隔离 | 省磁盘 | 环境自检 | 形态 |
-| :--- | :--- | :--- | :--- | :--- | :--- |
-| **dsh-multiver** | 版本管理 + 省磁盘 + 自检 | ✅ 可选 | ✅ pnpm store 硬链接 | ✅ 5 项（含磁盘/源） | 4.5 MB 单 exe |
-| [dshvm](https://github.com/dsh-so/dshvm) | 版本管理 + 数据隔离 | ✅（核心特性） | 未强调 | ✅ 引导页 | Tauri + CLI |
-| [dsh-launcher](https://github.com/NevermindZZT/dsh-launcher) | 一键启动 | ❌ | N/A | ✅ doctor | 2 MB 单文件 |
-
-**简而言之**：
-
-- 需要**最彻底的数据隔离** → 推荐 dshvm
-- 只需要**一键启动** → 推荐 dsh-launcher
-- 想要**省磁盘 + 安装前自检 + 便携单文件** → 用 dsh-multiver
+<数据根>/
+├── config.json              # 配置（root_dir / default_version / isolated_versions / broken_versions）
+├── versions/                # 普通 dsh 版本
+├── modpacks/                # 整合包实例（每个是一个独立隔离实例）
+│   └── modpack-<name>-<ver>/
+│       ├── package.json     # 由 manifest 权威重建
+│       ├── .npmrc           # node-linker=hoisted
+│       ├── node_modules/    # dsh 本体 + 依赖（或 junction）
+│       ├── home/            # 隔离 DSH_HOME
+│       └── .dsh-multiver-meta.json  # 实例元数据
+├── home/                    # 共享 DSH_HOME（非隔离版本）
+├── store/  cache/  state/   # pnpm 目录（自包含，不写全局）
+├── webview/                 # 各实例 WebView2 数据（cookie/缓存隔离）
+└── logs/
+```
 
 ## 核心机制
 
 ### 为什么用 `node-linker=hoisted`
 
-dsh 运行时按 Node 常规方式解析依赖。pnpm 默认的**符号链接**结构会导致：
-
-```
-Error: Cannot find package '...\node_modules\.pnpm\node_modules\@deepseek-ai\cordis\index.js'
-```
-
-因此每个版本目录会写入 `.npmrc`：
+dsh 运行时按 Node 常规方式解析依赖。pnpm 默认的**符号链接**结构会导致 `Cannot find package ...`。因此每个实例目录写入 `.npmrc`：
 
 ```
 node-linker=hoisted
 ```
 
-生成扁平化的真实 `node_modules`（兼容 dsh），同时底层仍用 store 硬链接保持去重。
+生成扁平化真实 `node_modules`（兼容 dsh），底层仍用 store 硬链接去重。
 
 ### 为什么要允许构建脚本
 
-pnpm 10+ 默认**不执行**依赖的构建脚本，会导致 `ERR_PNPM_IGNORED_BUILDS`（node-pty、koffi 等原生模块缺失）。安装时使用：
+pnpm 10+ 默认**不执行**依赖构建脚本，会导致 `ERR_PNPM_IGNORED_BUILDS`（node-pty、koffi 等原生模块缺失）。安装时使用 `--config.dangerouslyAllowAllBuilds=true`。
 
-```
---config.dangerouslyAllowAllBuilds=true
-```
+### 整合包启动为什么用 `--profile`
+
+dsh 的 `web` 是一个 **profile 名**（`dsh web` 等价 `--profile web`）。整合包自带 profile，启动时用 `dsh --profile <profile名>`。profile 定义须在 `$DSH_HOME/profiles/<名>/` 下，含三件套：`package.json` + `cordis.patch.yml` + `pnpm-workspace.yaml`。
 
 ## 开发
 
@@ -126,7 +190,7 @@ pnpm tauri build --no-bundle
 node gen-icons.mjs
 ```
 
-产物位置：`src-tauri/target/release/dsh-multiver.exe`
+产物位置：`src-tauri/target/release/dsh-modpack.exe`
 
 ### 环境要求
 
@@ -138,18 +202,21 @@ node gen-icons.mjs
 
 - **外壳**：Tauri 2（Rust）
 - **前端**：Vite 8 + Vue 3
+- **整合包协议**：DSH-PackForge（`protocol-2026-09`）
 - **打包**：便携版单 exe
 
 ## 已知限制
 
 - 便携版单 exe 不含 WebView2 与 VC++ 运行时，极老或纯净版 Win10 可能需手动安装 WebView2
 - 终端 `dsh` 转发脚本写入 `%APPDATA%\npm\`，该目录需在 PATH 中
-- Windows 图标有缓存，更新 exe 后若图标未变，需清缓存（`ie4uinit.exe -show` 或重启资源管理器）
-- 使用 npm 官方源时，国内下载可能较慢；淘宝镜像同步滞后，可能出现子包缺失
+- 部分上游 dsh 版本依赖已下架的私有包，任何源都无法安装（界面会标灰并提示换版本）
+- 使用 npm 官方源时国内下载可能较慢；淘宝镜像同步滞后，可能出现子包缺失
+- 整合包 `type:"dshhome"` 形态代码已实现，但当前生态无真实样本可验证
 
 ## 致谢
 
 - [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) — 本项目管理的对象
+- [DSH-PackForge](https://github.com/DSH-PackForge/DSH-PackForge) — 整合包格式规范
 - [Tauri](https://tauri.app/) — 应用外壳
 - [Vue](https://vuejs.org/) — 前端框架
 
