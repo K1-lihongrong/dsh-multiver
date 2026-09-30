@@ -46,6 +46,11 @@ function toggleSelect(name) {
 function isSelected(name) {
   return selected.value.has(name);
 }
+/// 该条目当前是否应阻塞操作：正在被卸载，或批量卸载中且被选中。
+/// 批量时一次性阻塞所有选中条目（而非按顺序逐个），避免"没轮到就还能点"。
+function isBlocked(name) {
+  return uninstalling.value === name || (batchBusy.value && selected.value.has(name));
+}
 /// 全选/取消全选某一组（list 为该组实例数组）
 function toggleSelectAll(list, on) {
   const s = new Set(selected.value);
@@ -812,7 +817,7 @@ onUnmounted(() => {
       <!-- 版本分组 -->
       <ul class="ver-list" v-if="versionList.length">
         <li v-for="v in versionList" :key="v.version" class="ver-item" :class="{ 'item-selected': isSelected(v.version) }">
-          <input type="checkbox" class="sel-box" :checked="isSelected(v.version)" @change="toggleSelect(v.version)" />
+          <input type="checkbox" class="sel-box" :checked="isSelected(v.version)" :disabled="batchBusy" @change="toggleSelect(v.version)" />
           <div class="ver-main">
             <span class="ver-num">{{ v.version }}</span>
             <span class="badge" v-if="v.is_default">默认</span>
@@ -822,15 +827,15 @@ onUnmounted(() => {
             <span class="ver-meta" v-if="verSizes[v.version] != null">占用 {{ fmtSize(verSizes[v.version]) }}</span>
           </div>
           <div class="ver-actions">
-            <button class="btn primary" @click="run(v.version)" :disabled="!!runningVersion || uninstalling === v.version">{{ runningVersion === v.version ? "启动中..." : "运行" }}</button>
-            <button class="btn" @click="openInBrowser(v.version)" :disabled="uninstalling === v.version" title="在新终端启动并在系统浏览器打开">浏览器打开</button>
-            <button class="btn" @click="setDefault(v.version)" :disabled="v.is_default || uninstalling === v.version">设为默认</button>
-            <button class="btn" @click="createShortcut(v.version)" :disabled="uninstalling === v.version" title="在桌面创建 DSH 快捷方式">桌面快捷方式</button>
-            <button class="btn" @click="scanVersionSize(v.version)" :disabled="scanningVer === v.version || uninstalling === v.version" title="统计该版本占用的磁盘空间">
+            <button class="btn primary" @click="run(v.version)" :disabled="!!runningVersion || isBlocked(v.version)">{{ runningVersion === v.version ? "启动中..." : "运行" }}</button>
+            <button class="btn" @click="openInBrowser(v.version)" :disabled="isBlocked(v.version)" title="在新终端启动并在系统浏览器打开">浏览器打开</button>
+            <button class="btn" @click="setDefault(v.version)" :disabled="v.is_default || isBlocked(v.version)">设为默认</button>
+            <button class="btn" @click="createShortcut(v.version)" :disabled="isBlocked(v.version)" title="在桌面创建 DSH 快捷方式">桌面快捷方式</button>
+            <button class="btn" @click="scanVersionSize(v.version)" :disabled="scanningVer === v.version || isBlocked(v.version)" title="统计该版本占用的磁盘空间">
               {{ scanningVer === v.version ? "扫描中..." : (verSizes[v.version] != null ? "重新扫描占用" : "扫描占用") }}
             </button>
             <div class="menu-wrap" v-if="v.isolated">
-              <button class="btn active" @click.stop="toggleMenu(v.version)" :disabled="uninstalling === v.version">
+              <button class="btn active" @click.stop="toggleMenu(v.version)" :disabled="isBlocked(v.version)">
                 已隔离 ▾
               </button>
               <div class="menu" v-if="openMenu === v.version" @click.stop>
@@ -849,7 +854,7 @@ onUnmounted(() => {
               v-else
               class="btn"
               @click="toggleIsolated(v.version, false)"
-              :disabled="uninstalling === v.version"
+              :disabled="isBlocked(v.version)"
               title="开启隔离（该版本使用独立数据目录）"
             >隔离</button>
             <button class="btn danger" @click="uninstall(v.version)" :disabled="!!uninstalling || batchBusy">{{ uninstalling === v.version ? "卸载中..." : "卸载" }}</button>
@@ -862,6 +867,7 @@ onUnmounted(() => {
         <label class="batch-select-all">
           <input type="checkbox"
             :checked="versionList.length > 0 && versionList.every((x) => isSelected(x.version))"
+            :disabled="batchBusy"
             @change="toggleSelectAll(versionList, $event.target.checked)" />
           全选
         </label>
@@ -888,7 +894,7 @@ onUnmounted(() => {
           @mouseenter="hoverItem = v.version"
           @mouseleave="hoverItem = null"
         >
-          <input type="checkbox" class="sel-box" :checked="isSelected(v.version)" @change="toggleSelect(v.version)" />
+          <input type="checkbox" class="sel-box" :checked="isSelected(v.version)" :disabled="batchBusy" @change="toggleSelect(v.version)" />
           <div class="pack-icon">
             <img v-if="v.modpack_icon && /^https?:/.test(v.modpack_icon)" :src="v.modpack_icon" alt="" />
             <span v-else>📦</span>
@@ -907,15 +913,15 @@ onUnmounted(() => {
             </div>
           </div>
           <div class="ver-actions">
-            <button class="btn primary" @click="run(v.version)" :disabled="!!runningVersion || uninstalling === v.version">{{ runningVersion === v.version ? "启动中..." : "运行" }}</button>
-            <button class="btn" @click="openInBrowser(v.version)" :disabled="uninstalling === v.version">浏览器打开</button>
-            <button class="btn" @click="createShortcut(v.version)" :disabled="uninstalling === v.version">桌面快捷方式</button>
-            <button class="btn" @click="exportModpack(v.version)" :disabled="uninstalling === v.version" title="把该实例导出为 .dspack 整合包">导出</button>
-            <button class="btn" @click="scanVersionSize(v.version)" :disabled="scanningVer === v.version || uninstalling === v.version">
+            <button class="btn primary" @click="run(v.version)" :disabled="!!runningVersion || isBlocked(v.version)">{{ runningVersion === v.version ? "启动中..." : "运行" }}</button>
+            <button class="btn" @click="openInBrowser(v.version)" :disabled="isBlocked(v.version)">浏览器打开</button>
+            <button class="btn" @click="createShortcut(v.version)" :disabled="isBlocked(v.version)">桌面快捷方式</button>
+            <button class="btn" @click="exportModpack(v.version)" :disabled="isBlocked(v.version)" title="把该实例导出为 .dspack 整合包">导出</button>
+            <button class="btn" @click="scanVersionSize(v.version)" :disabled="scanningVer === v.version || isBlocked(v.version)">
               {{ scanningVer === v.version ? "扫描中..." : (verSizes[v.version] != null ? "重新扫描占用" : "扫描占用") }}
             </button>
             <div class="menu-wrap">
-              <button class="btn active" @click.stop="toggleMenu(v.version)" :disabled="uninstalling === v.version">已隔离 ▾</button>
+              <button class="btn active" @click.stop="toggleMenu(v.version)" :disabled="isBlocked(v.version)">已隔离 ▾</button>
               <div class="menu" v-if="openMenu === v.version" @click.stop>
                 <button class="menu-item" @click="openIsolatedDir(v.version)">打开数据目录</button>
                 <button class="menu-item" @click="scanSize(v.version)" :disabled="scanning === v.version">
@@ -951,6 +957,7 @@ onUnmounted(() => {
         <label class="batch-select-all">
           <input type="checkbox"
             :checked="modpackList.length > 0 && modpackList.every((x) => isSelected(x.version))"
+            :disabled="batchBusy"
             @change="toggleSelectAll(modpackList, $event.target.checked)" />
           全选
         </label>
