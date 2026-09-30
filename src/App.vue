@@ -35,6 +35,55 @@ const installDetail = ref("");
 const installFraction = ref(0);
 const uninstalling = ref(""); // 正在卸载的版本号
 const runningVersion = ref(""); // 正在启动的版本号（用于禁用按钮 + 显示反馈）
+// ---- 批量操作 ----
+const selected = ref(new Set());  // 已选中的实例名（version）集合
+const batchBusy = ref(false);     // 批量卸载进行中
+function toggleSelect(name) {
+  const s = new Set(selected.value);
+  if (s.has(name)) s.delete(name); else s.add(name);
+  selected.value = s;
+}
+function isSelected(name) {
+  return selected.value.has(name);
+}
+/// 全选/取消全选某一组（list 为该组实例数组）
+function toggleSelectAll(list, on) {
+  const s = new Set(selected.value);
+  for (const it of list) {
+    if (on) s.add(it.version); else s.delete(it.version);
+  }
+  selected.value = s;
+}
+function clearSelection() {
+  selected.value = new Set();
+}
+/// 批量卸载已选实例（一次确认，逐个执行，实时反馈进度）
+async function batchUninstall() {
+  const names = Array.from(selected.value);
+  if (!names.length) return notify("未选择任何项");
+  if (!(await ask("确定卸载选中的 " + names.length + " 个实例？此操作不可恢复。", { title: "批量卸载", kind: "warning" }))) return;
+  batchBusy.value = true;
+  let okCount = 0;
+  const failed = [];
+  for (let i = 0; i < names.length; i++) {
+    const name = names[i];
+    notify("正在卸载（" + (i + 1) + "/" + names.length + "）：" + name);
+    try {
+      await invoke("uninstall_version", { version: name });
+      okCount++;
+    } catch (e) {
+      failed.push(name + "：" + e);
+    }
+  }
+  await refresh().catch(() => {});
+  selected.value = new Set();
+  batchBusy.value = false;
+  if (failed.length) {
+    notify("批量卸载完成：成功 " + okCount + " 个，失败 " + failed.length + " 个。\n失败详情：\n" + failed.join("\n"));
+  } else {
+    notify("批量卸载完成：共 " + okCount + " 个");
+  }
+}
 const envChecks = ref([]);
 const envChecked = ref(false);
 const envPassed = ref(false);
@@ -760,7 +809,8 @@ onUnmounted(() => {
 
       <!-- 版本分组 -->
       <ul class="ver-list" v-if="versionList.length">
-        <li v-for="v in versionList" :key="v.version" class="ver-item">
+        <li v-for="v in versionList" :key="v.version" class="ver-item" :class="{ 'item-selected': isSelected(v.version) }">
+          <input type="checkbox" class="sel-box" :checked="isSelected(v.version)" @change="toggleSelect(v.version)" />
           <div class="ver-main">
             <span class="ver-num">{{ v.version }}</span>
             <span class="badge" v-if="v.is_default">默认</span>
@@ -804,6 +854,23 @@ onUnmounted(() => {
         </li>
       </ul>
 
+      <!-- 版本组批量操作栏 -->
+      <div class="batch-bar" v-if="versionList.length">
+        <label class="batch-select-all">
+          <input type="checkbox"
+            :checked="versionList.length > 0 && versionList.every((x) => isSelected(x.version))"
+            @change="toggleSelectAll(versionList, $event.target.checked)" />
+          全选
+        </label>
+        <template v-if="selected.size">
+          <span class="batch-count">已选 {{ selected.size }} 项</span>
+          <button class="btn small" @click="clearSelection" :disabled="batchBusy">清除选择</button>
+          <button class="btn danger small" @click="batchUninstall" :disabled="batchBusy">
+            {{ batchBusy ? "批量卸载中..." : "批量卸载" }}
+          </button>
+        </template>
+      </div>
+
       <!-- 整合包分组 -->
       <div class="group-head" v-if="modpackList.length">
         <h3>整合包</h3>
@@ -814,9 +881,11 @@ onUnmounted(() => {
           v-for="v in modpackList"
           :key="v.version"
           class="pack-item"
+          :class="{ 'item-selected': isSelected(v.version) }"
           @mouseenter="hoverItem = v.version"
           @mouseleave="hoverItem = null"
         >
+          <input type="checkbox" class="sel-box" :checked="isSelected(v.version)" @change="toggleSelect(v.version)" />
           <div class="pack-icon">
             <img v-if="v.modpack_icon && /^https?:/.test(v.modpack_icon)" :src="v.modpack_icon" alt="" />
             <span v-else>📦</span>
@@ -873,6 +942,23 @@ onUnmounted(() => {
           </div>
         </li>
       </ul>
+
+      <!-- 整合包组批量操作栏 -->
+      <div class="batch-bar" v-if="modpackList.length">
+        <label class="batch-select-all">
+          <input type="checkbox"
+            :checked="modpackList.length > 0 && modpackList.every((x) => isSelected(x.version))"
+            @change="toggleSelectAll(modpackList, $event.target.checked)" />
+          全选
+        </label>
+        <template v-if="selected.size">
+          <span class="batch-count">已选 {{ selected.size }} 项</span>
+          <button class="btn small" @click="clearSelection" :disabled="batchBusy">清除选择</button>
+          <button class="btn danger small" @click="batchUninstall" :disabled="batchBusy">
+            {{ batchBusy ? "批量卸载中..." : "批量卸载" }}
+          </button>
+        </template>
+      </div>
     </section>
 
     <section class="panel">
@@ -1538,4 +1624,26 @@ body {
   margin-top: 4px; margin-left: 22px;
 }
 .env-hint { font-size: 12px; color: #6b7280; line-height: 1.5; }
+
+/* ---------- 批量操作 ---------- */
+.sel-box {
+  flex: 0 0 auto; width: 15px; height: 15px; margin: 0 2px 0 0;
+  cursor: pointer; align-self: center;
+}
+.ver-item.item-selected,
+.pack-item.item-selected {
+  background: #f2f5ff;
+  border-color: #c3cdf5;
+}
+.batch-bar {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  margin: 8px 0 4px; padding: 8px 10px;
+  background: #f7f8fa; border: 1px solid #eef1f5; border-radius: 8px;
+  font-size: 12px; color: #6b7280;
+}
+.batch-select-all {
+  display: flex; align-items: center; gap: 6px; cursor: pointer; user-select: none;
+}
+.batch-select-all input { cursor: pointer; }
+.batch-count { color: #4f6ef7; font-weight: 600; }
 </style>
