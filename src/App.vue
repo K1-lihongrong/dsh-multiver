@@ -217,6 +217,11 @@ async function clearBroken() {
   }
 }
 
+/// 点可用版本 chip：填入输入框，等用户点「安装」再执行。
+function pickVersion(v) {
+  installInput.value = v;
+}
+
 async function install(v) {
   const ver = (v || installInput.value).trim();
   if (!ver) return notify("请输入版本号");
@@ -676,7 +681,7 @@ onUnmounted(() => {
           class="chip"
           :class="{ 'chip-broken': isBroken(v) }"
           :title="isBroken(v) ? '此版本上次安装失败（依赖已下架），点右下角可清除标记' : ''"
-          @click="install(v)"
+          @click="pickVersion(v)"
           :disabled="loading"
         >{{ v }}</button>
         <div class="hint" v-if="!filteredRemote.length">没有匹配的版本</div>
@@ -756,8 +761,8 @@ onUnmounted(() => {
           <span>上次回收依赖仓库：{{ fmtTs(state.maintenance.last_prune_at) }}</span>
         </div>
         <div class="maint-actions">
-          <button class="btn small" @click="doMaintenance('cleanup')" :disabled="maintBusy">{{ maintBusy === 'cleanup' ? '清理中...' : '清理孤立缓存' }}</button>
-          <button class="btn small" @click="doMaintenance('prune')" :disabled="maintBusy">{{ maintBusy === 'prune' ? '回收中...' : '回收依赖仓库' }}</button>
+          <button class="btn small" @click="doMaintenance('cleanup')" :disabled="!!maintBusy">{{ maintBusy === 'cleanup' ? '清理中...' : '清理孤立缓存' }}</button>
+          <button class="btn small" @click="doMaintenance('prune')" :disabled="!!maintBusy">{{ maintBusy === 'prune' ? '回收中...' : '回收依赖仓库' }}</button>
           <button class="btn small" @click="openDir('logs')">打开日志目录</button>
         </div>
       </div>
@@ -1007,7 +1012,7 @@ body {
 .remote-toolbar { display: flex; gap: 8px; margin-bottom: 10px; }
 .remote-search { flex: 1; min-width: 0; padding: 6px 12px; border: 1px solid #dcdfe4; border-radius: 7px; font-size: 13px; font-family: inherit; outline: none; }
 .remote-search:focus { border-color: #4f6ef7; }
-.chips { display: flex; flex-wrap: wrap; gap: 6px; max-height: 220px; overflow-y: auto; }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; max-height: 120px; overflow-y: auto; }
 .chip {
   border: 1px solid #e2e5ea; background: #fafbfc; color: #4b5563;
   padding: 4px 10px; border-radius: 6px; font-size: 12px;
@@ -1029,6 +1034,8 @@ body {
 .maint-status { font-size: 12px; color: #9aa1ab; line-height: 1.8; margin-bottom: 10px; }
 .maint-status span { display: block; }
 .maint-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.maint-actions .btn { color: #4f6ef7; border-color: #c3cdf5; }
+.maint-actions .btn:hover:not(:disabled) { background: #f5f7ff; border-color: #4f6ef7; }
 .field { margin-bottom: 14px; }
 .field label { display: block; font-size: 12px; color: #6b7280; margin-bottom: 6px; }
 .field-row { display: flex; gap: 8px; }

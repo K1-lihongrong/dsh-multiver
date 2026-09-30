@@ -529,8 +529,8 @@ fn build_topbar_script(version: &str, url: &str) -> String {
     let url_js = url.replace('\\', "\\\\").replace('\'', "\\'");
     let mut s = String::new();
     s.push_str("(function() {\n");
-    s.push_str("  if (window.__dshBarInjected) return;\n");
-    s.push_str("  window.__dshBarInjected = true;\n");
+    s.push_str("  if (window.__dshDotInjected) return;\n");
+    s.push_str("  window.__dshDotInjected = true;\n");
     s.push_str(&format!("  var VER = '{}';\n", ver));
     s.push_str(&format!("  var URL = '{}';\n", url_js));
     s.push_str("  function inject() {\n");
@@ -539,14 +539,23 @@ fn build_topbar_script(version: &str, url: &str) -> String {
     s.push_str("    var open = false;\n");
     s.push_str("    var dot = document.createElement('div');\n");
     s.push_str("    dot.id = '__dsh_dot';\n");
-    s.push_str("    dot.textContent = 'DSH';\n");
-    s.push_str("    dot.title = 'DSH ' + VER;\n");
-    s.push_str("    dot.style.cssText = 'position:fixed;top:8px;left:8px;z-index:2147483647;background:#1f2328;color:#fff;font:11px/1 system-ui,sans-serif;padding:5px 8px;border-radius:12px;cursor:pointer;opacity:.5;box-shadow:0 1px 4px rgba(0,0,0,.3);transition:opacity .15s;';\n");
-    s.push_str("    dot.onmouseenter = function(){ dot.style.opacity='1'; };\n");
-    s.push_str("    dot.onmouseleave = function(){ if(!open) dot.style.opacity='.5'; };\n");
     s.push_str("    var panel = document.createElement('div');\n");
     s.push_str("    panel.id = '__dsh_panel';\n");
-    s.push_str("    panel.style.cssText = 'position:fixed;top:8px;left:8px;z-index:2147483647;display:none;background:#1f2328;color:#fff;font:12px/1.6 system-ui,sans-serif;padding:10px 12px;border-radius:8px;box-shadow:0 4px 16px rgba(0,0,0,.4);min-width:300px;max-width:70vw;';\n");
+    s.push_str("    panel.style.cssText = 'position:fixed;top:10px;left:10px;z-index:2147483647;display:none;background:#1f2328;color:#fff;font:12px/1.6 system-ui,sans-serif;padding:10px 12px;border-radius:8px;box-shadow:0 4px 16px rgba(0,0,0,.4);min-width:300px;max-width:70vw;';\n");
+    // 三种状态统一切换
+    s.push_str("    function setMode(mode) {\n");
+    s.push_str("      if (mode === 'open') {\n");
+    s.push_str("        dot.style.cssText = 'position:fixed;top:10px;left:10px;z-index:2147483647;width:26px;height:26px;border-radius:8px;background:#4f6ef7;cursor:pointer;box-shadow:0 1px 4px rgba(0,0,0,.25);opacity:1;display:flex;align-items:center;justify-content:center;color:#fff;font:11px/1 system-ui,sans-serif;';\n");
+    s.push_str("        dot.textContent = '';\n");
+    s.push_str("      } else if (mode === 'pill') {\n");
+    s.push_str("        dot.style.cssText = 'position:fixed;top:10px;left:10px;z-index:2147483647;height:20px;padding:0 8px;border-radius:10px;background:#4f6ef7;cursor:pointer;box-shadow:0 1px 4px rgba(0,0,0,.25);opacity:1;display:flex;align-items:center;justify-content:center;color:#fff;font:11px/1 system-ui,sans-serif;white-space:nowrap;';\n");
+    s.push_str("        dot.textContent = VER;\n");
+    s.push_str("      } else {\n");
+    s.push_str("        dot.style.cssText = 'position:fixed;top:10px;left:10px;z-index:2147483647;width:8px;height:8px;border-radius:50%;background:#4f6ef7;cursor:pointer;transition:all .18s cubic-bezier(.4,0,.2,1);box-shadow:0 1px 4px rgba(0,0,0,.2);opacity:.55;';\n");
+    s.push_str("        dot.textContent = '';\n");
+    s.push_str("      }\n");
+    s.push_str("    }\n");
+    s.push_str("    setMode('dot');\n");
     s.push_str("    var head = document.createElement('div');\n");
     s.push_str("    head.style.cssText = 'display:flex;align-items:center;gap:8px;margin-bottom:8px;';\n");
     s.push_str("    var title = document.createElement('span');\n");
@@ -572,9 +581,11 @@ fn build_topbar_script(version: &str, url: &str) -> String {
     s.push_str("      } catch(e) {}\n");
     s.push_str("      location.reload();\n");
     s.push_str("    };\n");
-    s.push_str("    function show(){ open=true; dot.style.display='none'; panel.style.display='block'; }\n");
-    s.push_str("    function hide(){ open=false; panel.style.display='none'; dot.style.display=''; dot.style.opacity='.5'; }\n");
-    s.push_str("    dot.onclick = show;\n");
+    s.push_str("    function show(){ open=true; panel.style.display='block'; setMode('open'); }\n");
+    s.push_str("    function hide(){ open=false; panel.style.display='none'; setMode('dot'); }\n");
+    s.push_str("    dot.onmouseenter = function(){ if(!open) setMode('pill'); };\n");
+    s.push_str("    dot.onmouseleave = function(){ if(!open) setMode('dot'); };\n");
+    s.push_str("    dot.onclick = function(){ open ? hide() : show(); };\n");
     s.push_str("    btnClose.onclick = hide;\n");
     s.push_str("    document.addEventListener('keydown', function(e){ if(e.key==='Escape' && open) hide(); });\n");
     s.push_str("    panel.appendChild(head); panel.appendChild(urlBox); panel.appendChild(btnRestart);\n");
@@ -586,7 +597,6 @@ fn build_topbar_script(version: &str, url: &str) -> String {
     s.push_str("})();\n");
     s
 }
-
 
 #[tauri::command]
 fn set_isolated(app: tauri::AppHandle, version: String, isolated: bool) -> Result<String, String> {
