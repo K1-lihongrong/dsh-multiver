@@ -1,4 +1,5 @@
 mod actions;
+mod cli;
 mod config;
 mod envcheck;
 mod jobobj;
@@ -25,6 +26,11 @@ static NEXT_GEN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::ne
 
 /// 管理器自身所在目录（config.json 的存放处）
 fn manager_dir(_app: &tauri::AppHandle) -> PathBuf {
+    manager_dir_plain()
+}
+
+/// 同上，但不依赖 AppHandle——供无头 CLI 模式使用。
+pub(crate) fn manager_dir_plain() -> PathBuf {
     // 优先使用 exe 所在目录；开发模式下回退到当前工作目录
     if let Ok(exe) = std::env::current_exe() {
         if let Some(parent) = exe.parent() {
@@ -228,7 +234,7 @@ fn set_default(app: tauri::AppHandle, version: Option<String>) -> Result<String,
 /// - 有默认版本：写入 dsh.cmd（含 DSH_HOME，按默认版本是否隔离决定）
 /// - 无默认版本：删除 dsh.cmd
 /// 供 set_default / set_root / set_isolated / uninstall_version 统一调用。
-fn regenerate_forward_script(mdir: &PathBuf, cfg: &Config) {
+pub(crate) fn regenerate_forward_script(mdir: &PathBuf, cfg: &Config) {
     let target = path_bin_dir(mdir);
     match &cfg.default_version {
         Some(v) => {
@@ -790,11 +796,6 @@ fn open_dir(app: tauri::AppHandle, which: String) -> Result<(), String> {
 }
 
 #[tauri::command]
-fn get_manager_dir(app: tauri::AppHandle) -> String {
-    manager_dir(&app).to_string_lossy().to_string()
-}
-
-#[tauri::command]
 fn check_env(app: tauri::AppHandle) -> Vec<envcheck::CheckItem> {
     let mdir = manager_dir(&app);
     let cfg = Config::load(&mdir);
@@ -909,6 +910,25 @@ fn set_windows_app_user_model_id(_app: &tauri::AppHandle) {}
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // ── 无头 CLI 模式 ──
+    // 带任一 CLI 参数则不初始化 GUI，执行后按退出码退出。
+    // 分流必须早于 tauri::Builder，避免白白起一个 GUI 进程。
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    match cli::parse(&args) {
+        Ok(Some(cmd)) => {
+            cli::setup_console();
+            let code = cli::run(cmd);
+            std::process::exit(code);
+        }
+        Ok(None) => {} // 无 CLI 参数 → 正常启动 GUI
+        Err(msg) => {
+            cli::setup_console();
+            eprintln!("参数错误：{}", msg);
+            eprintln!("用 --help 查看用法");
+            std::process::exit(1);
+        }
+    }
+
     let procs: ProcMap = Arc::new(Mutex::new(HashMap::new()));
     let procs_setup = procs.clone();
     tauri::Builder::default()
@@ -930,7 +950,6 @@ pub fn run() {
             set_root,
             open_dir,
             open_url,
-            get_manager_dir,
             check_env,
             set_isolated,
             scan_version_size,

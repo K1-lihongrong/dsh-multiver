@@ -1,6 +1,6 @@
 [package]
 name = "dsh-multiver"
-version = "0.1.7"
+version = "0.1.8"
 description = "Lightweight portable version manager for DeepSeek Harness"
 authors = ["K1-lihongrong"]
 edition = "2021"
@@ -34,6 +34,7 @@ windows-sys = { version = "0.59", features = [
     "Win32_System_Threading",
     "Win32_Security",
     "Win32_Storage_FileSystem",
+    "Win32_System_Console",
 ] }
 
 
