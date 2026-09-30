@@ -2,7 +2,7 @@
 
 一个**轻量、便携**的 DeepSeek Harness（dsh）版本管理器，用于在同一台机器上安装、切换、运行多个 dsh 版本。
 
-- 🪶 **极致轻量**：约 4.5 MB 单 exe，无需安装，双击即用
+- 🪶 **极致轻量**：约 6.6 MB 单 exe，无需安装，双击即用
 - 💾 **省磁盘**：用 pnpm store 硬链接，多个版本共享依赖文件
 - 🩺 **安装前自检 + 引导**：自动检查 Node / pnpm / 磁盘 / 源连通，缺失时给出下载链接与安装步骤
 - 📊 **细粒度进度**：实时显示安装阶段与依赖进度百分比
@@ -14,6 +14,7 @@
 - 🖥️ **内嵌窗口运行**：点「运行」在应用内直接打开 dsh Web 界面（每个版本独立 WebView2 缓存，互不污染），也可一键在系统浏览器打开
 - 🚀 **桌面快捷方式**：为任意版本在桌面生成 `DSH <版本号>.lnk`，双击直达对应版本
 - 🧹 **自动维护**：启动时清理孤立 webview 缓存，定期回收 pnpm store
+- ⌨️ **无头 CLI**：`--list` / `--install` / `--uninstall` / `--set-default` / `--maintenance`，不启动界面即可完成全部操作，方便脚本化
 
 ## 截图
 
@@ -30,6 +31,8 @@
 从 [Releases](https://github.com/K1-lihongrong/dsh-multiver/releases) 下载最新的 `dsh-multiver.exe`，放到任意目录，双击运行。
 
 > 需要系统已安装 **WebView2**（Windows 11 及 Windows 10 1803+ 自带）。
+
+📖 **完整操作说明见 [使用手册](docs/使用手册.md)** —— 含环境准备、各项功能、常见问题排查。
 
 ## 使用
 
@@ -98,13 +101,32 @@ dsh web
 
 日志写在 `<数据根>/logs/maintenance.log`。
 
+### 命令行模式（CLI）
+
+v0.1.8 起支持**无头 CLI** —— 带任一 CLI 参数时不启动图形界面，执行完按退出码退出（成功 `0` / 失败 `1`）：
+
+```bash
+dsh-multiver.exe --list                                    # 列出已安装版本
+dsh-multiver.exe --install <版本> [--registry <url>]       # 无头安装
+dsh-multiver.exe --uninstall <版本>                        # 无头卸载
+dsh-multiver.exe --set-default <版本>                      # 设默认版本
+dsh-multiver.exe --maintenance [--cleanup|--prune]         # 无头维护
+dsh-multiver.exe --help                                    # 帮助
+```
+
+- `--list` 一行一个版本号（默认版本以 `* ` 前缀标记），输出可直接管道
+- 安装进度走 stderr，stdout 保持干净
+- 破坏性命令**无交互确认**，请确保参数正确
+
+详见 [使用手册 · 命令行模式](docs/使用手册.md#八命令行模式cli)。
+
 ## 与其他 dsh 工具的区别
 
 dsh 生态里已有几个相关工具，`dsh-multiver` 的定位与它们不同：
 
 | 工具 | 定位 | 数据隔离 | 省磁盘 | 环境自检 | 形态 |
 | :--- | :--- | :--- | :--- | :--- | :--- |
-| **dsh-multiver** | 版本管理 + 省磁盘 + 自检 | ✅ 可选 | ✅ pnpm store 硬链接 | ✅ 5 项（含磁盘/源）+ 引导 | 4.5 MB 单 exe |
+| **dsh-multiver** | 版本管理 + 省磁盘 + 自检 | ✅ 可选 | ✅ pnpm store 硬链接 | ✅ 5 项（含磁盘/源）+ 引导 | 6.6 MB 单 exe |
 | [dshvm](https://github.com/dsh-so/dshvm) | 版本管理 + 数据隔离 | ✅（核心特性） | 未强调 | ✅ 引导页 | Tauri + CLI |
 | [dsh-launcher](https://github.com/NevermindZZT/dsh-launcher) | 一键启动 | ❌ | N/A | ✅ doctor | 2 MB 单文件 |
 
