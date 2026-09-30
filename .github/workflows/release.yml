@@ -67,7 +67,7 @@ jobs:
           tag_name: ${{ github.event.inputs.tag || github.ref_name }}
           name: DSH 版本管理器 ${{ github.event.inputs.tag || github.ref_name }}
           files: dsh-multiver.exe
-          generate_release_notes: true
+          body_path: RELEASE_NOTES.md
           draft: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
