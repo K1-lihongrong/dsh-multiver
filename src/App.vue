@@ -35,6 +35,62 @@ const installDetail = ref("");
 const installFraction = ref(0);
 const runningVersion = ref(""); // 正在启动的版本号（用于禁用按钮 + 显示反馈）
 const uninstalling = ref("");   // 正在卸载的版本号（用于禁用按钮 + 显示反馈）
+// ---- 批量操作 ----
+const selected = ref(new Set());  // 已选中的版本号集合
+const batchBusy = ref(false);     // 批量卸载进行中
+function toggleSelect(name) {
+  const s = new Set(selected.value);
+  if (s.has(name)) s.delete(name); else s.add(name);
+  selected.value = s;
+}
+function isSelected(name) {
+  return selected.value.has(name);
+}
+/// 该版本当前是否应阻塞操作：正在被卸载，或批量卸载中且被选中。
+/// 批量时一次性阻塞所有选中项（而非按顺序逐个），避免"没轮到就还能点"。
+function isBlocked(name) {
+  return uninstalling.value === name || (batchBusy.value && selected.value.has(name));
+}
+/// 全选/取消全选
+function toggleSelectAll(on) {
+  const s = new Set(selected.value);
+  for (const it of installed.value) {
+    if (on) s.add(it.version); else s.delete(it.version);
+  }
+  selected.value = s;
+}
+function clearSelection() {
+  selected.value = new Set();
+}
+/// 批量卸载已选版本（一次确认，逐个执行，实时反馈进度）
+async function batchUninstall() {
+  const names = Array.from(selected.value);
+  if (!names.length) return notify("未选择任何项");
+  if (!(await ask("确定卸载选中的 " + names.length + " 个版本？此操作不可恢复。", { title: "批量卸载", kind: "warning" }))) return;
+  batchBusy.value = true;
+  let okCount = 0;
+  const failed = [];
+  for (let i = 0; i < names.length; i++) {
+    const name = names[i];
+    notify("正在卸载（" + (i + 1) + "/" + names.length + "）：" + name);
+    uninstalling.value = name;  // 让该卡片显示「卸载中...」
+    try {
+      await invoke("uninstall_version", { version: name });
+      okCount++;
+    } catch (e) {
+      failed.push(name + "：" + e);
+    }
+  }
+  await refresh().catch(() => {});
+  uninstalling.value = "";
+  selected.value = new Set();
+  batchBusy.value = false;
+  if (failed.length) {
+    notify("批量卸载完成：成功 " + okCount + " 个，失败 " + failed.length + " 个。\n失败详情：\n" + failed.join("\n"));
+  } else {
+    notify("批量卸载完成：共 " + okCount + " 个");
+  }
+}
 const envChecks = ref([]);
 const envChecked = ref(false);
 const envPassed = ref(false);
@@ -468,7 +524,8 @@ onUnmounted(() => {
       </div>
 
       <ul class="ver-list" v-else>
-        <li v-for="v in installed" :key="v.version" class="ver-item">
+        <li v-for="v in installed" :key="v.version" class="ver-item" :class="{ 'item-selected': isSelected(v.version) }">
+          <input type="checkbox" class="sel-box" :checked="isSelected(v.version)" :disabled="batchBusy" @change="toggleSelect(v.version)" />
           <div class="ver-main">
             <span class="ver-num">{{ v.version }}</span>
             <span class="badge" v-if="v.is_default">默认</span>
@@ -478,15 +535,15 @@ onUnmounted(() => {
             <span class="ver-meta" v-if="verSizes[v.version] != null">占用 {{ fmtSize(verSizes[v.version]) }}</span>
           </div>
           <div class="ver-actions">
-            <button class="btn primary" @click="run(v.version)" :disabled="!!runningVersion">{{ runningVersion === v.version ? "启动中..." : "运行" }}</button>
-            <button class="btn" @click="openInBrowser(v.version)" title="在新终端启动并在系统浏览器打开">浏览器打开</button>
-            <button class="btn" @click="setDefault(v.version)" :disabled="v.is_default">设为默认</button>
-            <button class="btn" @click="createShortcut(v.version)" title="在桌面创建 DSH 快捷方式">桌面快捷方式</button>
-            <button class="btn" @click="scanVersionSize(v.version)" :disabled="scanningVer === v.version" title="统计该版本占用的磁盘空间">
+            <button class="btn primary" @click="run(v.version)" :disabled="!!runningVersion || isBlocked(v.version)">{{ runningVersion === v.version ? "启动中..." : "运行" }}</button>
+            <button class="btn" @click="openInBrowser(v.version)" :disabled="isBlocked(v.version)" title="在新终端启动并在系统浏览器打开">浏览器打开</button>
+            <button class="btn" @click="setDefault(v.version)" :disabled="v.is_default || isBlocked(v.version)">设为默认</button>
+            <button class="btn" @click="createShortcut(v.version)" :disabled="isBlocked(v.version)" title="在桌面创建 DSH 快捷方式">桌面快捷方式</button>
+            <button class="btn" @click="scanVersionSize(v.version)" :disabled="scanningVer === v.version || isBlocked(v.version)" title="统计该版本占用的磁盘空间">
               {{ scanningVer === v.version ? "扫描中..." : (verSizes[v.version] != null ? "重新扫描占用" : "扫描占用") }}
             </button>
             <div class="menu-wrap" v-if="v.isolated">
-              <button class="btn active" @click.stop="toggleMenu(v.version)">
+              <button class="btn active" @click.stop="toggleMenu(v.version)" :disabled="isBlocked(v.version)">
                 已隔离 ▾
               </button>
               <div class="menu" v-if="openMenu === v.version" @click.stop>
@@ -505,12 +562,31 @@ onUnmounted(() => {
               v-else
               class="btn"
               @click="toggleIsolated(v.version, false)"
+              :disabled="isBlocked(v.version)"
               title="开启隔离（该版本使用独立数据目录）"
             >隔离</button>
-            <button class="btn danger" @click="uninstall(v.version)" :disabled="!!uninstalling">{{ uninstalling === v.version ? "卸载中..." : "卸载" }}</button>
+            <button class="btn danger" @click="uninstall(v.version)" :disabled="!!uninstalling || batchBusy">{{ uninstalling === v.version ? "卸载中..." : "卸载" }}</button>
           </div>
         </li>
       </ul>
+
+      <!-- 批量操作栏 -->
+      <div class="batch-bar" v-if="installed.length">
+        <label class="batch-select-all">
+          <input type="checkbox"
+            :checked="installed.length > 0 && installed.every((x) => isSelected(x.version))"
+            :disabled="batchBusy"
+            @change="toggleSelectAll($event.target.checked)" />
+          全选
+        </label>
+        <template v-if="selected.size">
+          <span class="batch-count">已选 {{ selected.size }} 项</span>
+          <button class="btn small" @click="clearSelection" :disabled="batchBusy">清除选择</button>
+          <button class="btn danger small" @click="batchUninstall" :disabled="batchBusy">
+            {{ batchBusy ? "批量卸载中..." : "批量卸载" }}
+          </button>
+        </template>
+      </div>
     </section>
 
     <section class="panel">
@@ -969,4 +1045,25 @@ body {
   white-space: pre-wrap; word-break: break-all;
 }
 .modal-actions { display: flex; justify-content: flex-end; gap: 8px; }
+
+/* ---------- 批量操作 ---------- */
+.sel-box {
+  flex: 0 0 auto; width: 15px; height: 15px; margin: 0 2px 0 0;
+  cursor: pointer; align-self: center;
+}
+.ver-item.item-selected {
+  background: #f2f5ff;
+  border-color: #c3cdf5;
+}
+.batch-bar {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  margin: 8px 0 4px; padding: 8px 10px;
+  background: #f7f8fa; border: 1px solid #eef1f5; border-radius: 8px;
+  font-size: 12px; color: #6b7280;
+}
+.batch-select-all {
+  display: flex; align-items: center; gap: 6px; cursor: pointer; user-select: none;
+}
+.batch-select-all input { cursor: pointer; }
+.batch-count { color: #4f6ef7; font-weight: 600; }
 </style>

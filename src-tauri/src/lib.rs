@@ -3,6 +3,7 @@ mod config;
 mod envcheck;
 mod jobobj;
 mod launcher;
+mod maintenance;
 mod versions;
 
 use config::{Config, Dirs};
@@ -184,8 +185,15 @@ async fn uninstall_version(app: tauri::AppHandle, version: String) -> Result<Str
     // 卸载可能清掉了默认版本 / 隔离标记：重生成转发脚本（无默认版本时会删除 dsh.cmd）
     regenerate_forward_script(&mdir, &cfg);
     // 删除目录可能很慢，放到后台线程
+    // WebView2 数据目录（<根>/webview/<版本>）也要一并清理，否则每卸载一次留一份缓存。
+    let webview_dir = dirs.webview.join(&version);
     let (ok, msg) = tauri::async_runtime::spawn_blocking(move || {
-        versions::uninstall(&dirs.versions, &version)
+        let result = versions::uninstall(&dirs.versions, &version);
+        // 实例目录删成功后，顺带清理 webview（失败不影响卸载结果）
+        if result.0 {
+            let _ = std::fs::remove_dir_all(&webview_dir);
+        }
+        result
     })
     .await
     .map_err(|e| format!("卸载任务失败: {}", e))?;
@@ -748,6 +756,21 @@ fn log_launch_error(root: &std::path::Path, msg: &str) {
     }
 }
 
+/// 把后台维护的日志写入 <根>/logs/maintenance.log。
+fn log_maintenance(root: &std::path::Path, msg: &str) {
+    use std::io::Write;
+    let dir = root.join("logs");
+    let _ = std::fs::create_dir_all(&dir);
+    let path = dir.join("maintenance.log");
+    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&path) {
+        let ts = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        let _ = writeln!(f, "[{}] {}", ts, msg);
+    }
+}
+
 /// 由版本号生成合法的窗口 label 前缀（不含代次）。
 /// Tauri 要求 label 只含字母数字和 `-` `/` `:` `_`，而版本号含 `.`，故替换为 `_`。
 fn window_label_prefix(version: &str) -> String {
@@ -893,6 +916,40 @@ pub fn run() {
                     }
                 });
             }
+
+            // 后台维护（不阻塞界面）：
+            //  1) 立即清理孤立 webview 目录（毫秒级）
+            //  2) 延迟 + 7 天节流跑 pnpm store prune（重 IO，独立线程 + 低优先级）
+            {
+                let app_handle = app.handle().clone();
+                std::thread::spawn(move || {
+                    let mdir = manager_dir(&app_handle);
+                    let root = Config::load(&mdir).resolve_root(&mdir);
+                    let dirs = Dirs::new(root.clone());
+                    let _ = dirs.ensure();
+
+                    // 1) 孤立 webview：每次启动都能跑（成本极低）
+                    let removed = maintenance::cleanup_orphan_webviews(&dirs.versions, &dirs.webview);
+                    if !removed.is_empty() {
+                        log_maintenance(&root, &format!("清理孤立 webview：{:?}", removed));
+                    }
+
+                    // 2) store prune：距上次 >= 7 天才跑，且延迟 30 秒错开启动 IO
+                    if maintenance::should_prune_store(&root) {
+                        std::thread::sleep(std::time::Duration::from_secs(30));
+                        match maintenance::run_store_prune(&dirs.store, &dirs.cache, &dirs.state) {
+                            Ok(()) => {
+                                maintenance::mark_pruned(&root);
+                                log_maintenance(&root, "store prune 完成");
+                            }
+                            Err(e) => {
+                                log_maintenance(&root, &format!("store prune 失败（下次重试）: {}", e));
+                            }
+                        }
+                    }
+                });
+            }
+
             Ok(())
         })
         .build(tauri::generate_context!())
