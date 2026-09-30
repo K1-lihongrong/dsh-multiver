@@ -561,10 +561,76 @@ pub fn dir_size(path: &Path) -> u64 {
     total
 }
 
-/// 整个版本目录的大小（字节）。用于"占用大小"展示。
-pub fn version_size(versions_dir: &Path, version: &str) -> u64 {
-    dir_size(&versions_dir.join(version))
+/// 版本占用的详细信息：逻辑总量 + 与 pnpm store 共享（硬链接）的部分。
+#[derive(Debug, Clone, Serialize)]
+pub struct SizeInfo {
+    /// 逻辑总大小（所有文件按自身大小累加，硬链接会重复计）
+    pub total: u64,
+    /// 与其他版本共享（nlink > 1）的文件大小之和
+    pub shared_size: u64,
+    /// 共享文件的数量
+    pub shared_count: u64,
+    /// 独占大小 = total - shared_size
+    pub exclusive_size: u64,
 }
+
+/// 读取文件的硬链接数（nlink）。读不到时保守返回 1（视为不共享）。
+#[cfg(windows)]
+fn file_nlink(path: &Path) -> u32 {
+    use std::os::windows::io::AsRawHandle;
+    use windows_sys::Win32::Storage::FileSystem::{GetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION};
+    let f = match std::fs::File::open(path) {
+        Ok(f) => f,
+        Err(_) => return 1,
+    };
+    let handle = f.as_raw_handle() as windows_sys::Win32::Foundation::HANDLE;
+    let mut info: BY_HANDLE_FILE_INFORMATION = unsafe { std::mem::zeroed() };
+    let ok = unsafe { GetFileInformationByHandle(handle, &mut info) };
+    if ok != 0 && info.nNumberOfLinks > 0 {
+        info.nNumberOfLinks
+    } else {
+        1
+    }
+}
+
+#[cfg(unix)]
+fn file_nlink(path: &Path) -> u32 {
+    use std::os::unix::fs::MetadataExt;
+    std::fs::metadata(path).map(|m| m.nlink() as u32).unwrap_or(1)
+}
+
+#[cfg(not(any(windows, unix)))]
+fn file_nlink(_path: &Path) -> u32 {
+    1
+}
+
+/// 递归统计目录：总量 + 共享(硬链接)部分。用于"占用大小"展示复用情况。
+fn dir_size_detail(path: &Path, acc: &mut SizeInfo) {
+    if let Ok(entries) = std::fs::read_dir(path) {
+        for entry in entries.flatten() {
+            let p = entry.path();
+            if p.is_dir() {
+                dir_size_detail(&p, acc);
+            } else if let Ok(meta) = entry.metadata() {
+                let len = meta.len();
+                acc.total += len;
+                if file_nlink(&p) > 1 {
+                    acc.shared_size += len;
+                    acc.shared_count += 1;
+                }
+            }
+        }
+    }
+}
+
+/// 整个版本目录的占用详情（含共享/独占）。用于"扫描占用"。
+pub fn version_size_detail(versions_dir: &Path, version: &str) -> SizeInfo {
+    let mut info = SizeInfo { total: 0, shared_size: 0, shared_count: 0, exclusive_size: 0 };
+    dir_size_detail(&versions_dir.join(version), &mut info);
+    info.exclusive_size = info.total.saturating_sub(info.shared_size);
+    info
+}
+
 
 /// 隔离 home 的路径
 pub fn isolated_home(versions_dir: &Path, version: &str) -> std::path::PathBuf {

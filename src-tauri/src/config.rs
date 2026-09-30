@@ -16,6 +16,36 @@ pub struct Config {
     /// 安装成功后自动移除；用户可在界面手动清除。
     #[serde(default)]
     pub broken_versions: Vec<String>,
+    /// 维护相关配置与状态。
+    #[serde(default)]
+    pub maintenance: MaintenanceConfig,
+}
+
+/// 维护相关配置与状态。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MaintenanceConfig {
+    /// 是否启用启动时自动维护（默认开）。
+    pub auto_enabled: bool,
+    /// 上次 store prune 的 unix 时间戳（秒）。
+    #[serde(default)]
+    pub last_prune_at: Option<u64>,
+    /// 上次清理孤立 webview 的 unix 时间戳（秒）。
+    #[serde(default)]
+    pub last_cleanup_at: Option<u64>,
+    /// 上次清理孤立 webview 的条目数。
+    #[serde(default)]
+    pub last_cleanup_count: u64,
+}
+
+impl Default for MaintenanceConfig {
+    fn default() -> Self {
+        Self {
+            auto_enabled: true,
+            last_prune_at: None,
+            last_cleanup_at: None,
+            last_cleanup_count: 0,
+        }
+    }
 }
 
 impl Default for Config {
@@ -25,6 +55,7 @@ impl Default for Config {
             default_version: None,
             isolated_versions: Vec::new(),
             broken_versions: Vec::new(),
+            maintenance: MaintenanceConfig::default(),
         }
     }
 }

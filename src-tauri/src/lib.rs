@@ -48,6 +48,7 @@ struct AppState {
     default_version: Option<String>,
     manager_dir: String,
     broken_versions: Vec<String>,
+    maintenance: config::MaintenanceConfig,
 }
 
 #[tauri::command]
@@ -67,6 +68,7 @@ fn get_state(app: tauri::AppHandle) -> AppState {
         default_version: cfg.default_version.clone(),
         manager_dir: mdir.to_string_lossy().to_string(),
         broken_versions: cfg.broken_versions.clone(),
+        maintenance: cfg.maintenance.clone(),
     }
 }
 
@@ -533,56 +535,51 @@ fn build_topbar_script(version: &str, url: &str) -> String {
     s.push_str(&format!("  var URL = '{}';\n", url_js));
     s.push_str("  function inject() {\n");
     s.push_str("    if (!document.body) return setTimeout(inject, 50);\n");
-    s.push_str("    if (document.getElementById('__dsh_bar')) return;\n");
-    s.push_str("    var bar = document.createElement('div');\n");
-    s.push_str("    bar.id = '__dsh_bar';\n");
-    s.push_str("    bar.style.cssText = 'position:fixed;top:0;left:0;right:0;height:32px;z-index:2147483647;'\n");
-    s.push_str("      + 'background:#1f2328;color:#fff;font:12px/32px \"Segoe UI\",system-ui,sans-serif;'\n");
-    s.push_str("      + 'display:flex;align-items:center;gap:12px;padding:0 12px;box-shadow:0 1px 4px rgba(0,0,0,.3);';\n");
-    s.push_str("    var label = document.createElement('span');\n");
-    s.push_str("    label.textContent = 'DSH ' + VER;\n");
-    s.push_str("    label.style.cssText = 'font-weight:600;white-space:nowrap;';\n");
+    s.push_str("    if (document.getElementById('__dsh_dot')) return;\n");
+    s.push_str("    var open = false;\n");
+    s.push_str("    var dot = document.createElement('div');\n");
+    s.push_str("    dot.id = '__dsh_dot';\n");
+    s.push_str("    dot.textContent = 'DSH';\n");
+    s.push_str("    dot.title = 'DSH ' + VER;\n");
+    s.push_str("    dot.style.cssText = 'position:fixed;top:8px;left:8px;z-index:2147483647;background:#1f2328;color:#fff;font:11px/1 system-ui,sans-serif;padding:5px 8px;border-radius:12px;cursor:pointer;opacity:.5;box-shadow:0 1px 4px rgba(0,0,0,.3);transition:opacity .15s;';\n");
+    s.push_str("    dot.onmouseenter = function(){ dot.style.opacity='1'; };\n");
+    s.push_str("    dot.onmouseleave = function(){ if(!open) dot.style.opacity='.5'; };\n");
+    s.push_str("    var panel = document.createElement('div');\n");
+    s.push_str("    panel.id = '__dsh_panel';\n");
+    s.push_str("    panel.style.cssText = 'position:fixed;top:8px;left:8px;z-index:2147483647;display:none;background:#1f2328;color:#fff;font:12px/1.6 system-ui,sans-serif;padding:10px 12px;border-radius:8px;box-shadow:0 4px 16px rgba(0,0,0,.4);min-width:300px;max-width:70vw;';\n");
+    s.push_str("    var head = document.createElement('div');\n");
+    s.push_str("    head.style.cssText = 'display:flex;align-items:center;gap:8px;margin-bottom:8px;';\n");
+    s.push_str("    var title = document.createElement('span');\n");
+    s.push_str("    title.textContent = 'DSH ' + VER;\n");
+    s.push_str("    title.style.cssText = 'font-weight:600;white-space:nowrap;flex:1;';\n");
+    s.push_str("    var btnClose = document.createElement('button');\n");
+    s.push_str("    btnClose.textContent = '\\u00d7';\n");
+    s.push_str("    btnClose.title = '收起';\n");
+    s.push_str("    btnClose.style.cssText = 'cursor:pointer;background:transparent;color:#fff;border:0;font-size:16px;line-height:1;padding:0 4px;';\n");
+    s.push_str("    head.appendChild(title); head.appendChild(btnClose);\n");
     s.push_str("    var urlBox = document.createElement('input');\n");
-    s.push_str("    urlBox.type = 'text';\n");
-    s.push_str("    urlBox.value = URL;\n");
-    s.push_str("    urlBox.readOnly = true;\n");
+    s.push_str("    urlBox.type = 'text'; urlBox.value = URL; urlBox.readOnly = true;\n");
     s.push_str("    urlBox.title = '点击可选中，复制到浏览器打开';\n");
-    s.push_str("    urlBox.style.cssText = 'flex:1;min-width:120px;background:#2b2f36;color:#cfd8e3;border:1px solid #3a3f47;border-radius:4px;padding:2px 8px;font:12px/1.6 monospace;';\n");
-    s.push_str("    urlBox.onclick = function() { urlBox.select(); };\n");
+    s.push_str("    urlBox.style.cssText = 'width:100%;box-sizing:border-box;background:#2b2f36;color:#cfd8e3;border:1px solid #3a3f47;border-radius:4px;padding:3px 8px;font:12px/1.6 monospace;margin-bottom:8px;';\n");
+    s.push_str("    urlBox.onclick = function(){ urlBox.select(); };\n");
     s.push_str("    var btnRestart = document.createElement('button');\n");
     s.push_str("    btnRestart.textContent = '重启';\n");
-    s.push_str("    btnRestart.style.cssText = 'cursor:pointer;background:#4f6ef7;color:#fff;border:0;border-radius:4px;padding:3px 10px;font-size:12px;white-space:nowrap;';\n");
-    s.push_str("    btnRestart.onclick = function() {\n");
+    s.push_str("    btnRestart.style.cssText = 'cursor:pointer;background:#4f6ef7;color:#fff;border:0;border-radius:4px;padding:4px 12px;font-size:12px;';\n");
+    s.push_str("    btnRestart.onclick = function(){\n");
     s.push_str("      try {\n");
     s.push_str("        var inv = window.__TAURI_INTERNALS__ && window.__TAURI_INTERNALS__.invoke;\n");
-    s.push_str("        if (inv) { inv('restart_version', { version: VER }).catch(function() { location.reload(); }); return; }\n");
-    s.push_str("      } catch (e) {}\n");
+    s.push_str("        if (inv) { inv('restart_version', { version: VER }).catch(function(){ location.reload(); }); return; }\n");
+    s.push_str("      } catch(e) {}\n");
     s.push_str("      location.reload();\n");
     s.push_str("    };\n");
-    s.push_str("    var btnFold = document.createElement('button');\n");
-    s.push_str("    btnFold.textContent = '收起';\n");
-    s.push_str("    btnFold.style.cssText = 'cursor:pointer;background:transparent;color:#fff;border:1px solid #555;border-radius:4px;padding:3px 10px;font-size:12px;white-space:nowrap;';\n");
-    s.push_str("    var folded = false;\n");
-    s.push_str("    btnFold.onclick = function() {\n");
-    s.push_str("      folded = !folded;\n");
-    s.push_str("      bar.style.height = folded ? '18px' : '32px';\n");
-    s.push_str("      bar.style.lineHeight = folded ? '18px' : '32px';\n");
-    s.push_str("      label.style.display = folded ? 'none' : '';\n");
-    s.push_str("      urlBox.style.display = folded ? 'none' : '';\n");
-    s.push_str("      btnRestart.style.display = folded ? 'none' : '';\n");
-    s.push_str("      btnFold.textContent = folded ? '展开' : '收起';\n");
-    s.push_str("      var st = document.getElementById('__dsh_bar_style');\n");
-    s.push_str("      if (st) st.textContent = 'body{padding-top:' + (folded ? '18px' : '32px') + ' !important;}';\n");
-    s.push_str("    };\n");
-    s.push_str("    bar.appendChild(label);\n");
-    s.push_str("    bar.appendChild(urlBox);\n");
-    s.push_str("    bar.appendChild(btnRestart);\n");
-    s.push_str("    bar.appendChild(btnFold);\n");
-    s.push_str("    var style = document.createElement('style');\n");
-    s.push_str("    style.id = '__dsh_bar_style';\n");
-    s.push_str("    style.textContent = 'body{padding-top:32px !important;}';\n");
-    s.push_str("    document.head.appendChild(style);\n");
-    s.push_str("    document.body.appendChild(bar);\n");
+    s.push_str("    function show(){ open=true; dot.style.display='none'; panel.style.display='block'; }\n");
+    s.push_str("    function hide(){ open=false; panel.style.display='none'; dot.style.display=''; dot.style.opacity='.5'; }\n");
+    s.push_str("    dot.onclick = show;\n");
+    s.push_str("    btnClose.onclick = hide;\n");
+    s.push_str("    document.addEventListener('keydown', function(e){ if(e.key==='Escape' && open) hide(); });\n");
+    s.push_str("    panel.appendChild(head); panel.appendChild(urlBox); panel.appendChild(btnRestart);\n");
+    s.push_str("    document.body.appendChild(dot);\n");
+    s.push_str("    document.body.appendChild(panel);\n");
     s.push_str("  }\n");
     s.push_str("  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', inject);\n");
     s.push_str("  else inject();\n");
@@ -615,20 +612,20 @@ fn set_isolated(app: tauri::AppHandle, version: String, isolated: bool) -> Resul
     }
 }
 
-/// 扫描整个版本目录的占用大小（含依赖 + 隔离 home）。
+/// 扫描整个版本目录的占用（含依赖 + 隔离 home），返回总量 + 共享/独占详情。
 #[tauri::command]
-async fn scan_version_size(app: tauri::AppHandle, version: String) -> Result<u64, String> {
+async fn scan_version_size(app: tauri::AppHandle, version: String) -> Result<versions::SizeInfo, String> {
     let mdir = manager_dir(&app);
     let cfg = Config::load(&mdir);
     let dirs = Dirs::new(cfg.resolve_root(&mdir));
     let versions_dir = dirs.versions.clone();
     let v = version.clone();
-    let size = tauri::async_runtime::spawn_blocking(move || {
-        versions::version_size(&versions_dir, &v)
+    let info = tauri::async_runtime::spawn_blocking(move || {
+        versions::version_size_detail(&versions_dir, &v)
     })
     .await
     .map_err(|e| format!("扫描失败: {}", e))?;
-    Ok(size)
+    Ok(info)
 }
 
 #[tauri::command]
@@ -642,6 +639,60 @@ async fn scan_isolated_size(app: tauri::AppHandle, version: String) -> Result<u6
         .await
         .map_err(|e| format!("扫描失败: {}", e))?;
     Ok(size)
+}
+
+/// 设置自动维护开关。
+#[tauri::command]
+fn set_auto_maintenance(app: tauri::AppHandle, enabled: bool) -> Result<(), String> {
+    let mdir = manager_dir(&app);
+    let mut cfg = Config::load(&mdir);
+    cfg.maintenance.auto_enabled = enabled;
+    cfg.save(&mdir).map_err(|e| format!("保存配置失败: {}", e))
+}
+
+/// 手动执行维护。kind: "cleanup"（孤立 webview）| "prune"（依赖仓库）| "all"。
+/// 返回人类可读的结果描述。
+#[tauri::command]
+async fn run_maintenance(app: tauri::AppHandle, kind: String) -> Result<String, String> {
+    let mdir = manager_dir(&app);
+    let mut cfg = Config::load(&mdir);
+    let root = cfg.resolve_root(&mdir);
+    let dirs = Dirs::new(root.clone());
+    let _ = dirs.ensure();
+    let mdir2 = mdir.clone();
+
+    let result = tauri::async_runtime::spawn_blocking(move || -> Result<String, String> {
+        let mut parts: Vec<String> = Vec::new();
+
+        if kind == "cleanup" || kind == "all" {
+            let removed = maintenance::cleanup_orphan_webviews(&dirs.versions, &dirs.webview);
+            cfg.maintenance.last_cleanup_at = Some(maintenance::now_secs());
+            cfg.maintenance.last_cleanup_count = removed.len() as u64;
+            log_maintenance(&root, &format!("[手动] 清理孤立 webview：{} 项 {:?}", removed.len(), removed));
+            parts.push(format!("已清理孤立缓存 {} 项", removed.len()));
+        }
+
+        if kind == "prune" || kind == "all" {
+            match maintenance::run_store_prune(&dirs.store, &dirs.cache, &dirs.state) {
+                Ok(()) => {
+                    cfg.maintenance.last_prune_at = Some(maintenance::now_secs());
+                    log_maintenance(&root, "[手动] store prune 完成");
+                    parts.push("已回收依赖仓库".to_string());
+                }
+                Err(e) => {
+                    log_maintenance(&root, &format!("[手动] store prune 失败: {}", e));
+                    return Err(format!("回收依赖仓库失败：{}", e));
+                }
+            }
+        }
+
+        let _ = cfg.save(&mdir2);
+        Ok(parts.join("；"))
+    })
+    .await
+    .map_err(|e| format!("维护任务失败: {}", e))?;
+
+    result
 }
 
 #[tauri::command]
@@ -721,6 +772,7 @@ fn open_dir(app: tauri::AppHandle, which: String) -> Result<(), String> {
         "store" => dirs.store.clone(),
         "cache" => dirs.cache.clone(),
         "state" => dirs.state.clone(),
+        "logs" => dirs.root.join("logs"),
         _ => dirs.root.clone(),
     };
     let (ok, msg) = actions::open_folder(&target);
@@ -872,6 +924,8 @@ pub fn run() {
             check_env,
             set_isolated,
             scan_version_size,
+            run_maintenance,
+            set_auto_maintenance,
             scan_isolated_size,
             copy_shared_to_isolated,
             clear_isolated_data,
@@ -924,22 +978,36 @@ pub fn run() {
                 let app_handle = app.handle().clone();
                 std::thread::spawn(move || {
                     let mdir = manager_dir(&app_handle);
-                    let root = Config::load(&mdir).resolve_root(&mdir);
+                    let mut cfg = Config::load(&mdir);
+                    // 用户关闭了自动维护 → 跳过
+                    if !cfg.maintenance.auto_enabled {
+                        return;
+                    }
+                    let root = cfg.resolve_root(&mdir);
                     let dirs = Dirs::new(root.clone());
                     let _ = dirs.ensure();
 
                     // 1) 孤立 webview：每次启动都能跑（成本极低）
                     let removed = maintenance::cleanup_orphan_webviews(&dirs.versions, &dirs.webview);
+                    cfg.maintenance.last_cleanup_at = Some(maintenance::now_secs());
+                    cfg.maintenance.last_cleanup_count = removed.len() as u64;
+                    let _ = cfg.save(&mdir);
                     if !removed.is_empty() {
                         log_maintenance(&root, &format!("清理孤立 webview：{:?}", removed));
                     }
 
                     // 2) store prune：距上次 >= 7 天才跑，且延迟 30 秒错开启动 IO
-                    if maintenance::should_prune_store(&root) {
+                    let due = match cfg.maintenance.last_prune_at {
+                        Some(t) => maintenance::now_secs().saturating_sub(t) >= maintenance::PRUNE_INTERVAL_SECS,
+                        None => true,
+                    };
+                    if due {
                         std::thread::sleep(std::time::Duration::from_secs(30));
                         match maintenance::run_store_prune(&dirs.store, &dirs.cache, &dirs.state) {
                             Ok(()) => {
-                                maintenance::mark_pruned(&root);
+                                let mut c2 = Config::load(&mdir);
+                                c2.maintenance.last_prune_at = Some(maintenance::now_secs());
+                                let _ = c2.save(&mdir);
                                 log_maintenance(&root, "store prune 完成");
                             }
                             Err(e) => {

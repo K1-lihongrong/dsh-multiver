@@ -8,8 +8,13 @@ use std::time::{SystemTime, UNIX_EPOCH};
 /// 距上次 store prune 的最小间隔（秒）：7 天。
 pub const PRUNE_INTERVAL_SECS: u64 = 7 * 24 * 3600;
 
-/// 记录上次 prune 时间的文件（放数据根下，换根自动重置）。
-const LAST_PRUNE_FILE: &str = ".dsh-multiver-last-prune";
+/// 当前 unix 时间戳（秒）。
+pub fn now_secs() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
 
 /// 清理孤立的 webview 目录：`webview/` 下存在、但对应版本已不存在的。
 ///
@@ -37,28 +42,6 @@ pub fn cleanup_orphan_webviews(versions_dir: &Path, webview_dir: &Path) -> Vec<S
         }
     }
     removed
-}
-
-/// 是否应当运行 store prune（距上次 >= 7 天，或从未跑过）。
-pub fn should_prune_store(root: &Path) -> bool {
-    let f = root.join(LAST_PRUNE_FILE);
-    match std::fs::metadata(&f).and_then(|m| m.modified()) {
-        Ok(t) => match SystemTime::now().duration_since(t) {
-            Ok(d) => d.as_secs() >= PRUNE_INTERVAL_SECS,
-            Err(_) => true, // 时间倒退，保守地跑一次
-        },
-        Err(_) => true, // 无记录 → 首次
-    }
-}
-
-/// 记录「刚刚 prune 过」。
-pub fn mark_pruned(root: &Path) {
-    let f = root.join(LAST_PRUNE_FILE);
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
-    let _ = std::fs::write(f, now.to_string());
 }
 
 /// 运行 `pnpm store prune`，回收未被引用的包。
@@ -140,19 +123,4 @@ mod tests {
         let _ = std::fs::remove_dir_all(&base);
     }
 
-    #[test]
-    fn prune_schedule_first_time_true() {
-        let base = tmp("prune1");
-        assert!(should_prune_store(&base), "无记录 → 应跑");
-        let _ = std::fs::remove_dir_all(&base);
-    }
-
-    #[test]
-    fn prune_schedule_marked_then_false() {
-        let base = tmp("prune2");
-        mark_pruned(&base);
-        assert!(!should_prune_store(&base), "刚跑过 → 不应再跑");
-        assert!(base.join(LAST_PRUNE_FILE).exists());
-        let _ = std::fs::remove_dir_all(&base);
-    }
 }

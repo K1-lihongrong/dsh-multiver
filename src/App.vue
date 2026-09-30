@@ -7,6 +7,8 @@ import { ask } from "@tauri-apps/plugin-dialog";
 const state = ref(null);
 const installed = ref([]);
 const remote = ref([]);
+const remoteQuery = ref("");      // 可用版本搜索词
+const remoteSortDesc = ref(true); // 排序：true=最新在前
 const loading = ref(false);
 const toast = ref("");
 const toastExpanded = ref(false);
@@ -46,6 +48,15 @@ function toggleSelect(name) {
 function isSelected(name) {
   return selected.value.has(name);
 }
+/// 可用版本：按搜索词过滤 + 按排序方向排列。
+const filteredRemote = computed(() => {
+  const q = remoteQuery.value.trim().toLowerCase();
+  let list = remote.value;
+  if (q) list = list.filter((v) => v.toLowerCase().includes(q));
+  // remote 本身来自 npm（默认倒序=最新在前）。升序时反转。
+  if (!remoteSortDesc.value) list = [...list].reverse();
+  return list;
+});
 /// 该版本当前是否应阻塞操作：正在被卸载，或批量卸载中且被选中。
 /// 批量时一次性阻塞所有选中项（而非按顺序逐个），避免"没轮到就还能点"。
 function isBlocked(name) {
@@ -355,13 +366,13 @@ const openMenu = ref(null);       // 当前展开菜单的版本号
 const scanning = ref(null);       // 正在扫描的版本号（隔离数据）
 const sizes = ref({});            // 版本号 -> 隔离数据字节数
 const scanningVer = ref(null);    // 正在扫描"整版本占用"的版本号
-const verSizes = ref({});         // 版本号 -> 整版本字节数
+const verSizes = ref({});         // 版本号 -> { total, shared_size, shared_count, exclusive_size }
 
 async function scanVersionSize(v) {
   scanningVer.value = v;
   try {
-    const bytes = await invoke("scan_version_size", { version: v });
-    verSizes.value = { ...verSizes.value, [v]: bytes };
+    const info = await invoke("scan_version_size", { version: v });
+    verSizes.value = { ...verSizes.value, [v]: info };
   } catch (e) {
     notify("" + e);
   } finally {
@@ -441,6 +452,39 @@ async function openUrl(url) {
 async function openDir(which) {
   try { await invoke("open_dir", { which }); }
   catch (e) { notify("" + e); }
+}
+
+/// 维护：手动触发
+const maintBusy = ref("");
+async function doMaintenance(kind) {
+  maintBusy.value = kind;
+  try {
+    const msg = await invoke("run_maintenance", { kind });
+    notify(msg);
+    await refresh();
+  } catch (e) {
+    notify("" + e);
+  } finally {
+    maintBusy.value = "";
+  }
+}
+
+/// 维护：切换自动维护开关
+async function toggleAutoMaint(on) {
+  try {
+    await invoke("set_auto_maintenance", { enabled: on });
+    await refresh();
+  } catch (e) {
+    notify("" + e);
+  }
+}
+
+/// unix 秒 -> 可读时间
+function fmtTs(sec) {
+  if (!sec) return "从未";
+  const d = new Date(sec * 1000);
+  const p = (n) => String(n).padStart(2, "0");
+  return d.getFullYear() + "-" + p(d.getMonth() + 1) + "-" + p(d.getDate()) + " " + p(d.getHours()) + ":" + p(d.getMinutes());
 }
 
 onMounted(async () => {
@@ -532,7 +576,12 @@ onUnmounted(() => {
             <span class="badge badge-iso" v-if="v.isolated">隔离</span>
             <span class="badge badge-shared" v-else title="使用共享 home：多版本混用可能导致插件/依赖版本错配，测试版建议开隔离">共享 home</span>
             <span class="ver-meta" v-if="v.installed_at">安装于 {{ v.installed_at }}</span>
-            <span class="ver-meta" v-if="verSizes[v.version] != null">占用 {{ fmtSize(verSizes[v.version]) }}</span>
+            <span class="ver-meta" v-if="verSizes[v.version] != null">
+              占用 {{ fmtSize(verSizes[v.version].total) }}
+              <template v-if="verSizes[v.version].shared_count">
+                （复用 {{ fmtSize(verSizes[v.version].shared_size) }} / 独占 {{ fmtSize(verSizes[v.version].exclusive_size) }}）
+              </template>
+            </span>
           </div>
           <div class="ver-actions">
             <button class="btn primary" @click="run(v.version)" :disabled="!!runningVersion || isBlocked(v.version)">{{ runningVersion === v.version ? "启动中..." : "运行" }}</button>
@@ -614,9 +663,15 @@ onUnmounted(() => {
         </div>
       </div>
 
+      <div class="remote-toolbar" v-if="remote.length">
+        <input v-model="remoteQuery" class="input remote-search" placeholder="搜索版本号，如 0.1.7" />
+        <button class="btn small" @click="remoteSortDesc = !remoteSortDesc" :title="remoteSortDesc ? '当前最新在前' : '当前最早在前'">
+          {{ remoteSortDesc ? "最新在前 ↓" : "最早在前 ↑" }}
+        </button>
+      </div>
       <div class="chips" v-if="remote.length">
         <button
-          v-for="v in remote.slice(0, 40)"
+          v-for="v in filteredRemote"
           :key="v"
           class="chip"
           :class="{ 'chip-broken': isBroken(v) }"
@@ -624,6 +679,7 @@ onUnmounted(() => {
           @click="install(v)"
           :disabled="loading"
         >{{ v }}</button>
+        <div class="hint" v-if="!filteredRemote.length">没有匹配的版本</div>
       </div>
       <div v-else class="hint">点击“刷新列表”从 npm 拉取所有可安装版本</div>
       <div class="broken-hint" v-if="state && state.broken_versions && state.broken_versions.length">
@@ -684,6 +740,27 @@ onUnmounted(() => {
         </div>
       </div>
       <div class="hint">点击任意路径可在资源管理器中打开</div>
+
+      <!-- 维护 -->
+      <div class="maint" v-if="state">
+        <label class="checkbox-row">
+          <input type="checkbox" :checked="state.maintenance.auto_enabled" @change="toggleAutoMaint($event.target.checked)" />
+          <span>启动时自动维护</span>
+        </label>
+        <div class="maint-rules">
+          <div>· 每次启动清理<strong>孤立缓存</strong>（版本已卸载的 WebView2 残留）</div>
+          <div>· 距上次 ≥ 7 天时，自动<strong>回收依赖仓库</strong>（pnpm store prune）</div>
+        </div>
+        <div class="maint-status">
+          <span>上次清理孤立缓存：{{ fmtTs(state.maintenance.last_cleanup_at) }}（{{ state.maintenance.last_cleanup_count }} 项）</span>
+          <span>上次回收依赖仓库：{{ fmtTs(state.maintenance.last_prune_at) }}</span>
+        </div>
+        <div class="maint-actions">
+          <button class="btn small" @click="doMaintenance('cleanup')" :disabled="maintBusy">{{ maintBusy === 'cleanup' ? '清理中...' : '清理孤立缓存' }}</button>
+          <button class="btn small" @click="doMaintenance('prune')" :disabled="maintBusy">{{ maintBusy === 'prune' ? '回收中...' : '回收依赖仓库' }}</button>
+          <button class="btn small" @click="openDir('logs')">打开日志目录</button>
+        </div>
+      </div>
     </section>
   </main>
 
@@ -927,7 +1004,10 @@ body {
 @keyframes spin { to { transform: rotate(360deg); } }
 .stage-text { font-size: 13px; color: #4f6ef7; }
 
-.chips { display: flex; flex-wrap: wrap; gap: 6px; max-height: 160px; overflow-y: auto; }
+.remote-toolbar { display: flex; gap: 8px; margin-bottom: 10px; }
+.remote-search { flex: 1; min-width: 0; padding: 6px 12px; border: 1px solid #dcdfe4; border-radius: 7px; font-size: 13px; font-family: inherit; outline: none; }
+.remote-search:focus { border-color: #4f6ef7; }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; max-height: 220px; overflow-y: auto; }
 .chip {
   border: 1px solid #e2e5ea; background: #fafbfc; color: #4b5563;
   padding: 4px 10px; border-radius: 6px; font-size: 12px;
@@ -942,6 +1022,13 @@ body {
   font-size: 12px; color: #6b7280; margin: 4px 0 14px; cursor: pointer;
 }
 .checkbox-row input { cursor: pointer; }
+
+/* ---------- 维护 ---------- */
+.maint { margin-top: 16px; padding-top: 14px; border-top: 1px solid #eef1f5; }
+.maint-rules { font-size: 12px; color: #6b7280; line-height: 1.8; margin: 4px 0 10px; }
+.maint-status { font-size: 12px; color: #9aa1ab; line-height: 1.8; margin-bottom: 10px; }
+.maint-status span { display: block; }
+.maint-actions { display: flex; gap: 8px; flex-wrap: wrap; }
 .field { margin-bottom: 14px; }
 .field label { display: block; font-size: 12px; color: #6b7280; margin-bottom: 6px; }
 .field-row { display: flex; gap: 8px; }
