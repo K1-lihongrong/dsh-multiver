@@ -492,7 +492,22 @@ function fmtTs(sec) {
   return d.getFullYear() + "-" + p(d.getMonth() + 1) + "-" + p(d.getDate()) + " " + p(d.getHours()) + ":" + p(d.getMinutes());
 }
 
+// 全局错误捕获：把 WebView 侧未处理异常/拒绝上报到后端落盘（frontend.log）。
+// 历史踩坑：App.vue 缺 import 导致白屏、window.confirm 在 WebView2 静默失效，
+// 这些前端问题过去无任何留痕，偶发时无法排查。
+function reportFrontendError(msg) {
+  try { invoke("log_frontend", { msg: String(msg).slice(0, 4000) }).catch(() => {}); } catch (_) {}
+}
+function onWindowError(e) {
+  reportFrontendError("error: " + (e.error?.stack || e.message || e));
+}
+function onUnhandledRejection(e) {
+  reportFrontendError("unhandledrejection: " + (e.reason?.stack || e.reason || ""));
+}
+
 onMounted(async () => {
+  window.addEventListener("error", onWindowError);
+  window.addEventListener("unhandledrejection", onUnhandledRejection);
   await refresh();
   unlistenProgress = await listen("install-progress", (e) => {
     const p = e.payload;
@@ -507,6 +522,8 @@ onMounted(async () => {
 });
 
 onUnmounted(() => {
+  window.removeEventListener("error", onWindowError);
+  window.removeEventListener("unhandledrejection", onUnhandledRejection);
   document.removeEventListener("click", closeMenu);
   if (unlistenProgress) unlistenProgress();
 });

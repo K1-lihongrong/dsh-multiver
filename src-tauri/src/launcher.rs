@@ -59,7 +59,43 @@ pub fn spawn_web_hidden(
     // 根除"窗口关了但 node 还在"的孤儿进程问题。
     let job = crate::jobobj::assign_to_new_job(&child);
 
-    // stdout 用独立线程读取：解析到完整 URL 后，**继续读到 EOF 并丢弃**，
+    // ── 会话日志（阶段一：可观测性）──
+    // 每次启动 dsh 生成一个带时间戳的会话文件，记录 stdout + stderr 全量输出，
+    // 便于事后排查「无法复现」的偶发问题。日志落在 <root>/logs/（与「打开日志目录」一致）。
+    let version_name = version_dir
+        .file_name()
+        .map(|s| s.to_string_lossy().to_string())
+        .unwrap_or_else(|| "unknown".to_string());
+    // version_dir = <root>/versions/<ver>，故上两级即 <root>
+    let log_dir = version_dir
+        .parent()
+        .and_then(|p| p.parent())
+        .map(|r| r.join("logs"))
+        .unwrap_or_else(|| home_dir.join("logs"));
+    crate::logging::ensure_dir(&log_dir);
+    // 限制会话日志数量，避免无限增长（保留最新 20 份）
+    crate::logging::prune_old(&log_dir, "session-", ".log", 20);
+
+    let session_path = log_dir.join(format!(
+        "session-{}-{}.log",
+        crate::logging::stamp_compact(crate::logging::now_secs()),
+        version_name
+    ));
+    // 用同一文件句柄（Mutex 保护）承接 stdout / stderr 两个读线程的写入
+    let session_file = crate::logging::open_append(&session_path).map(|f| {
+        use std::io::Write;
+        let mut f = f;
+        let stamp = crate::logging::stamp_compact(crate::logging::now_secs());
+        let _ = writeln!(f, "===== DSH {} session @ {} =====", version_name, stamp);
+        let _ = writeln!(f, "cmd: dsh web --port 0 --no-open");
+        let _ = writeln!(f, "env DSH_HOME={}", home_dir.to_string_lossy());
+        let _ = writeln!(f, "env store={} cache={} state={}",
+            store_dir.to_string_lossy(), cache_dir.to_string_lossy(), state_dir.to_string_lossy());
+        let _ = writeln!(f, "pid: {}", child.id());
+        std::sync::Arc::new(std::sync::Mutex::new(f))
+    });
+
+    // stdout 用独立线程读取：解析到完整 URL 后**继续读到 EOF 并落盘**，
     // 避免 dsh 运行中往 stdout 写满管道缓冲区导致进程阻塞（假死）。
     let stdout = child
         .stdout
@@ -67,7 +103,9 @@ pub fn spawn_web_hidden(
         .ok_or_else(|| "无法捕获 dsh web 输出".to_string())?;
 
     let (tx, rx) = mpsc::channel::<String>();
+    let sf_out = session_file.clone();
     std::thread::spawn(move || {
+        use std::io::Write;
         let reader = BufReader::new(stdout);
         let mut sent = false;
         for line in reader.lines().map_while(Result::ok) {
@@ -77,25 +115,25 @@ pub fn spawn_web_hidden(
                     sent = true;
                 }
             }
-            // 拿到 URL 后仍继续消费，不做任何事（丢弃），直到 EOF
+            if let Some(f) = sf_out.as_ref() {
+                if let Ok(mut g) = f.lock() {
+                    let _ = writeln!(g, "[out] {}", line);
+                }
+            }
         }
     });
 
-    // stderr 也保留 piped 并由独立线程读到 EOF，避免其管道填满阻塞 dsh。
-    // 同时把 stderr 落盘到 <home>/logs/dsh-stderr.log，便于排查。
+    // stderr 同样由独立线程读到 EOF 并落盘（同一会话文件），避免管道填满阻塞 dsh。
     if let Some(stderr) = child.stderr.take() {
-        let log_path = home_dir.join("logs").join("dsh-stderr.log");
+        let sf_err = session_file.clone();
         std::thread::spawn(move || {
             use std::io::Write;
             let reader = BufReader::new(stderr);
-            let mut file = std::fs::OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(&log_path)
-                .ok();
             for line in reader.lines().map_while(Result::ok) {
-                if let Some(f) = file.as_mut() {
-                    let _ = writeln!(f, "{}", line);
+                if let Some(f) = sf_err.as_ref() {
+                    if let Ok(mut g) = f.lock() {
+                        let _ = writeln!(g, "[err] {}", line);
+                    }
                 }
             }
         });

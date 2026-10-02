@@ -4,6 +4,7 @@ mod config;
 mod envcheck;
 mod jobobj;
 mod launcher;
+mod logging;
 mod maintenance;
 mod versions;
 
@@ -302,8 +303,15 @@ async fn launch_window(
         launcher::spawn_web_hidden(&vdir2, &home2, &store2, &cache2, &state2)
     })
     .await
-    .map_err(|e| format!("启动任务失败: {}", e))?;
-    let (child, url, job) = spawned?;
+    .map_err(|e| {
+        let m = format!("启动任务失败: {}", e);
+        log_app_error(&dirs.root, "launch_window", &format!("{} ({})", version, m));
+        m
+    })?;
+    let (child, url, job) = spawned.map_err(|e| {
+        log_app_error(&dirs.root, "launch_window", &format!("{} ({})", version, e));
+        e
+    })?;
 
     // 回到主线程建窗。
     // 先结束该版本的旧窗口/旧进程（若有）。
@@ -341,6 +349,7 @@ async fn launch_window(
         Err(e) => {
             let mut c = child;
             launcher::kill_tree(&mut c);
+            log_app_error(&dirs.root, "launch_window", &format!("{} 创建窗口失败: {}", version, e));
             return Err(format!("创建窗口失败: {}", e));
         }
     };
@@ -463,6 +472,7 @@ async fn open_in_browser(
         // 提示：端口 + 数据目录
         Ok(format!("{}；数据目录：{}", msg, home.to_string_lossy()))
     } else {
+        log_app_error(&dirs.root, "open_in_browser", &format!("{} ({})", version, msg));
         Err(msg)
     }
 }
@@ -509,8 +519,15 @@ async fn restart_version(
         launcher::spawn_web_hidden(&vdir2, &home2, &store2, &cache2, &state2)
     })
     .await
-    .map_err(|e| format!("重启任务失败: {}", e))?;
-    let (child, url, job) = spawned?;
+    .map_err(|e| {
+        let m = format!("重启任务失败: {}", e);
+        log_app_error(&dirs.root, "restart_version", &format!("{} ({})", version, m));
+        m
+    })?;
+    let (child, url, job) = spawned.map_err(|e| {
+        log_app_error(&dirs.root, "restart_version", &format!("{} ({})", version, e));
+        e
+    })?;
 
     // 记录新进程（同一 label，代次更新）
     let generation = NEXT_GEN.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -806,32 +823,27 @@ fn check_env(app: tauri::AppHandle) -> Vec<envcheck::CheckItem> {
 
 /// 把精简启动模式的错误写入 <根>/logs/launch-error.log（windows_subsystem=windows 下无控制台，便于排查）
 fn log_launch_error(root: &std::path::Path, msg: &str) {
-    use std::io::Write;
-    let dir = root.join("logs");
-    let _ = std::fs::create_dir_all(&dir);
-    let path = dir.join("launch-error.log");
-    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&path) {
-        let ts = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_secs())
-            .unwrap_or(0);
-        let _ = writeln!(f, "[{}] {}", ts, msg);
-    }
+    logging::write_line(&root.join("logs"), "launch-error.log", msg);
 }
 
 /// 把后台维护的日志写入 <根>/logs/maintenance.log。
 fn log_maintenance(root: &std::path::Path, msg: &str) {
-    use std::io::Write;
-    let dir = root.join("logs");
-    let _ = std::fs::create_dir_all(&dir);
-    let path = dir.join("maintenance.log");
-    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&path) {
-        let ts = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_secs())
-            .unwrap_or(0);
-        let _ = writeln!(f, "[{}] {}", ts, msg);
-    }
+    logging::write_line(&root.join("logs"), "maintenance.log", msg);
+}
+
+/// 前端（WebView）JS 错误上报：写入 <根>/logs/frontend.log。
+/// 历史踩坑：App.vue 缺 import 导致白屏、window.confirm 在 WebView2 静默失效——
+/// 这些前端异常过去无任何留痕。此命令为其提供落盘通道。
+#[tauri::command]
+fn log_frontend(app: tauri::AppHandle, msg: String) {
+    let mdir = manager_dir(&app);
+    let root = Config::load(&mdir).resolve_root(&mdir);
+    logging::write_line(&root.join("logs"), "frontend.log", &msg);
+}
+
+/// 把主进程关键错误写入 <根>/logs/app.log（失败静默）。
+fn log_app_error(root: &std::path::Path, ctx: &str, msg: &str) {
+    logging::write_line(&root.join("logs"), "app.log", &format!("[{}] {}", ctx, msg));
 }
 
 /// 由版本号生成合法的窗口 label 前缀（不含代次）。
@@ -959,6 +971,7 @@ pub fn run() {
             copy_shared_to_isolated,
             clear_isolated_data,
             open_isolated_dir,
+            log_frontend,
         ])
         .setup(move |app| {
             use tauri::Manager;
