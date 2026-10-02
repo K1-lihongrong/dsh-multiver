@@ -158,8 +158,9 @@ pub fn spawn_web_hidden(
                     kill_tree(&mut child);
                     let _ = child.wait();
                     return Err(format!(
-                        "启动超时：{} 秒内未解析到 dsh web 地址。首次启动通常较慢，可稍后重试；若反复超时请查看 logs/ 下的会话日志",
-                        LAUNCH_TIMEOUT_SECS
+                        "启动超时：{} 秒内未解析到 dsh web 地址。首次启动通常较慢，可稍后重试。\n若反复超时，请查看日志目录：\n{}",
+                        LAUNCH_TIMEOUT_SECS,
+                        log_dir.to_string_lossy()
                     ));
                 }
                 // 进程若已退出，提前报错
@@ -172,7 +173,10 @@ pub fn spawn_web_hidden(
                 // 读线程结束但未解析到 URL（进程结束 / 输出格式变化）
                 kill_tree(&mut child);
                 let _ = child.wait();
-                return Err("未能从 dsh web 输出中解析到访问地址（输出格式可能已变化）".to_string());
+                return Err(format!(
+                    "未能从 dsh web 输出中解析到访问地址（输出格式可能已变化）。\n请查看日志目录：\n{}",
+                    log_dir.to_string_lossy()
+                ));
             }
         }
     }
