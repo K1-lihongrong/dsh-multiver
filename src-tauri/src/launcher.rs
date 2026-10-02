@@ -227,9 +227,11 @@ fn parse_url(line: &str) -> Option<String> {
     }
 }
 
-/// 为某版本在桌面创建快捷方式：DSH <版本号>.lnk
+/// 为某版本在桌面创建快捷方式。
 ///
-/// 目标为 <exe_path> --launch-version <版本号>，用 PowerShell COM 生成（零依赖）。
+/// - Windows：`DSH <版本>.lnk`，用 PowerShell COM 生成（零依赖）
+/// - Unix：`DSH <版本>.desktop`，写 Desktop Entry 文件并置可执行
+#[cfg(windows)]
 pub fn create_desktop_shortcut(exe_path: &Path, version: &str) -> Result<String, String> {
     let desktop = desktop_dir().ok_or_else(|| "无法定位桌面目录".to_string())?;
     let lnk_name = format!("DSH {}.lnk", version);
@@ -265,6 +267,41 @@ pub fn create_desktop_shortcut(exe_path: &Path, version: &str) -> Result<String,
     }
 }
 
+/// Unix：生成 `.desktop` 桌面入口。
+///
+/// 注意：本分支在 Windows 上不参与编译，尚未经真机验证（见 docs/开发缺口.md GAP-005）。
+#[cfg(unix)]
+pub fn create_desktop_shortcut(exe_path: &Path, version: &str) -> Result<String, String> {
+    let desktop = desktop_dir().ok_or_else(|| "无法定位桌面目录".to_string())?;
+    let file = desktop.join(format!("DSH {}.desktop", version));
+    let work = exe_path.parent().unwrap_or(Path::new("."));
+    let content = format!(
+        "[Desktop Entry]\n\
+         Type=Application\n\
+         Name=DSH {ver}\n\
+         Comment=运行 DeepSeek Harness {ver}\n\
+         Exec=\"{exe}\" --launch-version {ver}\n\
+         Path={work}\n\
+         Terminal=false\n\
+         Categories=Development;\n",
+        ver = version,
+        exe = exe_path.to_string_lossy(),
+        work = work.to_string_lossy()
+    );
+    std::fs::write(&file, content).map_err(|e| e.to_string())?;
+    // 置为可执行（部分桌面环境要求）
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o755));
+    }
+    // GNOME 需要"信任"标记才会允许直接双击；失败不阻塞（KDE/XFCE 无需）
+    let _ = Command::new("gio")
+        .args(["set", &file.to_string_lossy(), "metadata::trusted", "true"])
+        .output();
+    Ok(file.to_string_lossy().to_string())
+}
+
+#[cfg(windows)]
 fn build_shortcut_script(lnk: &Path, exe_path: &Path, version: &str) -> String {
     let work = exe_path.parent().unwrap_or(Path::new("."));
     // AppUserModelID 必须与进程启动时设置的（lib.rs 的 set_windows_app_user_model_id，
@@ -282,15 +319,17 @@ fn build_shortcut_script(lnk: &Path, exe_path: &Path, version: &str) -> String {
 }
 
 /// PowerShell 单引号字符串内转义（把 ' 变成 ''）
+#[cfg(windows)]
 fn escape_ps(s: &str) -> String {
     s.replace('\'', "''")
 }
 
 /// 桌面目录。
 ///
-/// 桌面可能被 OneDrive、域策略或手动重定向到任意位置（例如 %USERPROFILE% 之外的盘符），
-/// 因此**优先读注册表** Shell Folders\Desktop —— 这是 Windows 判断桌面位置的标准来源。
-/// 读不到再回退到常见路径猜测。
+/// - Windows：优先读注册表 Shell Folders\Desktop（OneDrive/域策略/重定向都能覆盖），
+///   读不到再回退常见路径猜测
+/// - Unix：优先 `xdg-user-dir DESKTOP`，其次 `~/Desktop`、`~/桌面`
+#[cfg(windows)]
 fn desktop_dir() -> Option<PathBuf> {
     if let Some(dir) = desktop_from_registry() {
         if dir.exists() {
@@ -346,9 +385,30 @@ fn desktop_from_registry() -> Option<PathBuf> {
     None
 }
 
-#[cfg(not(windows))]
-fn desktop_from_registry() -> Option<PathBuf> {
-    None
+/// Unix 桌面目录：优先 `xdg-user-dir DESKTOP`，其次 `~/Desktop`、`~/桌面`。
+/// 注意：本分支在 Windows 上不参与编译，尚未经真机验证（见 GAP-005）。
+#[cfg(unix)]
+fn desktop_dir() -> Option<PathBuf> {
+    // 1) XDG 标准：xdg-user-dir 会读 ~/.config/user-dirs.dirs
+    if let Ok(out) = Command::new("xdg-user-dir").arg("DESKTOP").output() {
+        if out.status.success() {
+            let p = String::from_utf8_lossy(&out.stdout).trim().to_string();
+            if !p.is_empty() && Path::new(&p).exists() {
+                return Some(PathBuf::from(p));
+            }
+        }
+    }
+    // 2) 回退常见路径
+    let home = std::env::var("HOME").ok()?;
+    let plain = PathBuf::from(&home).join("Desktop");
+    if plain.exists() {
+        return Some(plain);
+    }
+    let zh = PathBuf::from(&home).join("桌面");
+    if zh.exists() {
+        return Some(zh);
+    }
+    Some(plain)
 }
 
 /// 用**新控制台窗口**启动某版本的 dsh web（供「浏览器打开」按钮）。
@@ -379,6 +439,7 @@ pub fn spawn_web_console(
         c.arg("/C").arg(&bin);
         c
     };
+    // Unix：不依赖终端模拟器（探测脆弱），直接后台启动；dsh 会自行打开默认浏览器
     #[cfg(not(windows))]
     let mut cmd = Command::new(&bin);
 
@@ -398,11 +459,19 @@ pub fn spawn_web_console(
         cmd.creation_flags(CREATE_NEW_CONSOLE);
     }
 
+    // Unix：脱离父会话/终端，避免随管理器退出被 SIGHUP（配合新进程组 + PDEATHSIG 由 configure 设定）
+    #[cfg(unix)]
+    {
+        cmd.stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null());
+    }
+
     // spawn 前：平台相关配置（Unix 下设为新进程组 + PDEATHSIG；Windows 无操作）
     crate::jobobj::configure_command(&mut cmd);
 
     match cmd.spawn() {
-        Ok(_) => (true, format!("已在新终端用端口 {} 启动 dsh web，稍候会自动打开浏览器", port)),
+        Ok(_) => (true, format!("已用端口 {} 启动 dsh web，稍候会自动打开浏览器", port)),
         Err(e) => (false, format!("启动失败: {}", e)),
     }
 }

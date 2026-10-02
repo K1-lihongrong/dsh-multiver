@@ -253,7 +253,12 @@ pub(crate) fn regenerate_forward_script(mdir: &PathBuf, cfg: &Config) {
     }
 }
 
-/// 决定 dsh.cmd 写到哪个目录：优先 npm 全局 bin，其次管理器目录
+/// 决定转发脚本写到哪个目录。
+///
+/// - Windows：优先 `%APPDATA%\npm`（npm 全局 bin），否则管理器目录
+/// - Unix：优先 `~/.local/bin`（XDG，多数发行版已在 PATH），其次 `~/.local/share/pnpm`、
+///   `~/.npm-global/bin`；都不存在则创建 `~/.local/bin`。最后回退管理器目录。
+#[cfg(windows)]
 fn path_bin_dir(manager: &PathBuf) -> PathBuf {
     if let Ok(appdata) = std::env::var("APPDATA") {
         let npm_bin = PathBuf::from(appdata).join("npm");
@@ -261,6 +266,35 @@ fn path_bin_dir(manager: &PathBuf) -> PathBuf {
             return npm_bin;
         }
     }
+    manager.clone()
+}
+
+#[cfg(unix)]
+fn path_bin_dir(manager: &PathBuf) -> PathBuf {
+    let home = std::env::var("HOME").unwrap_or_default();
+    if !home.is_empty() {
+        let candidates = [
+            format!("{}/.local/bin", home),
+            format!("{}/.local/share/pnpm", home),
+            format!("{}/.npm-global/bin", home),
+        ];
+        for c in &candidates {
+            let p = PathBuf::from(c);
+            if p.exists() {
+                return p;
+            }
+        }
+        // 都不存在：创建 XDG 标准的 ~/.local/bin
+        let fallback = PathBuf::from(&candidates[0]);
+        if std::fs::create_dir_all(&fallback).is_ok() {
+            return fallback;
+        }
+    }
+    manager.clone()
+}
+
+#[cfg(not(any(windows, unix)))]
+fn path_bin_dir(manager: &PathBuf) -> PathBuf {
     manager.clone()
 }
 

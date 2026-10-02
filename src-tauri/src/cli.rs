@@ -211,7 +211,13 @@ fn progress_is_tty() -> bool {
     }
 }
 
-#[cfg(not(windows))]
+#[cfg(unix)]
+fn progress_is_tty() -> bool {
+    // isatty 判断 stderr 是否连着终端；重定向/管道时返回 false → 静默，保持可管道
+    unsafe { libc::isatty(libc::STDERR_FILENO) == 1 }
+}
+
+#[cfg(not(any(windows, unix)))]
 fn progress_is_tty() -> bool {
     false
 }
