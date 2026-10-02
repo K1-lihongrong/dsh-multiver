@@ -72,9 +72,11 @@ pub fn run_store_prune(store: &Path, cache: &Path, state: &Path) -> Result<(), S
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null());
 
+    // spawn 前：平台配置（Unix 新进程组 + PDEATHSIG；Windows 无操作）
+    crate::jobobj::configure_command(&mut cmd);
     let mut child = cmd.spawn().map_err(|e| format!("启动 store prune 失败: {}", e))?;
-    // 绑定 Job：管理器退出即杀，避免孤儿
-    let _job = crate::jobobj::assign_to_new_job(&child);
+    // spawn 后：绑定进程守卫（Windows Job / Unix 进程组），管理器退出即杀，避免孤儿
+    let _job = crate::jobobj::attach(&child);
     let status = child.wait();
     if matches!(status, Ok(s) if s.success()) {
         Ok(())

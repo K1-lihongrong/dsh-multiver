@@ -37,6 +37,10 @@ windows-sys = { version = "0.59", features = [
     "Win32_System_Console",
 ] }
 
+# 用于 Unix 进程组管理：killpg / PDEATHSIG（见 jobobj.rs）
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
 
 # Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration
 [profile.release]

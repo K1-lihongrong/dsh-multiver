@@ -16,7 +16,7 @@ pub fn spawn_web_hidden(
     store_dir: &Path,
     cache_dir: &Path,
     state_dir: &Path,
-) -> Result<(Child, String, Option<crate::jobobj::JobHandle>), String> {
+) -> Result<(Child, String, Option<crate::jobobj::ProcessGuard>), String> {
     let bin = version_dir
         .join("node_modules")
         .join(".bin")
@@ -52,12 +52,16 @@ pub fn spawn_web_hidden(
         cmd.creation_flags(CREATE_NO_WINDOW);
     }
 
+    // spawn 前：平台相关配置（Unix 下设为新进程组 + PDEATHSIG；Windows 无操作）
+    crate::jobobj::configure_command(&mut cmd);
+
     let mut child = cmd.spawn().map_err(|e| format!("启动 dsh web 失败: {}", e))?;
 
-    // 关键：把子进程加入一个 Job（KILL_ON_JOB_CLOSE）。
-    // 管理器进程一退出（正常/强杀/崩溃），OS 会自动结束 Job 内所有进程，
+    // spawn 后：加入进程守卫。
+    // - Windows：加入 Job（KILL_ON_JOB_CLOSE），管理器退出即由 OS 杀光组内进程
+    // - Unix：进程组已在 configure 阶段设好，此处返回占位句柄
     // 根除"窗口关了但 node 还在"的孤儿进程问题。
-    let job = crate::jobobj::assign_to_new_job(&child);
+    let job = crate::jobobj::attach(&child);
 
     // ── 会话日志（阶段一：可观测性）──
     // 每次启动 dsh 生成一个带时间戳的会话文件，记录 stdout + stderr 全量输出，
@@ -174,7 +178,10 @@ pub fn spawn_web_hidden(
     }
 }
 
-/// 结束一个 dsh 进程及其整棵子进程树（Windows 用 taskkill /T /F）。
+/// 结束一个 dsh 进程及其整棵子进程树。
+///
+/// - Windows：`taskkill /T /F`（杀整棵进程树）
+/// - Unix：`killpg`（杀整个进程组——子进程由 configure_command 设为组长）
 pub fn kill_tree(child: &mut Child) {
     #[cfg(windows)]
     {
@@ -188,6 +195,14 @@ pub fn kill_tree(child: &mut Child) {
             .arg("/F")
             .creation_flags(CREATE_NO_WINDOW)
             .output();
+    }
+    #[cfg(unix)]
+    {
+        // 子进程是新进程组组长（pgid = pid），杀整组覆盖其所有后代
+        let pid = child.id() as i32;
+        unsafe {
+            libc::killpg(pid, libc::SIGKILL);
+        }
     }
     let _ = child.kill();
 }
@@ -382,6 +397,9 @@ pub fn spawn_web_console(
         const CREATE_NEW_CONSOLE: u32 = 0x00000010;
         cmd.creation_flags(CREATE_NEW_CONSOLE);
     }
+
+    // spawn 前：平台相关配置（Unix 下设为新进程组 + PDEATHSIG；Windows 无操作）
+    crate::jobobj::configure_command(&mut cmd);
 
     match cmd.spawn() {
         Ok(_) => (true, format!("已在新终端用端口 {} 启动 dsh web，稍候会自动打开浏览器", port)),

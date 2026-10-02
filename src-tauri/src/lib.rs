@@ -20,7 +20,7 @@ use std::sync::{Arc, Mutex};
 /// - 代次用于解决窗口替换时的 Destroyed 回调竞态：回调只在自己那一代仍是当前项时才 kill。
 /// 「版本号 → (窗口 label, 代次, dsh 子进程, Job 持有句柄)」。
 /// Job 句柄用于"管理器退出即杀光子进程"：持有到进程被移除/窗口关闭时。
-type ProcMap = Arc<Mutex<HashMap<String, (String, u64, Child, Option<jobobj::JobHandle>)>>>;
+type ProcMap = Arc<Mutex<HashMap<String, (String, u64, Child, Option<jobobj::ProcessGuard>)>>>;
 
 /// 全局单调递增的代次计数器（用于区分同名窗口的不同实例）
 static NEXT_GEN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
