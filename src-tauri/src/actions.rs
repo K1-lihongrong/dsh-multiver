@@ -71,6 +71,9 @@ pub fn list_remote(store_dir: &Path, cache_dir: &Path, state_dir: &Path) -> (boo
 /// 版本号、根目录、DSH_HOME 都**直接写死在脚本里**（由 Rust 在生成时算好），
 /// 避免批处理解析 config.json 的脆弱性。
 /// 脚本内带保险：若 DSH_HOME 目录不存在，则不设该变量，回退到 dsh 默认（~/.dsh）。
+///
+/// 平台分派：Windows 生成 .cmd 批处理，Unix 生成 POSIX sh 脚本。
+#[cfg(windows)]
 pub fn build_forward_script(version: &str, root_dir: &str, isolated: bool) -> String {
     // 确保 root 以反斜杠结尾，方便拼接
     let mut root = root_dir.replace('/', "\\");
@@ -106,11 +109,53 @@ pub fn build_forward_script(version: &str, root_dir: &str, isolated: bool) -> St
     s
 }
 
-/// 把转发脚本写入目标目录
+/// Unix 版转发脚本（POSIX sh）。生成 `dsh`（无扩展名，需可执行）。
+///
+/// 注意：本分支在 Windows 上不参与编译，尚未经真机验证（见 docs/开发缺口.md GAP-005）。
+#[cfg(unix)]
+pub fn build_forward_script(version: &str, root_dir: &str, isolated: bool) -> String {
+    let root = root_dir.trim_end_matches('/');
+    let home = if isolated {
+        format!("{}/versions/{}/home", root, version)
+    } else {
+        format!("{}/home", root)
+    };
+    format!(
+        "#!/bin/sh\n\
+         # dsh-multiver 转发脚本（自动生成，请勿手改）\n\
+         VER='{version}'\n\
+         ROOT='{root}'\n\
+         BIN=\"$ROOT/versions/$VER/node_modules/.bin/dsh\"\n\
+         if [ ! -x \"$BIN\" ]; then\n\
+         \x20 echo \"[dsh] 找不到版本 $VER 的入口: $BIN\" >&2\n\
+         \x20 exit 1\n\
+         fi\n\
+         if [ -d '{home}' ]; then\n\
+         \x20 export DSH_HOME='{home}'\n\
+         else\n\
+         \x20 echo \"[dsh] 数据目录不存在，回退到 dsh 默认位置: {home}\" >&2\n\
+         fi\n\
+         exec \"$BIN\" \"$@\"\n",
+        version = version,
+        root = root,
+        home = home
+    )
+}
+
+/// 把转发脚本写入目标目录（文件名与可执行权限按平台区分）
 pub fn write_forward_script(dir: &Path, content: &str) -> std::io::Result<String> {
     std::fs::create_dir_all(dir)?;
+    #[cfg(windows)]
     let path = dir.join("dsh.cmd");
+    #[cfg(unix)]
+    let path = dir.join("dsh");
     std::fs::write(&path, content)?;
+    // Unix：设为可执行，否则无法作为命令运行
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755));
+    }
     Ok(path.to_string_lossy().to_string())
 }
 
@@ -149,7 +194,9 @@ pub fn open_folder(path: &Path) -> (bool, String) {
     }
 }
 
-#[cfg(test)]
+// 转发脚本的测试断言针对 Windows 批处理格式；Unix 版内容不同，
+// 故仅在 Windows 下编译（Unix 分支待真机验证，见 GAP-005）。
+#[cfg(all(test, windows))]
 mod tests {
     use super::*;
 

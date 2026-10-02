@@ -230,10 +230,10 @@ fn set_default(app: tauri::AppHandle, version: Option<String>) -> Result<String,
     }
 }
 
-/// 根据当前配置，重生成（或删除）终端 dsh 转发脚本 dsh.cmd。
+/// 根据当前配置，重生成（或删除）终端 dsh 转发脚本。
 ///
-/// - 有默认版本：写入 dsh.cmd（含 DSH_HOME，按默认版本是否隔离决定）
-/// - 无默认版本：删除 dsh.cmd
+/// - 有默认版本：写入转发脚本（Windows 为 dsh.cmd，Unix 为 dsh；含 DSH_HOME）
+/// - 无默认版本：删除转发脚本
 /// 供 set_default / set_root / set_isolated / uninstall_version 统一调用。
 pub(crate) fn regenerate_forward_script(mdir: &PathBuf, cfg: &Config) {
     let target = path_bin_dir(mdir);
@@ -245,7 +245,10 @@ pub(crate) fn regenerate_forward_script(mdir: &PathBuf, cfg: &Config) {
             let _ = actions::write_forward_script(&target, &script);
         }
         None => {
+            #[cfg(windows)]
             let _ = std::fs::remove_file(target.join("dsh.cmd"));
+            #[cfg(unix)]
+            let _ = std::fs::remove_file(target.join("dsh"));
         }
     }
 }
