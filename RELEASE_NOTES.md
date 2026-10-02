@@ -1,36 +1,20 @@
-## DSH 版本管理器 v0.2.0
+## DSH 版本管理器 v0.2.1
 
-**本版本首次提供 Linux 构建**，并与 Windows 功能同步。v0.1.8 → v0.2.0 的主要变化如下。
+本版本为 v0.2.0 之后的**维护性更新**：以内部重构与工程质量改进为主，含一处用户可见的体验改进。
 
-### 🐧 新增：Linux 支持（预览）
+### 🔧 变更
 
-- 与 Windows 功能对齐：安装 / 卸载 / 运行 / 数据隔离 / CLI / 终端短命令 / 桌面快捷方式
-- **进程清理跨平台**：
-  - Windows：Job Object（管理器退出即杀 dsh 进程树）
-  - Linux：进程组 + `PDEATHSIG`（管理器正常关闭或**被强杀**，dsh 进程都会被清理，无孤儿）
-- **终端短命令**：Linux 下生成 `~/.local/bin/dsh`（POSIX sh 脚本）
-- **桌面快捷方式**：Linux 下生成 `.desktop` 文件
-- 已在 Debian 13 上完成编译、单元测试、GUI 启动、CLI、转发脚本、进程清理的验证
+- **超时错误提示更实用**：启动超时或无法解析地址时，错误信息**直接给出日志目录的完整路径**，
+  便于直接定位问题日志（无需自己寻找 `logs/` 在哪）
+- **代码结构优化（内部）**：`lib.rs` 从 971 行降至 190 行——窗口/平台辅助移入 `window.rs`，
+  全部 Tauri 命令移入 `commands.rs`。纯结构调整，**不影响任何功能行为**
 
-> Linux 构建产物为 **AppImage（免安装，推荐）** 与 **.deb（Debian/Ubuntu）**。
-> AppImage 需先 `chmod +x dsh-multiver_*.AppImage` 再运行。
+### ✅ 测试
 
-### 📋 新增：运行日志（可观测性）
-
-- **会话日志**：每次「运行」某版本，完整记录该次 dsh 的 stdout/stderr，落在 `<数据根>/logs/session-*.log`（保留最新 20 份）
-- **主进程错误** `logs/app.log`、**前端错误** `logs/frontend.log`
-- 遇到问题时可据此定位，详见 [问题日志查看指南](https://github.com/K1-lihongrong/dsh-multiver/blob/main/docs/问题日志查看指南.md)
-
-### 🎨 变更
-
-- **界面显示自身版本号**：顶栏标题旁显示 `dsh-multiver vX.Y.Z`
-- **新应用图标**：改用独立的「层叠版本」图标（不再使用 dsh 官方 logo 图形）
-- **启动超时 30s → 90s**：缓解 dsh 首次（冷）启动较慢时"首次失败、再点就成功"的问题
-
-### 🔧 工程
-
-- 新增 41 个 Rust 单元测试；CI（Windows + Ubuntu 矩阵）在 push/PR 时自动跑测试
-- 跨平台代码通过 `cfg` 分支隔离，Windows / Linux 各自编译验证
+- 单元测试从 41 个增至 **57 个**：新增命令层纯逻辑覆盖
+  （`build_topbar_script` / `resolve_home` / `Config::apply_install_result` /
+  `Config::remove_version_refs` / `Dirs::resolve`）
+- Windows / Linux 两平台编译与测试均通过、零警告
 
 ### 📦 下载
 
@@ -39,6 +23,8 @@
 | **Windows** | `dsh-multiver.exe` | 便携版，双击运行（需 WebView2） |
 | **Linux（通用）** | `dsh-multiver_*_amd64.AppImage` | 免安装，`chmod +x` 后运行 |
 | **Linux（Debian/Ubuntu）** | `dsh-multiver_*_amd64.deb` | `sudo dpkg -i` 安装 |
+
+> Linux 产物已在 Debian 13 上完成实机验证（AppImage 与 deb 的 CLI 均可正常运行）。
 
 ---
 
