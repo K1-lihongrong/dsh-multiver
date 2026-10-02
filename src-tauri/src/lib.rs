@@ -7,6 +7,7 @@ mod launcher;
 mod logging;
 mod maintenance;
 mod versions;
+mod window;
 
 use config::{Config, Dirs};
 use serde::Serialize;
@@ -345,11 +346,11 @@ async fn launch_window(
     .await
     .map_err(|e| {
         let m = format!("启动任务失败: {}", e);
-        log_app_error(&dirs.root, "launch_window", &format!("{} ({})", version, m));
+        logging::log_app_error(&dirs.root, "launch_window", &format!("{} ({})", version, m));
         m
     })?;
     let (child, url, job) = spawned.map_err(|e| {
-        log_app_error(&dirs.root, "launch_window", &format!("{} ({})", version, e));
+        logging::log_app_error(&dirs.root, "launch_window", &format!("{} ({})", version, e));
         e
     })?;
 
@@ -367,7 +368,7 @@ async fn launch_window(
 
     // 生成唯一 label（带代次），从根本上避免 label 复用冲突
     let generation = NEXT_GEN.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    let label = window_label_gen(&version, generation);
+    let label = window::window_label_gen(&version, generation);
 
     let title = format!("DSH {}", version);
     let init_script = build_topbar_script(&version, &url);
@@ -389,7 +390,7 @@ async fn launch_window(
         Err(e) => {
             let mut c = child;
             launcher::kill_tree(&mut c);
-            log_app_error(&dirs.root, "launch_window", &format!("{} 创建窗口失败: {}", version, e));
+            logging::log_app_error(&dirs.root, "launch_window", &format!("{} 创建窗口失败: {}", version, e));
             return Err(format!("创建窗口失败: {}", e));
         }
     };
@@ -512,7 +513,7 @@ async fn open_in_browser(
         // 提示：端口 + 数据目录
         Ok(format!("{}；数据目录：{}", msg, home.to_string_lossy()))
     } else {
-        log_app_error(&dirs.root, "open_in_browser", &format!("{} ({})", version, msg));
+        logging::log_app_error(&dirs.root, "open_in_browser", &format!("{} ({})", version, msg));
         Err(msg)
     }
 }
@@ -561,11 +562,11 @@ async fn restart_version(
     .await
     .map_err(|e| {
         let m = format!("重启任务失败: {}", e);
-        log_app_error(&dirs.root, "restart_version", &format!("{} ({})", version, m));
+        logging::log_app_error(&dirs.root, "restart_version", &format!("{} ({})", version, m));
         m
     })?;
     let (child, url, job) = spawned.map_err(|e| {
-        log_app_error(&dirs.root, "restart_version", &format!("{} ({})", version, e));
+        logging::log_app_error(&dirs.root, "restart_version", &format!("{} ({})", version, e));
         e
     })?;
 
@@ -676,7 +677,7 @@ async fn run_maintenance(app: tauri::AppHandle, kind: String) -> Result<String, 
             let removed = maintenance::cleanup_orphan_webviews(&dirs.versions, &dirs.webview);
             cfg.maintenance.last_cleanup_at = Some(maintenance::now_secs());
             cfg.maintenance.last_cleanup_count = removed.len() as u64;
-            log_maintenance(&root, &format!("[手动] 清理孤立 webview：{} 项 {:?}", removed.len(), removed));
+            logging::log_maintenance(&root, &format!("[手动] 清理孤立 webview：{} 项 {:?}", removed.len(), removed));
             parts.push(format!("已清理孤立缓存 {} 项", removed.len()));
         }
 
@@ -684,11 +685,11 @@ async fn run_maintenance(app: tauri::AppHandle, kind: String) -> Result<String, 
             match maintenance::run_store_prune(&dirs.store, &dirs.cache, &dirs.state) {
                 Ok(()) => {
                     cfg.maintenance.last_prune_at = Some(maintenance::now_secs());
-                    log_maintenance(&root, "[手动] store prune 完成");
+                    logging::log_maintenance(&root, "[手动] store prune 完成");
                     parts.push("已回收依赖仓库".to_string());
                 }
                 Err(e) => {
-                    log_maintenance(&root, &format!("[手动] store prune 失败: {}", e));
+                    logging::log_maintenance(&root, &format!("[手动] store prune 失败: {}", e));
                     return Err(format!("回收依赖仓库失败：{}", e));
                 }
             }
@@ -796,16 +797,6 @@ fn check_env(app: tauri::AppHandle) -> Vec<envcheck::CheckItem> {
     envcheck::run_all(&dirs.root)
 }
 
-/// 把精简启动模式的错误写入 <根>/logs/launch-error.log（windows_subsystem=windows 下无控制台，便于排查）
-fn log_launch_error(root: &std::path::Path, msg: &str) {
-    logging::write_line(&root.join("logs"), "launch-error.log", msg);
-}
-
-/// 把后台维护的日志写入 <根>/logs/maintenance.log。
-fn log_maintenance(root: &std::path::Path, msg: &str) {
-    logging::write_line(&root.join("logs"), "maintenance.log", msg);
-}
-
 /// 前端（WebView）JS 错误上报：写入 <根>/logs/frontend.log。
 /// 历史踩坑：App.vue 缺 import 导致白屏、window.confirm 在 WebView2 静默失效——
 /// 这些前端异常过去无任何留痕。此命令为其提供落盘通道。
@@ -815,85 +806,6 @@ fn log_frontend(app: tauri::AppHandle, msg: String) {
     let root = Config::load(&mdir).resolve_root(&mdir);
     logging::write_line(&root.join("logs"), "frontend.log", &msg);
 }
-
-/// 把主进程关键错误写入 <根>/logs/app.log（失败静默）。
-fn log_app_error(root: &std::path::Path, ctx: &str, msg: &str) {
-    logging::write_line(&root.join("logs"), "app.log", &format!("[{}] {}", ctx, msg));
-}
-
-/// 由版本号生成合法的窗口 label 前缀（不含代次）。
-/// Tauri 要求 label 只含字母数字和 `-` `/` `:` `_`，而版本号含 `.`，故替换为 `_`。
-fn window_label_prefix(version: &str) -> String {
-    let sanitized: String = version
-        .chars()
-        .map(|c| if c.is_ascii_alphanumeric() || matches!(c, '-' | '/' | ':' | '_') { c } else { '_' })
-        .collect();
-    format!("dsh-{}", sanitized)
-}
-
-/// 带代次的**唯一**窗口 label。
-/// 用唯一 label 从根本上避免 "a webview with label ... already exists"：
-/// close()/destroy() 都是异步投递，不能保证旧窗口立即消失，故不再复用 label。
-fn window_label_gen(version: &str, gen: u64) -> String {
-    format!("{}-{}", window_label_prefix(version), gen)
-}
-
-/// 从命令行参数解析出 --launch-version <版本>（精简启动模式用）
-fn parse_launch_version(args: &[String]) -> Option<String> {
-    let mut it = args.iter();
-    while let Some(a) = it.next() {
-        if a == "--launch-version" {
-            return it.next().cloned();
-        }
-    }
-    None
-}
-
-/// 显式设置进程 AppUserModelID，稳定 Windows 任务栏图标。
-///
-/// 不设置时，Windows 会尝试从"与 exe 关联的快捷方式"推断分组：
-/// 一旦为某版本创建桌面快捷方式，任务栏重新分组就会取不到图标（图标丢失），
-/// 重启程序才暂时恢复。显式固定 AUMID（用 app identifier）后分组稳定。
-///
-/// 注意：设了 AUMID 后，任务栏会改为从注册表
-/// HKCU\Software\Classes\AppUserModelId\<AUMID> 的 IconUri 读取图标，
-/// 因此这里一并把 IconUri 注册为当前 exe，否则任务栏会显示占位图。
-/// 必须在任何窗口显示之前调用。
-#[cfg(windows)]
-fn set_windows_app_user_model_id(app: &tauri::AppHandle) {
-    let app_id = app.config().identifier.clone();
-    let wide: Vec<u16> = app_id.encode_utf16().chain(std::iter::once(0)).collect();
-    unsafe {
-        windows_sys::Win32::UI::Shell::SetCurrentProcessExplicitAppUserModelID(wide.as_ptr());
-    }
-
-    // 为 AUMID 注册任务栏图标：IconUri 指向当前 exe。
-    if let Ok(exe) = std::env::current_exe() {
-        use std::os::windows::process::CommandExt;
-        const CREATE_NO_WINDOW: u32 = 0x08000000;
-        let key = format!(
-            "HKCU\\Software\\Classes\\AppUserModelId\\{}",
-            app_id
-        );
-        let _ = std::process::Command::new("reg")
-            .args([
-                "add",
-                &key,
-                "/v",
-                "IconUri",
-                "/t",
-                "REG_SZ",
-                "/d",
-                &exe.to_string_lossy(),
-                "/f",
-            ])
-            .creation_flags(CREATE_NO_WINDOW)
-            .output();
-    }
-}
-
-#[cfg(not(windows))]
-fn set_windows_app_user_model_id(_app: &tauri::AppHandle) {}
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -951,10 +863,10 @@ pub fn run() {
         .setup(move |app| {
             use tauri::Manager;
             // 必须在任何窗口显示之前设置，否则任务栏图标可能不稳定
-            set_windows_app_user_model_id(&app.handle().clone());
+            window::set_windows_app_user_model_id(&app.handle().clone());
             // 精简启动模式：命令行带 --launch-version <版本> 时，
             // 关闭默认主窗口，直接打开该版本的内嵌窗口。
-            if let Some(version) = parse_launch_version(&std::env::args().collect::<Vec<_>>()) {
+            if let Some(version) = window::parse_launch_version(&std::env::args().collect::<Vec<_>>()) {
                 // 注意：不能立刻 close 主窗口——若此时尚无其他窗口，Tauri 会认为
                 // "所有窗口已关闭" 而直接退出事件循环，导致异步创建 dsh 窗口来不及执行。
                 // 因此先**隐藏**主窗口（保持进程存活），待 dsh 窗口建好后再关闭它。
@@ -977,7 +889,7 @@ pub fn run() {
                             // 无控制台，错误同时落盘，便于排查
                             let mdir = manager_dir(&app_handle);
                             let root = Config::load(&mdir).resolve_root(&mdir);
-                            log_launch_error(&root, &format!("版本 {} 启动失败: {}", version_for_launch, e));
+                            logging::log_launch_error(&root, &format!("版本 {} 启动失败: {}", version_for_launch, e));
                             eprintln!("[dsh-multiver] 启动失败: {}", e);
                             // 启动失败时把主窗口显示出来，避免用户看到"什么都没有"
                             if let Some(main) = app_handle.get_webview_window("main") {
@@ -1010,7 +922,7 @@ pub fn run() {
                     cfg.maintenance.last_cleanup_count = removed.len() as u64;
                     let _ = cfg.save(&mdir);
                     if !removed.is_empty() {
-                        log_maintenance(&root, &format!("清理孤立 webview：{:?}", removed));
+                        logging::log_maintenance(&root, &format!("清理孤立 webview：{:?}", removed));
                     }
 
                     // 2) store prune：距上次 >= 7 天才跑，且延迟 30 秒错开启动 IO
@@ -1025,10 +937,10 @@ pub fn run() {
                                 let mut c2 = Config::load(&mdir);
                                 c2.maintenance.last_prune_at = Some(maintenance::now_secs());
                                 let _ = c2.save(&mdir);
-                                log_maintenance(&root, "store prune 完成");
+                                logging::log_maintenance(&root, "store prune 完成");
                             }
                             Err(e) => {
-                                log_maintenance(&root, &format!("store prune 失败（下次重试）: {}", e));
+                                logging::log_maintenance(&root, &format!("store prune 失败（下次重试）: {}", e));
                             }
                         }
                     }

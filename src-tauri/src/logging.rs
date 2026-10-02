@@ -106,6 +106,25 @@ pub fn prune_old(dir: &Path, prefix: &str, suffix: &str, keep: usize) {
 }
 
 
+
+// ───────── 项目级日志写入便捷函数（从 lib.rs 抽出，GAP-003）─────────
+
+/// 精简启动模式的错误 → <root>/logs/launch-error.log
+/// （windows_subsystem=windows 下无控制台，此文件是唯一错误出口）
+pub(crate) fn log_launch_error(root: &Path, msg: &str) {
+    write_line(&root.join("logs"), "launch-error.log", msg);
+}
+
+/// 后台维护日志 → <root>/logs/maintenance.log
+pub(crate) fn log_maintenance(root: &Path, msg: &str) {
+    write_line(&root.join("logs"), "maintenance.log", msg);
+}
+
+/// 主进程关键错误 → <root>/logs/app.log（失败静默）
+pub(crate) fn log_app_error(root: &Path, ctx: &str, msg: &str) {
+    write_line(&root.join("logs"), "app.log", &format!("[{}] {}", ctx, msg));
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
