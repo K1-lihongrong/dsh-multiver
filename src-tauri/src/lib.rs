@@ -963,5 +963,69 @@ pub fn run() {
         });
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── build_topbar_script：注入脚本的占位符替换与转义 ──
+
+    #[test]
+    fn topbar_script_substitutes_placeholders() {
+        let s = build_topbar_script("0.2.0-rc.2", "http://127.0.0.1:1234/?token=abc");
+        // 占位符应被替换
+        assert!(!s.contains("__VER__"));
+        assert!(!s.contains("__URL__"));
+        assert!(s.contains("0.2.0-rc.2"));
+        assert!(s.contains("http://127.0.0.1:1234/?token=abc"));
+    }
+
+    #[test]
+    fn topbar_script_escapes_quote_and_backslash() {
+        // 单引号、反斜杠应被转义，防注入 JS 单引号字符串字面量
+        let s = build_topbar_script("v'1", "http://x/'y\\z");
+        assert!(s.contains("v\\'1"), "单引号应被转义: {}", s);
+        assert!(s.contains("http://x/\\'y"), "URL 中单引号应被转义");
+    }
+
+    // ── resolve_home：隔离 / 非隔离版本的 DSH_HOME 解析 ──
+
+    #[test]
+    fn resolve_home_shared_when_not_isolated() {
+        let cfg = Config::default();
+        let dirs = Dirs::new(std::env::temp_dir().join("dsh-rh-shared"));
+        let h = resolve_home(&cfg, &dirs, "0.1.0");
+        assert_eq!(h, dirs.home);
+    }
+
+    #[test]
+    fn resolve_home_isolated_uses_version_subdir() {
+        let mut cfg = Config::default();
+        cfg.isolated_versions = vec!["0.1.0".to_string()];
+        let base = std::env::temp_dir().join(format!(
+            "dsh-rh-iso-{}",
+            crate::logging::now_secs()
+        ));
+        let _ = std::fs::remove_dir_all(&base);
+        let dirs = Dirs::new(base.clone());
+        let h = resolve_home(&cfg, &dirs, "0.1.0");
+        // 隔离版本 → <root>/versions/<ver>/home
+        assert_eq!(h, dirs.versions.join("0.1.0").join("home"));
+        // 该目录应被创建
+        assert!(h.exists(), "隔离 home 应被创建");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn resolve_home_isolated_only_for_listed_version() {
+        let mut cfg = Config::default();
+        cfg.isolated_versions = vec!["0.1.0".to_string()];
+        let dirs = Dirs::new(std::env::temp_dir().join("dsh-rh-mixed"));
+        // 未列入隔离的版本 → 共享 home
+        let h = resolve_home(&cfg, &dirs, "0.2.0");
+        assert_eq!(h, dirs.home);
+    }
+}
+
+
 
 
