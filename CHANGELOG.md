@@ -7,6 +7,19 @@
 
 ---
 
+## [未发布]
+
+### 变更
+- **命令层拆分（GAP-003）**：`lib.rs` 从 971 行降至 190 行——窗口/平台辅助抽出为 `window.rs`，
+  全部 `#[tauri::command]` 及专属 helper 抽出为 `commands.rs`（纯移动，无逻辑改动；两平台编译/测试通过）
+- **超时错误文案**：启动超时 / URL 解析失败时直接给出实际日志目录完整路径，便于用户直达（GAP-004）
+
+### 测试
+- 单元测试 41 → 57：新增命令层纯逻辑覆盖（`build_topbar_script` / `resolve_home` /
+  `Config::apply_install_result` / `Config::remove_version_refs` / `Dirs::resolve`）
+
+---
+
 ## [0.2.0] - 2026-10-02
 
 ### 新增
