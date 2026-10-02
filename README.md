@@ -34,13 +34,9 @@
 
 📖 **完整操作说明见 [使用手册](docs/使用手册.md)** —— 含环境准备、各项功能、常见问题排查。
 
-🐧 **Linux 支持**：规划中，见 [Linux 适配开发计划](docs/Linux适配开发计划.md)。当前版本仅支持 Windows。
+🔍 **遇到问题？见 [问题日志查看指南](docs/问题日志查看指南.md)** —— 日志在哪、各记录什么、按现象怎么查。
 
-🐧 **Linux 支持**：规划中，见 [Linux 适配开发计划](docs/Linux适配开发计划.md)。当前版本仅支持 Windows。
-
-🐧 **Linux 支持**：规划中，见 [Linux 适配开发计划](docs/Linux适配开发计划.md)。当前版本仅支持 Windows。
-
-🐧 **Linux 支持**：规划中，见 [Linux 适配开发计划](docs/Linux适配开发计划.md)。当前版本仅支持 Windows。
+🐧 **Linux 支持**：代码已跨平台化（cfg 分支 + 编译/运行验证），打包发布待完善；见 [Linux 适配开发计划](docs/Linux适配开发计划.md)。
 
 ## 使用
 

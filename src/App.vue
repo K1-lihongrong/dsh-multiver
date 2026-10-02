@@ -535,6 +535,7 @@ onUnmounted(() => {
     <div class="brand">
       <span class="dot"></span>
       <h1>DSH 版本管理器</h1>
+      <span class="app-version" v-if="state && state.version">v{{ state.version }}</span>
     </div>
     <div class="root-line" v-if="state">
       <span class="label">根目录</span>
@@ -887,6 +888,7 @@ body {
   box-shadow: 0 0 0 4px rgba(79,110,247,0.15);
 }
 .brand h1 { font-size: 16px; margin: 0; font-weight: 600; letter-spacing: 0.2px; }
+.app-version { font-size: 11px; color: #9aa1ab; background: #f0f2f5; padding: 1px 6px; border-radius: 8px; font-weight: 500; }
 .root-line { display: flex; align-items: center; gap: 8px; font-size: 12px; color: #6b7280; }
 .root-line .label { color: #9aa1ab; }
 .root-line code {

@@ -46,6 +46,8 @@ pub(crate) fn manager_dir_plain() -> PathBuf {
 /// 一次返回给前端的完整状态
 #[derive(Serialize)]
 struct AppState {
+    /// 管理器自身版本号（来自 Cargo.toml）
+    version: String,
     root_dir: String,
     versions_dir: String,
     home_dir: String,
@@ -66,6 +68,7 @@ fn get_state(app: tauri::AppHandle) -> AppState {
     let dirs = Dirs::new(root.clone());
     let _ = dirs.ensure();
     AppState {
+        version: cli::VERSION.to_string(),
         root_dir: root.to_string_lossy().to_string(),
         versions_dir: dirs.versions.to_string_lossy().to_string(),
         home_dir: dirs.home.to_string_lossy().to_string(),
