@@ -348,7 +348,7 @@ fn cmd_uninstall(version: &str) -> i32 {
     if need_save {
         let _ = ctx.cfg.save(&ctx.mdir);
     }
-    crate::regenerate_forward_script(&ctx.mdir, &ctx.cfg);
+    crate::commands::regenerate_forward_script(&ctx.mdir, &ctx.cfg);
 
     let (ok, msg) = versions::uninstall(&ctx.dirs.versions, version);
     if ok {
@@ -374,7 +374,7 @@ fn cmd_set_default(version: &str) -> i32 {
         eprintln!("保存配置失败：{}", e);
         return 1;
     }
-    crate::regenerate_forward_script(&ctx.mdir, &ctx.cfg);
+    crate::commands::regenerate_forward_script(&ctx.mdir, &ctx.cfg);
     println!("默认版本已设为 {}，dsh 命令已就绪", version);
     0
 }
