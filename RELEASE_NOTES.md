@@ -1,34 +1,44 @@
-## DSH 版本管理器 v0.1.8
+## DSH 版本管理器 v0.2.0
 
-### ✨ 新增：全套无头 CLI
+**本版本首次提供 Linux 构建**，并与 Windows 功能同步。v0.1.8 → v0.2.0 的主要变化如下。
 
-带任一 CLI 参数即**不启动图形界面**，执行完按退出码退出（成功 `0` / 失败 `1`），方便脚本化、批处理和 CI：
+### 🐧 新增：Linux 支持（预览）
 
-```bash
-dsh-multiver --list                                  # 列出已安装版本（默认版本以 "* " 标记）
-dsh-multiver --install 0.2.0-rc.2                    # 安装指定版本
-dsh-multiver --install 0.2.0-rc.2 --registry <url>   # 指定 npm 源安装
-dsh-multiver --uninstall 0.1.5-rc.3                  # 卸载
-dsh-multiver --set-default 0.2.0-rc.2                # 设为默认版本（重生成终端 dsh 命令）
-dsh-multiver --maintenance --cleanup                 # 清理孤立缓存
-dsh-multiver --maintenance --prune                   # 回收依赖仓库
-dsh-multiver --maintenance                           # 两者都做
-dsh-multiver --help                                  # 帮助
-dsh-multiver --version                               # 版本号
-```
+- 与 Windows 功能对齐：安装 / 卸载 / 运行 / 数据隔离 / CLI / 终端短命令 / 桌面快捷方式
+- **进程清理跨平台**：
+  - Windows：Job Object（管理器退出即杀 dsh 进程树）
+  - Linux：进程组 + `PDEATHSIG`（管理器正常关闭或**被强杀**，dsh 进程都会被清理，无孤儿）
+- **终端短命令**：Linux 下生成 `~/.local/bin/dsh`（POSIX sh 脚本）
+- **桌面快捷方式**：Linux 下生成 `.desktop` 文件
+- 已在 Debian 13 上完成编译、单元测试、GUI 启动、CLI、转发脚本、进程清理的验证
 
-- **控制台自动接入**：release 版本身没有控制台窗口，CLI 模式会自动附加到父控制台并切换为 UTF-8 输出，因此在 cmd / PowerShell 里**直接运行就能看到输出**；若把输出重定向到文件或管道，则保持原样不干扰
-- **输出可管道**：`--list` 一行一个版本号；安装进度走 stderr 且仅在真实终端下显示，stdout 始终干净
+> Linux 构建产物为 **AppImage（免安装，推荐）** 与 **.deb（Debian/Ubuntu）**。
+> AppImage 需先 `chmod +x dsh-multiver_*.AppImage` 再运行。
 
-### 🔧 变更
+### 📋 新增：运行日志（可观测性）
 
-- 未知参数（如打错的 `--instal`）**直接报错退出**，不再默默弹出图形界面
-- 清理 `get_manager_dir` 死代码
+- **会话日志**：每次「运行」某版本，完整记录该次 dsh 的 stdout/stderr，落在 `<数据根>/logs/session-*.log`（保留最新 20 份）
+- **主进程错误** `logs/app.log`、**前端错误** `logs/frontend.log`
+- 遇到问题时可据此定位，详见 [问题日志查看指南](https://github.com/K1-lihongrong/dsh-multiver/blob/main/docs/问题日志查看指南.md)
 
-### 说明
+### 🎨 变更
 
-- 破坏性命令（install / uninstall / set-default）**无交互确认**，靠精确参数保护，适合脚本调用
-- 不带任何 CLI 参数时，行为与之前完全一致：启动图形界面
+- **界面显示自身版本号**：顶栏标题旁显示 `dsh-multiver vX.Y.Z`
+- **新应用图标**：改用独立的「层叠版本」图标（不再使用 dsh 官方 logo 图形）
+- **启动超时 30s → 90s**：缓解 dsh 首次（冷）启动较慢时"首次失败、再点就成功"的问题
+
+### 🔧 工程
+
+- 新增 41 个 Rust 单元测试；CI（Windows + Ubuntu 矩阵）在 push/PR 时自动跑测试
+- 跨平台代码通过 `cfg` 分支隔离，Windows / Linux 各自编译验证
+
+### 📦 下载
+
+| 平台 | 文件 | 说明 |
+| :--- | :--- | :--- |
+| **Windows** | `dsh-multiver.exe` | 便携版，双击运行（需 WebView2） |
+| **Linux（通用）** | `dsh-multiver_*_amd64.AppImage` | 免安装，`chmod +x` 后运行 |
+| **Linux（Debian/Ubuntu）** | `dsh-multiver_*_amd64.deb` | `sudo dpkg -i` 安装 |
 
 ---
 

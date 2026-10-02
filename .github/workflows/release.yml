@@ -9,7 +9,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: '要发布的 tag（如 v0.1.4）'
+        description: '要发布的 tag（如 v0.2.0）'
         required: true
         type: string
 
@@ -18,12 +18,33 @@ permissions:
   contents: write
 
 jobs:
+  # ── 构建（Windows + Linux 并行）──
   build:
-    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            platform: windows
+          - os: ubuntu-22.04   # 用较旧的 LTS 构建，保证 glibc 向后兼容
+            platform: linux
+    runs-on: ${{ matrix.os }}
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      # ── Linux 系统依赖（Tauri / WebKitGTK）──
+      - name: Install Linux deps
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            build-essential curl wget file \
+            libxdo-dev libssl-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
@@ -47,26 +68,64 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Build
+      # ── Windows：单 exe（便携）──
+      - name: Build (Windows)
+        if: runner.os == 'Windows'
         run: pnpm tauri build --no-bundle
 
-      - name: Rename artifact
-        run: |
-          Copy-Item "src-tauri\target\release\dsh-multiver.exe" "dsh-multiver.exe"
+      - name: Rename artifact (Windows)
+        if: runner.os == 'Windows'
+        run: Copy-Item "src-tauri\target\release\dsh-multiver.exe" "dsh-multiver.exe"
 
-      - name: Upload artifact
+      # ── Linux：AppImage + deb ──
+      - name: Build (Linux)
+        if: runner.os == 'Linux'
+        run: pnpm tauri build --bundles appimage,deb
+
+      # ── 上传各平台构建产物 ──
+      - name: Upload artifact (Windows)
+        if: runner.os == 'Windows'
         uses: actions/upload-artifact@v4
         with:
-          name: dsh-multiver-exe
+          name: dsh-multiver-windows
           path: dsh-multiver.exe
 
+      - name: Upload artifact (Linux)
+        if: runner.os == 'Linux'
+        uses: actions/upload-artifact@v4
+        with:
+          name: dsh-multiver-linux
+          path: |
+            src-tauri/target/release/bundle/appimage/*.AppImage
+            src-tauri/target/release/bundle/deb/*.deb
+
+  # ── 发布：等两个平台都构建完，统一创建 Release ──
+  release:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: List artifacts
+        run: find artifacts -type f
+
       - name: Create Release
-        if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.event.inputs.tag || github.ref_name }}
           name: DSH 版本管理器 ${{ github.event.inputs.tag || github.ref_name }}
-          files: dsh-multiver.exe
+          files: |
+            artifacts/dsh-multiver-windows/dsh-multiver.exe
+            artifacts/dsh-multiver-linux/**/*.AppImage
+            artifacts/dsh-multiver-linux/**/*.deb
           body_path: RELEASE_NOTES.md
           draft: false
         env:
