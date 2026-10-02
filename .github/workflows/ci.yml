@@ -9,11 +9,27 @@ on:
 
 jobs:
   test:
-    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-22.04]
+    runs-on: ${{ matrix.os }}
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      # ── Linux 系统依赖（Tauri / WebKitGTK）──
+      - name: Install Linux deps
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            build-essential curl wget file \
+            libxdo-dev libssl-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
@@ -40,5 +56,8 @@ jobs:
       - name: Frontend build
         run: pnpm build
 
+      # 编译 + 运行单元测试。
+      # Linux runner 会**真正编译** #[cfg(unix)] 分支——这正是本地 Windows 无法覆盖的
+      # （见 docs/开发缺口.md GAP-005：Unix 进程管理/转发脚本分支待验证）。
       - name: Rust tests
         run: cargo test --manifest-path src-tauri/Cargo.toml --lib

@@ -219,10 +219,11 @@ mod tests {
 
     #[test]
     fn dirs_new_derives_expected_subdirs() {
+        // 用 join 构造期望值，避免平台路径分隔符差异（Windows \ vs Unix /）
         let d = Dirs::new(PathBuf::from("R"));
-        assert_eq!(d.versions, PathBuf::from("R\\versions"));
-        assert_eq!(d.home, PathBuf::from("R\\home"));
-        assert_eq!(d.webview, PathBuf::from("R\\webview"));
+        assert_eq!(d.versions, PathBuf::from("R").join("versions"));
+        assert_eq!(d.home, PathBuf::from("R").join("home"));
+        assert_eq!(d.webview, PathBuf::from("R").join("webview"));
     }
 
     #[test]
