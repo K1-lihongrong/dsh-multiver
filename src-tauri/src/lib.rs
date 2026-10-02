@@ -293,7 +293,7 @@ async fn launch_window(
     }
     let home = resolve_home(&cfg, &dirs, &version);
 
-    // 阻塞部分（起进程 + 等端口/URL，最多 30s）丢到后台线程，避免冻结界面
+    // 阻塞部分（起进程 + 等端口/URL，最多 90s，见 launcher 的超时常量）丢到后台线程，避免冻结界面
     let vdir2 = vdir.clone();
     let home2 = home.clone();
     let store2 = dirs.store.clone();
@@ -544,81 +544,16 @@ async fn restart_version(
 }
 
 
-/// 注入到 dsh 页面的顶部可折叠小栏（显示版本号 + 完整 URL + 重启按钮）
+/// 注入到 dsh 页面的顶部可折叠小栏（显示版本号 + 完整 URL + 重启按钮）。
 ///
-/// 说明：这里用普通字符串拼接而非 format!，避免 JS 里大量 {} 触发 Rust 格式串转义。
+/// 脚本正文外置在 `src/topbar.js`（便于编辑/高亮/审查），编译期用 include_str! 内联；
+/// 运行时把占位符 `__VER__` / `__URL__` 替换为实际值。
 fn build_topbar_script(version: &str, url: &str) -> String {
+    const TEMPLATE: &str = include_str!("topbar.js");
+    // 防注入：转义反斜杠与单引号（模板中以单引号包裹字符串字面量）
     let ver = version.replace('\\', "\\\\").replace('\'', "\\'");
     let url_js = url.replace('\\', "\\\\").replace('\'', "\\'");
-    let mut s = String::new();
-    s.push_str("(function() {\n");
-    s.push_str("  if (window.__dshDotInjected) return;\n");
-    s.push_str("  window.__dshDotInjected = true;\n");
-    s.push_str(&format!("  var VER = '{}';\n", ver));
-    s.push_str(&format!("  var URL = '{}';\n", url_js));
-    s.push_str("  function inject() {\n");
-    s.push_str("    if (!document.body) return setTimeout(inject, 50);\n");
-    s.push_str("    if (document.getElementById('__dsh_dot')) return;\n");
-    s.push_str("    var open = false;\n");
-    s.push_str("    var dot = document.createElement('div');\n");
-    s.push_str("    dot.id = '__dsh_dot';\n");
-    s.push_str("    var panel = document.createElement('div');\n");
-    s.push_str("    panel.id = '__dsh_panel';\n");
-    s.push_str("    panel.style.cssText = 'position:fixed;top:10px;left:10px;z-index:2147483647;display:none;background:#1f2328;color:#fff;font:12px/1.6 system-ui,sans-serif;padding:10px 12px;border-radius:8px;box-shadow:0 4px 16px rgba(0,0,0,.4);min-width:300px;max-width:70vw;';\n");
-    // 三种状态统一切换
-    s.push_str("    function setMode(mode) {\n");
-    s.push_str("      if (mode === 'open') {\n");
-    s.push_str("        dot.style.cssText = 'position:fixed;top:10px;left:10px;z-index:2147483647;width:26px;height:26px;border-radius:8px;background:#4f6ef7;cursor:pointer;box-shadow:0 1px 4px rgba(0,0,0,.25);opacity:1;display:flex;align-items:center;justify-content:center;color:#fff;font:11px/1 system-ui,sans-serif;';\n");
-    s.push_str("        dot.textContent = '';\n");
-    s.push_str("      } else if (mode === 'pill') {\n");
-    s.push_str("        dot.style.cssText = 'position:fixed;top:10px;left:10px;z-index:2147483647;height:20px;padding:0 8px;border-radius:10px;background:#4f6ef7;cursor:pointer;box-shadow:0 1px 4px rgba(0,0,0,.25);opacity:1;display:flex;align-items:center;justify-content:center;color:#fff;font:11px/1 system-ui,sans-serif;white-space:nowrap;';\n");
-    s.push_str("        dot.textContent = VER;\n");
-    s.push_str("      } else {\n");
-    s.push_str("        dot.style.cssText = 'position:fixed;top:10px;left:10px;z-index:2147483647;width:8px;height:8px;border-radius:50%;background:#4f6ef7;cursor:pointer;transition:all .18s cubic-bezier(.4,0,.2,1);box-shadow:0 1px 4px rgba(0,0,0,.2);opacity:.55;';\n");
-    s.push_str("        dot.textContent = '';\n");
-    s.push_str("      }\n");
-    s.push_str("    }\n");
-    s.push_str("    setMode('dot');\n");
-    s.push_str("    var head = document.createElement('div');\n");
-    s.push_str("    head.style.cssText = 'display:flex;align-items:center;gap:8px;margin-bottom:8px;';\n");
-    s.push_str("    var title = document.createElement('span');\n");
-    s.push_str("    title.textContent = 'DSH ' + VER;\n");
-    s.push_str("    title.style.cssText = 'font-weight:600;white-space:nowrap;flex:1;';\n");
-    s.push_str("    var btnClose = document.createElement('button');\n");
-    s.push_str("    btnClose.textContent = '\\u00d7';\n");
-    s.push_str("    btnClose.title = '收起';\n");
-    s.push_str("    btnClose.style.cssText = 'cursor:pointer;background:transparent;color:#fff;border:0;font-size:16px;line-height:1;padding:0 4px;';\n");
-    s.push_str("    head.appendChild(title); head.appendChild(btnClose);\n");
-    s.push_str("    var urlBox = document.createElement('input');\n");
-    s.push_str("    urlBox.type = 'text'; urlBox.value = URL; urlBox.readOnly = true;\n");
-    s.push_str("    urlBox.title = '点击可选中，复制到浏览器打开';\n");
-    s.push_str("    urlBox.style.cssText = 'width:100%;box-sizing:border-box;background:#2b2f36;color:#cfd8e3;border:1px solid #3a3f47;border-radius:4px;padding:3px 8px;font:12px/1.6 monospace;margin-bottom:8px;';\n");
-    s.push_str("    urlBox.onclick = function(){ urlBox.select(); };\n");
-    s.push_str("    var btnRestart = document.createElement('button');\n");
-    s.push_str("    btnRestart.textContent = '重启';\n");
-    s.push_str("    btnRestart.style.cssText = 'cursor:pointer;background:#4f6ef7;color:#fff;border:0;border-radius:4px;padding:4px 12px;font-size:12px;';\n");
-    s.push_str("    btnRestart.onclick = function(){\n");
-    s.push_str("      try {\n");
-    s.push_str("        var inv = window.__TAURI_INTERNALS__ && window.__TAURI_INTERNALS__.invoke;\n");
-    s.push_str("        if (inv) { inv('restart_version', { version: VER }).catch(function(){ location.reload(); }); return; }\n");
-    s.push_str("      } catch(e) {}\n");
-    s.push_str("      location.reload();\n");
-    s.push_str("    };\n");
-    s.push_str("    function show(){ open=true; panel.style.display='block'; setMode('open'); }\n");
-    s.push_str("    function hide(){ open=false; panel.style.display='none'; setMode('dot'); }\n");
-    s.push_str("    dot.onmouseenter = function(){ if(!open) setMode('pill'); };\n");
-    s.push_str("    dot.onmouseleave = function(){ if(!open) setMode('dot'); };\n");
-    s.push_str("    dot.onclick = function(){ open ? hide() : show(); };\n");
-    s.push_str("    btnClose.onclick = hide;\n");
-    s.push_str("    document.addEventListener('keydown', function(e){ if(e.key==='Escape' && open) hide(); });\n");
-    s.push_str("    panel.appendChild(head); panel.appendChild(urlBox); panel.appendChild(btnRestart);\n");
-    s.push_str("    document.body.appendChild(dot);\n");
-    s.push_str("    document.body.appendChild(panel);\n");
-    s.push_str("  }\n");
-    s.push_str("  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', inject);\n");
-    s.push_str("  else inject();\n");
-    s.push_str("})();\n");
-    s
+    TEMPLATE.replace("__VER__", &ver).replace("__URL__", &url_js)
 }
 
 #[tauri::command]

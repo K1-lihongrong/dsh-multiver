@@ -139,8 +139,13 @@ pub fn spawn_web_hidden(
         });
     }
 
-    // 30 秒超时等待 URL
-    let deadline = Instant::now() + Duration::from_secs(30);
+    // 等待 URL 的超时时间。
+    //
+    // 注意：dsh 首次（冷）启动可能很慢——需加载大量 node 模块与原生模块（node-pty/koffi），
+    // 叠加杀软扫描，可能显著超过 30 秒，且启动期间**不打印任何输出**（静默到最后才输出 URL）。
+    // 因此这里放宽到 90 秒，避免把「首次启动慢」误判为失败（现象：首次点击超时、再点即成功）。
+    const LAUNCH_TIMEOUT_SECS: u64 = 90;
+    let deadline = Instant::now() + Duration::from_secs(LAUNCH_TIMEOUT_SECS);
     loop {
         match rx.recv_timeout(Duration::from_millis(200)) {
             Ok(url) => return Ok((child, url, job)),
@@ -148,7 +153,10 @@ pub fn spawn_web_hidden(
                 if Instant::now() >= deadline {
                     kill_tree(&mut child);
                     let _ = child.wait();
-                    return Err("启动超时：30 秒内未解析到 dsh web 地址".to_string());
+                    return Err(format!(
+                        "启动超时：{} 秒内未解析到 dsh web 地址。首次启动通常较慢，可稍后重试；若反复超时请查看 logs/ 下的会话日志",
+                        LAUNCH_TIMEOUT_SECS
+                    ));
                 }
                 // 进程若已退出，提前报错
                 if let Ok(Some(status)) = child.try_wait() {
