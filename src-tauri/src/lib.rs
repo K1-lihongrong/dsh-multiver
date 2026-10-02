@@ -144,24 +144,12 @@ async fn install_version(
 
     let (ok, msg) = result;
     // 维护 broken_versions：失败且分类为「私有包/不完整」时记入；成功时移除。
-    if ok {
-        if cfg.broken_versions.iter().any(|v| v == &version_for_record) {
-            let mut c = cfg.clone();
-            c.broken_versions.retain(|v| v != &version_for_record);
-            let _ = c.save(&mdir);
-        }
-        Ok(msg)
-    } else {
-        let kind = versions::classify_error(&msg);
-        if kind == "private-package" || kind == "incomplete-version" {
-            if !cfg.broken_versions.iter().any(|v| v == &version_for_record) {
-                let mut c = cfg.clone();
-                c.broken_versions.push(version_for_record.clone());
-                let _ = c.save(&mdir);
-            }
-        }
-        Err(msg)
+    let mut c = cfg.clone();
+    let kind = if ok { "" } else { versions::classify_error(&msg) };
+    if c.apply_install_result(&version_for_record, ok, kind) {
+        let _ = c.save(&mdir);
     }
+    if ok { Ok(msg) } else { Err(msg) }
 }
 
 /// 清除「已知安装失败」标记（用户手动重试前可调用）。
@@ -183,16 +171,7 @@ async fn uninstall_version(app: tauri::AppHandle, version: String) -> Result<Str
     let dirs = Dirs::new(cfg.resolve_root(&mdir));
     // 如果卸载的是默认版本，清空默认设置，并移除隔离标记
     let mut cfg = cfg;
-    let mut need_save = false;
-    if cfg.default_version.as_deref() == Some(version.as_str()) {
-        cfg.default_version = None;
-        need_save = true;
-    }
-    if cfg.isolated_versions.iter().any(|v| v == &version) {
-        cfg.isolated_versions.retain(|v| v != &version);
-        need_save = true;
-    }
-    if need_save {
+    if cfg.remove_version_refs(&version) {
         let _ = cfg.save(&mdir);
     }
     // 卸载可能清掉了默认版本 / 隔离标记：重生成转发脚本（无默认版本时会删除 dsh.cmd）

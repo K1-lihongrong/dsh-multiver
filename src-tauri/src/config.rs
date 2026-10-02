@@ -89,6 +89,43 @@ impl Config {
             _ => manager_dir.to_path_buf(),
         }
     }
+
+    /// 根据一次安装结果维护 `broken_versions`：
+    /// - 成功：移除该版本标记
+    /// - 失败且分类为「私有包/不完整」：加入标记
+    /// 返回配置是否发生变化（调用方据此决定是否保存）。
+    pub fn apply_install_result(&mut self, version: &str, ok: bool, err_kind: &str) -> bool {
+        if ok {
+            if self.broken_versions.iter().any(|v| v == version) {
+                self.broken_versions.retain(|v| v != version);
+                return true;
+            }
+            false
+        } else if err_kind == "private-package" || err_kind == "incomplete-version" {
+            if !self.broken_versions.iter().any(|v| v == version) {
+                self.broken_versions.push(version.to_string());
+                return true;
+            }
+            false
+        } else {
+            false
+        }
+    }
+
+    /// 卸载某版本时清理配置中对它的引用：默认版本、隔离标记。
+    /// 返回配置是否发生变化。
+    pub fn remove_version_refs(&mut self, version: &str) -> bool {
+        let mut changed = false;
+        if self.default_version.as_deref() == Some(version) {
+            self.default_version = None;
+            changed = true;
+        }
+        if self.isolated_versions.iter().any(|v| v == version) {
+            self.isolated_versions.retain(|v| v != version);
+            changed = true;
+        }
+        changed
+    }
 }
 
 /// 由根目录派生出的各个子目录
@@ -224,6 +261,92 @@ mod tests {
         assert_eq!(d.versions, PathBuf::from("R").join("versions"));
         assert_eq!(d.home, PathBuf::from("R").join("home"));
         assert_eq!(d.webview, PathBuf::from("R").join("webview"));
+    }
+
+
+    // ── apply_install_result：broken_versions 维护 ──
+
+    #[test]
+    fn install_success_removes_broken_mark() {
+        let mut c = Config::default();
+        c.broken_versions = vec!["0.1.0".to_string(), "0.2.0".to_string()];
+        let changed = c.apply_install_result("0.1.0", true, "");
+        assert!(changed);
+        assert_eq!(c.broken_versions, vec!["0.2.0".to_string()]);
+    }
+
+    #[test]
+    fn install_success_no_mark_is_noop() {
+        let mut c = Config::default();
+        assert!(!c.apply_install_result("0.1.0", true, ""));
+        assert!(c.broken_versions.is_empty());
+    }
+
+    #[test]
+    fn install_failure_private_adds_mark() {
+        let mut c = Config::default();
+        let changed = c.apply_install_result("0.1.0", false, "private-package");
+        assert!(changed);
+        assert_eq!(c.broken_versions, vec!["0.1.0".to_string()]);
+    }
+
+    #[test]
+    fn install_failure_incomplete_adds_mark() {
+        let mut c = Config::default();
+        assert!(c.apply_install_result("0.1.0", false, "incomplete-version"));
+        assert_eq!(c.broken_versions, vec!["0.1.0".to_string()]);
+    }
+
+    #[test]
+    fn install_failure_network_does_not_mark() {
+        let mut c = Config::default();
+        assert!(!c.apply_install_result("0.1.0", false, "network"));
+        assert!(c.broken_versions.is_empty());
+    }
+
+    #[test]
+    fn install_failure_already_marked_is_noop() {
+        let mut c = Config::default();
+        c.broken_versions = vec!["0.1.0".to_string()];
+        assert!(!c.apply_install_result("0.1.0", false, "private-package"));
+        assert_eq!(c.broken_versions.len(), 1);
+    }
+
+    // ── remove_version_refs：卸载时清理引用 ──
+
+    #[test]
+    fn remove_refs_clears_default_and_isolated() {
+        let mut c = Config {
+            default_version: Some("0.1.0".to_string()),
+            isolated_versions: vec!["0.1.0".to_string()],
+            ..Config::default()
+        };
+        assert!(c.remove_version_refs("0.1.0"));
+        assert!(c.default_version.is_none());
+        assert!(c.isolated_versions.is_empty());
+    }
+
+    #[test]
+    fn remove_refs_partial() {
+        // 只是默认版本、不在隔离列表
+        let mut c = Config {
+            default_version: Some("0.1.0".to_string()),
+            ..Config::default()
+        };
+        assert!(c.remove_version_refs("0.1.0"));
+        assert!(c.default_version.is_none());
+    }
+
+    #[test]
+    fn remove_refs_no_match_is_noop() {
+        let mut c = Config {
+            default_version: Some("0.2.0".to_string()),
+            isolated_versions: vec!["0.2.0".to_string()],
+            ..Config::default()
+        };
+        assert!(!c.remove_version_refs("0.1.0"));
+        assert_eq!(c.default_version.as_deref(), Some("0.2.0"));
+        assert_eq!(c.isolated_versions, vec!["0.2.0".to_string()]);
     }
 
     #[test]
