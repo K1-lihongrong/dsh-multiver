@@ -753,16 +753,7 @@ fn open_dir(app: tauri::AppHandle, which: String) -> Result<(), String> {
     let mdir = manager_dir(&app);
     let cfg = Config::load(&mdir);
     let dirs = Dirs::new(cfg.resolve_root(&mdir));
-    let target = match which.as_str() {
-        "root" => dirs.root.clone(),
-        "versions" => dirs.versions.clone(),
-        "home" => dirs.home.clone(),
-        "store" => dirs.store.clone(),
-        "cache" => dirs.cache.clone(),
-        "state" => dirs.state.clone(),
-        "logs" => dirs.root.join("logs"),
-        _ => dirs.root.clone(),
-    };
+    let target = dirs.resolve(&which);
     let (ok, msg) = actions::open_folder(&target);
     if ok { Ok(()) } else { Err(msg) }
 }

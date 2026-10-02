@@ -163,6 +163,20 @@ impl Dirs {
         std::fs::create_dir_all(&self.webview)?;
         Ok(())
     }
+
+    /// 按名称解析子目录（供「打开目录」用）。未知名称回退到 root。
+    pub fn resolve(&self, which: &str) -> PathBuf {
+        match which {
+            "versions" => self.versions.clone(),
+            "home" => self.home.clone(),
+            "store" => self.store.clone(),
+            "cache" => self.cache.clone(),
+            "state" => self.state.clone(),
+            "logs" => self.root.join("logs"),
+            "root" => self.root.clone(),
+            _ => self.root.clone(),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -347,6 +361,27 @@ mod tests {
         assert!(!c.remove_version_refs("0.1.0"));
         assert_eq!(c.default_version.as_deref(), Some("0.2.0"));
         assert_eq!(c.isolated_versions, vec!["0.2.0".to_string()]);
+    }
+
+
+    // ── Dirs::resolve：目录名 → 路径 ──
+
+    #[test]
+    fn dirs_resolve_known_names() {
+        let d = Dirs::new(PathBuf::from("R"));
+        assert_eq!(d.resolve("versions"), PathBuf::from("R").join("versions"));
+        assert_eq!(d.resolve("home"), PathBuf::from("R").join("home"));
+        assert_eq!(d.resolve("store"), PathBuf::from("R").join("store"));
+        assert_eq!(d.resolve("cache"), PathBuf::from("R").join("cache"));
+        assert_eq!(d.resolve("state"), PathBuf::from("R").join("state"));
+        assert_eq!(d.resolve("logs"), PathBuf::from("R").join("logs"));
+        assert_eq!(d.resolve("root"), PathBuf::from("R"));
+    }
+
+    #[test]
+    fn dirs_resolve_unknown_falls_back_to_root() {
+        let d = Dirs::new(PathBuf::from("R"));
+        assert_eq!(d.resolve("nope"), PathBuf::from("R"));
     }
 
     #[test]
