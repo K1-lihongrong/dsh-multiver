@@ -149,3 +149,45 @@ pub fn open_folder(path: &Path) -> (bool, String) {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn forward_script_shared_home() {
+        let s = build_forward_script("0.1.7", "D:\\DSH", false);
+        // 非隔离：DSH_HOME 指向 <根>\home
+        assert!(s.contains("set \"VER=0.1.7\""));
+        assert!(s.contains("set \"ROOT=D:\\DSH\""));
+        assert!(s.contains("set \"DSH_HOME_CANDIDATE=D:\\DSH\\home\""));
+        // 入口指向版本目录下的 dsh.cmd
+        assert!(s.contains("%ROOT%\\versions\\%VER%\\node_modules\\.bin\\dsh.cmd"));
+        assert!(s.contains("call \"%BIN%\" %*"));
+        // 必须是 CRLF（Windows 批处理）
+        assert!(s.contains("\r\n"));
+        assert!(!s.contains("\n\n") || s.contains("\r\n"));
+    }
+
+    #[test]
+    fn forward_script_isolated_home() {
+        let s = build_forward_script("0.2.0", "D:\\DSH", true);
+        // 隔离：DSH_HOME 指向 <根>\versions\<版本>\home
+        assert!(s.contains("set \"DSH_HOME_CANDIDATE=D:\\DSH\\versions\\0.2.0\\home\""));
+    }
+
+    #[test]
+    fn forward_script_normalizes_slashes_and_trailing_backslash() {
+        // root 用正斜杠、且不以反斜杠结尾 → 应归一化为反斜杠并补尾
+        let s = build_forward_script("1.0.0", "D:/data/root", false);
+        assert!(s.contains("set \"DSH_HOME_CANDIDATE=D:\\data\\root\\home\""));
+    }
+
+    #[test]
+    fn forward_script_root_already_trailing_backslash() {
+        // root 已以反斜杠结尾 → 不应出现双反斜杠
+        let s = build_forward_script("1.0.0", "D:\\data\\", false);
+        assert!(s.contains("set \"DSH_HOME_CANDIDATE=D:\\data\\home\""));
+        assert!(!s.contains("D:\\data\\\\home"));
+    }
+}
+

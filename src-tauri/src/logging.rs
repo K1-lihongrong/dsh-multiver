@@ -104,3 +104,61 @@ pub fn prune_old(dir: &Path, prefix: &str, suffix: &str, keep: usize) {
         let _ = std::fs::remove_file(p);
     }
 }
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn epoch_and_day_boundaries() {
+        assert_eq!(stamp_compact(0), "19700101-000000");
+        assert_eq!(stamp_compact(86400), "19700102-000000");
+        assert_eq!(stamp_compact(3661), "19700101-010101");
+    }
+
+    #[test]
+    fn known_timestamp() {
+        // 1700000000 = 2023-11-14 22:13:20 UTC
+        assert_eq!(stamp_compact(1_700_000_000), "20231114-221320");
+    }
+
+    #[test]
+    fn now_secs_is_reasonable() {
+        assert!(now_secs() > 1_577_836_800);
+    }
+
+    #[test]
+    fn prune_keeps_newest_n() {
+        let dir = std::env::temp_dir().join(format!("dsh-logtest-{}", now_secs()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        for i in 0..5 {
+            std::fs::write(dir.join(format!("session-00{}0.log", i)), "x").unwrap();
+        }
+        std::fs::write(dir.join("other.log"), "x").unwrap();
+        prune_old(&dir, "session-", ".log", 2);
+        let remaining: Vec<String> = std::fs::read_dir(&dir)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .map(|e| e.file_name().to_string_lossy().to_string())
+            .collect();
+        assert_eq!(remaining.iter().filter(|n| n.starts_with("session-")).count(), 2);
+        assert!(remaining.contains(&"other.log".to_string()));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn write_line_appends_with_timestamp() {
+        let dir = std::env::temp_dir().join(format!("dsh-logtest-w-{}", now_secs()));
+        let _ = std::fs::remove_dir_all(&dir);
+        write_line(&dir, "app.log", "hello");
+        write_line(&dir, "app.log", "world");
+        let text = std::fs::read_to_string(dir.join("app.log")).unwrap();
+        assert!(text.contains("hello"));
+        assert!(text.contains("world"));
+        assert_eq!(text.lines().count(), 2);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+

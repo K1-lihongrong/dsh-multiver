@@ -442,3 +442,95 @@ fn print_help() {
         VERSION
     );
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn args(v: &[&str]) -> Vec<String> {
+        v.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn no_args_returns_none() {
+        assert!(matches!(parse(&args(&[])), Ok(None)));
+    }
+
+    #[test]
+    fn gui_flags_pass_through() {
+        // --launch-version / --debug-progress 属 GUI 路径，返回 None
+        assert!(matches!(parse(&args(&["--launch-version", "0.1.7"])), Ok(None)));
+        assert!(matches!(parse(&args(&["--debug-progress"])), Ok(None)));
+    }
+
+    #[test]
+    fn unknown_double_dash_is_error() {
+        assert!(parse(&args(&["--nope"])).is_err());
+        assert!(parse(&args(&["--launch-version", "0.1.7", "--typo"])).is_err());
+    }
+
+    #[test]
+    fn help_and_version() {
+        assert!(matches!(parse(&args(&["--help"])), Ok(Some(CliCommand::Help))));
+        assert!(matches!(parse(&args(&["-h"])), Ok(Some(CliCommand::Help))));
+        assert!(matches!(parse(&args(&["--version"])), Ok(Some(CliCommand::Version))));
+        assert!(matches!(parse(&args(&["-V"])), Ok(Some(CliCommand::Version))));
+    }
+
+    #[test]
+    fn list_command() {
+        assert!(matches!(parse(&args(&["--list"])), Ok(Some(CliCommand::List))));
+    }
+
+    #[test]
+    fn install_with_and_without_registry() {
+        match parse(&args(&["--install", "0.1.7"])) {
+            Ok(Some(CliCommand::Install { version, registry })) => {
+                assert_eq!(version, "0.1.7");
+                assert!(registry.is_none());
+            }
+            other => panic!("unexpected: {:?}", other),
+        }
+        match parse(&args(&["--install", "0.1.7", "--registry", "https://r.example"])) {
+            Ok(Some(CliCommand::Install { version, registry })) => {
+                assert_eq!(version, "0.1.7");
+                assert_eq!(registry.as_deref(), Some("https://r.example"));
+            }
+            other => panic!("unexpected: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn install_missing_value_is_error() {
+        assert!(parse(&args(&["--install"])).is_err());
+        assert!(parse(&args(&["--install", "--registry", "x"])).is_err());
+    }
+
+    #[test]
+    fn uninstall_and_set_default() {
+        match parse(&args(&["--uninstall", "0.1.6"])) {
+            Ok(Some(CliCommand::Uninstall { version })) => assert_eq!(version, "0.1.6"),
+            other => panic!("unexpected: {:?}", other),
+        }
+        match parse(&args(&["--set-default", "0.1.6"])) {
+            Ok(Some(CliCommand::SetDefault { version })) => assert_eq!(version, "0.1.6"),
+            other => panic!("unexpected: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn maintenance_kinds() {
+        match parse(&args(&["--maintenance"])) {
+            Ok(Some(CliCommand::Maintenance { kind })) => assert_eq!(kind, "all"),
+            other => panic!("unexpected: {:?}", other),
+        }
+        match parse(&args(&["--maintenance", "--cleanup"])) {
+            Ok(Some(CliCommand::Maintenance { kind })) => assert_eq!(kind, "cleanup"),
+            other => panic!("unexpected: {:?}", other),
+        }
+        match parse(&args(&["--maintenance", "--prune"])) {
+            Ok(Some(CliCommand::Maintenance { kind })) => assert_eq!(kind, "prune"),
+            other => panic!("unexpected: {:?}", other),
+        }
+    }
+}

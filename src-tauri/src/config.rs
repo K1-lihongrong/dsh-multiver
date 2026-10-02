@@ -127,3 +127,115 @@ impl Dirs {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn tmp(tag: &str) -> PathBuf {
+        let d = std::env::temp_dir().join(format!(
+            "dsh-cfgtest-{}-{}",
+            tag,
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    #[test]
+    fn default_resolve_root_is_manager_dir() {
+        let cfg = Config::default();
+        let mdir = PathBuf::from("C:\\some\\manager");
+        assert_eq!(cfg.resolve_root(&mdir), mdir);
+    }
+
+    #[test]
+    fn empty_or_blank_root_falls_back_to_manager_dir() {
+        let mdir = PathBuf::from("C:\\manager");
+        let mut cfg = Config::default();
+        cfg.root_dir = Some("   ".to_string());
+        assert_eq!(cfg.resolve_root(&mdir), mdir);
+        cfg.root_dir = Some("".to_string());
+        assert_eq!(cfg.resolve_root(&mdir), mdir);
+    }
+
+    #[test]
+    fn explicit_root_is_used() {
+        let cfg = Config {
+            root_dir: Some("D:\\data".to_string()),
+            ..Config::default()
+        };
+        assert_eq!(cfg.resolve_root(&PathBuf::from("C:\\m")), PathBuf::from("D:\\data"));
+    }
+
+    #[test]
+    fn save_then_load_roundtrip() {
+        let dir = tmp("roundtrip");
+        let cfg = Config {
+            root_dir: Some("D:\\x".to_string()),
+            default_version: Some("0.1.7".to_string()),
+            isolated_versions: vec!["0.1.7".to_string()],
+            broken_versions: vec!["0.0.1".to_string()],
+            maintenance: MaintenanceConfig {
+                auto_enabled: false,
+                last_prune_at: Some(123),
+                last_cleanup_at: Some(456),
+                last_cleanup_count: 3,
+            },
+        };
+        cfg.save(&dir).unwrap();
+        let back = Config::load(&dir);
+        assert_eq!(back.default_version.as_deref(), Some("0.1.7"));
+        assert_eq!(back.isolated_versions, vec!["0.1.7".to_string()]);
+        assert_eq!(back.broken_versions, vec!["0.0.1".to_string()]);
+        assert!(!back.maintenance.auto_enabled);
+        assert_eq!(back.maintenance.last_prune_at, Some(123));
+        assert_eq!(back.maintenance.last_cleanup_count, 3);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn load_missing_file_returns_default() {
+        let dir = tmp("missing");
+        let cfg = Config::load(&dir);
+        assert!(cfg.root_dir.is_none());
+        assert!(cfg.default_version.is_none());
+        assert!(cfg.maintenance.auto_enabled);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn load_corrupt_file_returns_default() {
+        let dir = tmp("corrupt");
+        std::fs::write(dir.join(Config::FILE_NAME), "{ not valid json").unwrap();
+        let cfg = Config::load(&dir);
+        assert!(cfg.default_version.is_none());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn dirs_new_derives_expected_subdirs() {
+        let d = Dirs::new(PathBuf::from("R"));
+        assert_eq!(d.versions, PathBuf::from("R\\versions"));
+        assert_eq!(d.home, PathBuf::from("R\\home"));
+        assert_eq!(d.webview, PathBuf::from("R\\webview"));
+    }
+
+    #[test]
+    fn dirs_ensure_creates_all() {
+        let root = tmp("ensure");
+        let d = Dirs::new(root.clone());
+        d.ensure().unwrap();
+        assert!(d.versions.exists());
+        assert!(d.home.exists());
+        assert!(d.store.exists());
+        assert!(d.cache.exists());
+        assert!(d.state.exists());
+        assert!(d.webview.exists());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+}

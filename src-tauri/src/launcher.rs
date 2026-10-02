@@ -397,3 +397,49 @@ pub fn port_in_use(port: u16) -> bool {
     )
     .is_ok()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_url_marker_line() {
+        let line = "dsh web: http://127.0.0.1:44179/?token=abc123";
+        assert_eq!(
+            parse_url(line),
+            Some("http://127.0.0.1:44179/?token=abc123".to_string())
+        );
+    }
+
+    #[test]
+    fn parse_url_bare_url() {
+        let line = "  http://127.0.0.1:8080/?token=xyz  ";
+        assert_eq!(
+            parse_url(line),
+            Some("http://127.0.0.1:8080/?token=xyz".to_string())
+        );
+    }
+
+    #[test]
+    fn parse_url_localhost_variant() {
+        let line = "dsh web: http://localhost:3000/";
+        assert_eq!(parse_url(line), Some("http://localhost:3000/".to_string()));
+    }
+
+    #[test]
+    fn parse_url_ignores_trailing_text() {
+        // URL 后跟空白/其他内容时只取到空白前
+        let line = "dsh web: http://127.0.0.1:5000/?token=t  (按 Ctrl+C 退出)";
+        assert_eq!(
+            parse_url(line),
+            Some("http://127.0.0.1:5000/?token=t".to_string())
+        );
+    }
+
+    #[test]
+    fn parse_url_rejects_non_loopback() {
+        // 非 127.0.0.1 / localhost 的地址不识别
+        assert_eq!(parse_url("http://192.168.1.5:8080/"), None);
+        assert_eq!(parse_url("no url here"), None);
+    }
+}

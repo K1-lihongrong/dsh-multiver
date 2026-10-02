@@ -352,6 +352,40 @@ mod tests {
         assert_eq!(extract_num("resolved 234, reused 222", "reused"), Some(222));
         assert_eq!(extract_num("no number here", "xyz"), None);
     }
+
+    #[test]
+    fn classify_private_package() {
+        let raw = "ERR_PNPM_FETCH_404  GET https://registry.npmjs.org/@deepseek-ai/dsh: Not Found - 404";
+        assert_eq!(classify_error(raw), "private-package");
+        // 需要同时含 @deepseek-ai 才归为 private-package
+        assert_eq!(classify_error("ERR_PNPM_FETCH_404 other-pkg"), "network");
+    }
+
+    #[test]
+    fn classify_incomplete_version() {
+        assert_eq!(
+            classify_error("ERR_PNPM_NO_MATCHING_VERSION No matching version found"),
+            "incomplete-version"
+        );
+        assert_eq!(
+            classify_error("No matching version found for x"),
+            "incomplete-version"
+        );
+    }
+
+    #[test]
+    fn classify_network() {
+        assert_eq!(classify_error("ERR_PNPM_FETCH something failed"), "network");
+        assert_eq!(classify_error("connect ETIMEDOUT 1.2.3.4:443"), "network");
+        assert_eq!(classify_error("ECONNRESET"), "network");
+        assert_eq!(classify_error("getaddrinfo ENOTFOUND registry"), "network");
+    }
+
+    #[test]
+    fn classify_unknown() {
+        assert_eq!(classify_error("some totally unrelated failure"), "unknown");
+        assert_eq!(classify_error(""), "unknown");
+    }
 }
 
 /// 安装指定版本。on_progress 用于推送阶段进度。返回 (是否成功, 消息)
