@@ -7,7 +7,7 @@ use crate::config::{Config, Dirs};
 use crate::logging;
 use crate::window;
 use crate::{actions, cli, config, envcheck, launcher, maintenance, versions};
-use crate::{manager_dir, ProcMap, NEXT_GEN};
+use crate::{lock_procs, manager_dir, ProcMap, NEXT_GEN};
 use serde::Serialize;
 use std::path::PathBuf;
 
@@ -313,7 +313,7 @@ pub(crate) async fn launch_window(
 
     // 回到主线程建窗。
     // 先结束该版本的旧窗口/旧进程（若有）。
-    let old = procs.lock().unwrap().remove(&version);
+    let old = lock_procs(&procs).remove(&version);
     if let Some((old_label, _old_gen, mut old_child, _old_job)) = old {
         // 结束旧进程及其子进程树（kill 不 wait，避免阻塞）
         launcher::kill_tree(&mut old_child);
@@ -352,16 +352,13 @@ pub(crate) async fn launch_window(
         }
     };
 
-    procs
-        .lock()
-        .unwrap()
-        .insert(version.clone(), (label.clone(), generation, child, job));
+    lock_procs(&procs).insert(version.clone(), (label.clone(), generation, child, job));
 
     let procs2 = procs.clone();
     let version2 = version.clone();
     window.on_window_event(move |event| {
         if let tauri::WindowEvent::Destroyed = event {
-            let mut map = procs2.lock().unwrap();
+            let mut map = lock_procs(&procs2);
             // 仅当该版本仍是"本代次"时才 kill，避免旧窗口滞后回调误杀新进程
             let should_kill = matches!(map.get(&version2), Some((_, g, _, _)) if *g == generation);
             if should_kill {
@@ -422,7 +419,7 @@ pub(crate) async fn open_in_browser(
     let home = resolve_home(&cfg, &dirs, &version);
 
     // 1) 互斥提示：该版本已有内嵌窗口在开
-    let has_window = procs.lock().unwrap().contains_key(&version);
+    let has_window = lock_procs(procs.inner()).contains_key(&version);
     if has_window {
         let ok = app
             .dialog()
@@ -495,9 +492,7 @@ pub(crate) async fn restart_version(
     let home = resolve_home(&cfg, &dirs, &version);
 
     // 找到该版本当前的窗口（label 带代次，从 map 里取）
-    let (label, _old_gen, mut old_child, _old_job) = procs
-        .lock()
-        .unwrap()
+    let (label, _old_gen, mut old_child, _old_job) = lock_procs(procs.inner())
         .remove(&version)
         .ok_or_else(|| format!("版本 {} 的窗口不存在", version))?;
     let window = app
@@ -529,10 +524,7 @@ pub(crate) async fn restart_version(
 
     // 记录新进程（同一 label，代次更新）
     let generation = NEXT_GEN.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    procs
-        .lock()
-        .unwrap()
-        .insert(version.clone(), (label.clone(), generation, child, job));
+    lock_procs(procs.inner()).insert(version.clone(), (label.clone(), generation, child, job));
 
     window
         .navigate(url.parse().map_err(|e| format!("URL 解析失败: {}", e))?)

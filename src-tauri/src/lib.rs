@@ -16,12 +16,21 @@ use std::path::PathBuf;
 use std::process::Child;
 use std::sync::{Arc, Mutex};
 
-/// 「版本号 → (窗口 label, 代次, dsh 子进程)」映射。
+/// 「版本号 → (窗口 label, 代次, dsh 子进程, Job 持有句柄)」映射。
 /// - label 唯一化（带代次），避免 "a webview with label ... already exists"；
-/// - 代次用于解决窗口替换时的 Destroyed 回调竞态：回调只在自己那一代仍是当前项时才 kill。
-/// 「版本号 → (窗口 label, 代次, dsh 子进程, Job 持有句柄)」。
-/// Job 句柄用于"管理器退出即杀光子进程"：持有到进程被移除/窗口关闭时。
-pub(crate) type ProcMap = Arc<Mutex<HashMap<String, (String, u64, Child, Option<jobobj::ProcessGuard>)>>>;
+/// - 代次用于解决窗口替换时的 Destroyed 回调竞态：回调只在自己那一代仍是当前项时才 kill；
+/// - Job 句柄用于"管理器退出即杀光子进程"：持有到进程被移除/窗口关闭时。
+pub(crate) type ProcEntry = (String, u64, Child, Option<jobobj::ProcessGuard>);
+pub(crate) type ProcMapInner = HashMap<String, ProcEntry>;
+pub(crate) type ProcMap = Arc<Mutex<ProcMapInner>>;
+
+/// 锁定进程表；若锁已中毒（某线程持锁时 panic），忽略中毒继续使用内部数据。
+///
+/// 为什么安全：`ProcMap` 的字段之间没有必须维持的跨字段不变量，中毒后继续用不会导致内存不安全，
+/// 最坏是拿到一个不一致快照。比起让整个应用 panic，继续运行更符合"管理器不应因单个任务失败而挂掉"。
+pub(crate) fn lock_procs(procs: &ProcMap) -> std::sync::MutexGuard<'_, ProcMapInner> {
+    procs.lock().unwrap_or_else(|e| e.into_inner())
+}
 
 /// 全局单调递增的代次计数器（用于区分同名窗口的不同实例）
 pub(crate) static NEXT_GEN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
@@ -197,7 +206,7 @@ pub fn run() {
         .run(move |_app, event| {
             if let tauri::RunEvent::ExitRequested { .. } = event {
                 // 退出时兜底清理所有 dsh 子进程，避免残留
-                let mut map = procs.lock().unwrap();
+                let mut map = lock_procs(&procs);
                 for (_, (_, _, child, _job)) in map.iter_mut() {
                     launcher::kill_tree(child);
                 }
