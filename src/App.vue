@@ -239,12 +239,18 @@ function releaseUrl(v) {
 function sanitizeNotes(html) {
   const doc = new DOMParser().parseFromString(html, "text/html");
   const ALLOWED = new Set(["H1","H2","H3","H4","H5","H6","UL","OL","LI","P","BR",
-    "STRONG","EM","B","I","CODE","PRE","BLOCKQUOTE","A","HR"]);
+    "STRONG","EM","B","I","CODE","PRE","BLOCKQUOTE","A","HR","TT","SPAN"]);
+  // 这些标签连同其内容一起删除（不提升子内容，避免 script/style 内容泄漏）
+  const DROP_WITH_CONTENT = new Set(["SCRIPT","STYLE","IFRAME","OBJECT","EMBED","LINK","META","NOSCRIPT","TEMPLATE"]);
   const walk = (node) => {
     for (const child of Array.from(node.childNodes)) {
       if (child.nodeType === 1) {
+        if (DROP_WITH_CONTENT.has(child.tagName)) {
+          child.remove();
+          continue;
+        }
         if (!ALLOWED.has(child.tagName)) {
-          // 不保留该标签本身，但把其子内容提升到当前位置
+          // 非危险、但不在白名单的标签：去掉标签本身，把子内容提升到当前位置
           const frag = doc.createDocumentFragment();
           while (child.firstChild) frag.appendChild(child.firstChild);
           node.replaceChild(frag, child);
@@ -253,10 +259,12 @@ function sanitizeNotes(html) {
         }
         const href = child.tagName === "A" ? child.getAttribute("href") : null;
         for (const attr of Array.from(child.attributes)) child.removeAttribute(attr.name);
-        if (child.tagName === "A" && href && /^https?:\/\//i.test(href)) {
+        if (child.tagName === "A" && href && /^(https?:\/\/|#)/i.test(href)) {
           child.setAttribute("href", href);
-          child.setAttribute("target", "_blank");
-          child.setAttribute("rel", "noopener noreferrer");
+          if (!href.startsWith("#")) {
+            child.setAttribute("target", "_blank");
+            child.setAttribute("rel", "noopener noreferrer");
+          }
         }
         walk(child);
       } else if (child.nodeType !== 3) {
@@ -275,10 +283,11 @@ async function loadNotes(v) {
   const url = releaseUrl(v);
   try {
     const api = "https://api.github.com/repos/" + RELEASE_REPO + "/releases/tags/dsh-v" + v;
-    const resp = await fetch(api, { headers: { Accept: "application/vnd.github+json" } });
+    // html+json：让 GitHub 直接返回渲染好的 HTML（body_html），Markdown 已被转换
+    const resp = await fetch(api, { headers: { Accept: "application/vnd.github.html+json" } });
     if (!resp.ok) throw new Error("HTTP " + resp.status);
     const data = await resp.json();
-    const body = data && typeof data.body === "string" ? data.body : "";
+    const body = data && typeof data.body_html === "string" ? data.body_html : "";
     notesCache.value = { ...notesCache.value, [v]: {
       status: "ok", url, empty: !body.trim(), html: sanitizeNotes(body),
     } };
