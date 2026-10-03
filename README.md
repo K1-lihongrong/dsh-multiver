@@ -2,7 +2,7 @@
 
 一个**轻量、便携**的 DeepSeek Harness（dsh）版本管理器，用于在同一台机器上安装、切换、运行多个 dsh 版本。
 
-- 🪶 **极致轻量**：约 6.6 MB 单 exe，无需安装，双击即用
+- 🪶 **极致轻量**：Windows 约 7 MB 单 exe，无需安装，双击即用
 - 💾 **省磁盘**：用 pnpm store 硬链接，多个版本共享依赖文件
 - 🩺 **安装前自检 + 引导**：自动检查 Node / pnpm / 磁盘 / 源连通，缺失时给出下载链接与安装步骤
 - 📊 **细粒度进度**：实时显示安装阶段与依赖进度百分比
@@ -28,19 +28,23 @@
 
 ## 下载
 
-从 [Releases](https://github.com/K1-lihongrong/dsh-multiver/releases) 下载最新的 `dsh-multiver.exe`，放到任意目录，双击运行。
+从 [Releases](https://github.com/K1-lihongrong/dsh-multiver/releases) 下载：
 
-> 需要系统已安装 **WebView2**（Windows 11 及 Windows 10 1803+ 自带）。
+| 平台 | 文件 | 说明 |
+| :--- | :--- | :--- |
+| **Windows** | `dsh-multiver.exe` | 便携版，放到任意目录双击运行（需 WebView2，Win11 及 Win10 1803+ 自带） |
+| **Linux（通用）** | `dsh-multiver_*_amd64.AppImage` | 免安装，`chmod +x` 后运行（需 WebKitGTK） |
+| **Linux（Debian/Ubuntu）** | `dsh-multiver_*_amd64.deb` | `sudo dpkg -i` 安装 |
 
 📖 **完整操作说明见 [使用手册](docs/使用手册.md)** —— 含环境准备、各项功能、常见问题排查。
 
 🔍 **遇到问题？见 [问题日志查看指南](docs/问题日志查看指南.md)** —— 日志在哪、各记录什么、按现象怎么查。
 
-🐧 **Linux 支持**：代码已跨平台化（cfg 分支 + 编译/运行验证），打包发布待完善；见 [Linux 适配开发计划](docs/Linux适配开发计划.md)。
+🐧 **Linux**：原生支持，已在 Debian 13 上完成编译/测试/GUI/CLI/进程清理验证；产物为 AppImage 与 deb。详见 [使用手册 · Linux 支持](docs/使用手册.md#十三linux-支持)。
 
 ## 使用
 
-1. 双击 `dsh-multiver.exe`
+1. 启动程序（Windows 双击 `dsh-multiver.exe`；Linux 运行 AppImage 或安装 deb 后启动）
 2. 界面顶部会**自动检查环境**（Node / pnpm / 磁盘 / 源）；缺失项会给出下载链接与安装步骤
 3. 点「刷新列表」从 npm 拉取可安装的版本
 4. 点版本号安装，观察阶段式进度；失败时按类别提示，网络问题可换源重试
@@ -175,20 +179,32 @@ pnpm install
 # 开发模式（热重载）
 pnpm tauri dev
 
-# 打包便携版单 exe
+# Windows：打包便携版单 exe
 pnpm tauri build --no-bundle
+
+# Linux：打包 AppImage + deb
+pnpm tauri build --bundles appimage,deb
 
 # 重新生成图标（修改 icon-source.svg 后）
 node gen-icons.mjs
 ```
 
-产物位置：`src-tauri/target/release/dsh-multiver.exe`
+产物位置：
+- Windows：`src-tauri/target/release/dsh-multiver.exe`
+- Linux：`src-tauri/target/release/bundle/{appimage,deb}/`
 
 ### 环境要求
 
+**运行（使用现成产物）**：
+- Windows：WebView2（Win11 / Win10 1803+ 自带）
+- Linux：WebKitGTK 4.1、libayatana-appindicator3 等（AppImage 已内含大部分）
+
+**开发 / 从源码构建**：
 - Node.js `^22.19.0` 或 `>=24`
 - pnpm（建议 11.x）
-- Rust 工具链 + MSVC C++ 构建工具 + Windows SDK
+- Rust 工具链
+- Windows：MSVC C++ 构建工具 + Windows SDK
+- Linux：`libwebkit2gtk-4.1-dev`、`libayatana-appindicator3-dev`、`librsvg2-dev`、`build-essential` 等
 
 ## 技术栈
 
@@ -203,7 +219,9 @@ node gen-icons.mjs
 - Windows 图标有缓存，更新 exe 后若图标未变，需清缓存（`ie4uinit.exe -show` 或重启资源管理器）
 - 部分早期 dsh 版本依赖已下架的私有包，任何源都无法安装（界面会标灰并提示换版本）
 - 使用 npm 官方源时，国内下载可能较慢；淘宝镜像同步滞后，可能出现子包缺失
-- 跨平台（macOS / Linux）暂未支持（当前为 Windows 专用）
+- **macOS 暂未支持**（Windows 与 Linux 均已支持）
+- Linux 下内嵌窗口在 WSLg 环境可能显示"重新连接中"（WSLg 专属，真桌面通常正常）；受影响时可改用「浏览器打开」
+- Linux 构建产物为 AppImage / deb（暂无 rpm、Snap、Flatpak）
 
 ## 致谢
 
