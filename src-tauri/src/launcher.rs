@@ -273,10 +273,12 @@ pub fn create_desktop_shortcut(exe_path: &Path, version: &str) -> Result<String,
 
 /// Unix：生成 `.desktop` 桌面入口。
 ///
-/// 注意：本分支在 Windows 上不参与编译，尚未经真机验证（见 docs/开发缺口.md GAP-005）。
+/// 无桌面环境时返回清晰错误（见 desktop_dir）。已在 WSL 上验证（GAP-005）。
 #[cfg(unix)]
 pub fn create_desktop_shortcut(exe_path: &Path, version: &str) -> Result<String, String> {
-    let desktop = desktop_dir().ok_or_else(|| "无法定位桌面目录".to_string())?;
+    let desktop = desktop_dir().ok_or_else(|| {
+        "未找到桌面目录（当前环境可能没有桌面，如 WSL/服务器/容器）".to_string()
+    })?;
     let file = desktop.join(format!("DSH {}.desktop", version));
     let work = exe_path.parent().unwrap_or(Path::new("."));
     let content = format!(
@@ -402,17 +404,17 @@ fn desktop_dir() -> Option<PathBuf> {
             }
         }
     }
-    // 2) 回退常见路径
+    // 2) 回退常见路径（存在则直接用）
     let home = std::env::var("HOME").ok()?;
-    let plain = PathBuf::from(&home).join("Desktop");
-    if plain.exists() {
-        return Some(plain);
+    for name in ["Desktop", "桌面"] {
+        let p = PathBuf::from(&home).join(name);
+        if p.exists() {
+            return Some(p);
+        }
     }
-    let zh = PathBuf::from(&home).join("桌面");
-    if zh.exists() {
-        return Some(zh);
-    }
-    Some(plain)
+    // 3) 无桌面环境（如 WSLg/服务器/容器）：返回 None，由调用方给出清晰错误，
+    //    而不是返回一个不存在的路径导致 "No such file or directory (os error 2)"。
+    None
 }
 
 /// 用**新控制台窗口**启动某版本的 dsh web（供「浏览器打开」按钮）。
