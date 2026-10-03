@@ -350,10 +350,20 @@ fn cmd_uninstall(version: &str) -> i32 {
     }
     crate::commands::regenerate_forward_script(&ctx.mdir, &ctx.cfg);
 
-    let (ok, msg) = versions::uninstall(&ctx.dirs.versions, version);
+    // 快速卸载：rename 到回收站（瞬时），后台再删；CLI 为一次性进程，故同步删回收站
+    let (ok, msg) = versions::uninstall_fast(&ctx.dirs.versions, &ctx.dirs.trash, version);
     if ok {
-        // 顺带清理该版本的 WebView2 数据目录（失败不影响卸载结果）
-        let _ = std::fs::remove_dir_all(ctx.dirs.webview.join(version));
+        // 顺带把该版本的 WebView2 数据目录也移入回收站
+        let wv = ctx.dirs.webview.join(version);
+        if wv.exists() {
+            let _ = std::fs::create_dir_all(&ctx.dirs.trash);
+            let dest = ctx.dirs.trash.join(format!("webview-{}-{}", version, std::process::id()));
+            if std::fs::rename(&wv, &dest).is_err() {
+                let _ = std::fs::remove_dir_all(&wv);
+            }
+        }
+        // 不在这里同步清空回收站：CLI 也要保持"秒退"。
+        // trash 残留由下次启动的维护任务（cleanup_trash）或 --maintenance 清理。
         println!("{}", msg);
         0
     } else {

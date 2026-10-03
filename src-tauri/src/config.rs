@@ -138,6 +138,9 @@ pub struct Dirs {
     pub state: PathBuf,
     /// WebView2 数据目录根（每个版本一个独立子目录，避免共享累积导致 431）
     pub webview: PathBuf,
+    /// 「回收站」目录：卸载时先把版本目录 rename 到这里（瞬时），再由后台慢慢删。
+    /// 避免 Windows 上直接删 26000 个文件导致的长时间无响应等待。
+    pub trash: PathBuf,
 }
 
 impl Dirs {
@@ -149,6 +152,7 @@ impl Dirs {
             cache: root.join("cache"),
             state: root.join("state"),
             webview: root.join("webview"),
+            trash: root.join("trash"),
             root,
         }
     }
@@ -161,6 +165,7 @@ impl Dirs {
         std::fs::create_dir_all(&self.cache)?;
         std::fs::create_dir_all(&self.state)?;
         std::fs::create_dir_all(&self.webview)?;
+        std::fs::create_dir_all(&self.trash)?;
         Ok(())
     }
 
@@ -173,6 +178,7 @@ impl Dirs {
             "cache" => self.cache.clone(),
             "state" => self.state.clone(),
             "logs" => self.root.join("logs"),
+            "trash" => self.trash.clone(),
             "root" => self.root.clone(),
             _ => self.root.clone(),
         }

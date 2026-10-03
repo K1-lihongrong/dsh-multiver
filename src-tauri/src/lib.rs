@@ -153,6 +153,12 @@ pub fn run() {
                     let dirs = Dirs::new(root.clone());
                     let _ = dirs.ensure();
 
+                    // 0) 回收站残留：上次卸载 rename 进来、后台没删净的，这里清掉
+                    let trashed = maintenance::cleanup_trash(&dirs.trash);
+                    if trashed > 0 {
+                        logging::log_maintenance(&root, &format!("清空回收站：{} 项", trashed));
+                    }
+
                     // 1) 孤立 webview：每次启动都能跑（成本极低）
                     let removed = maintenance::cleanup_orphan_webviews(&dirs.versions, &dirs.webview);
                     cfg.maintenance.last_cleanup_at = Some(maintenance::now_secs());

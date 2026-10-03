@@ -44,6 +44,22 @@ pub fn cleanup_orphan_webviews(versions_dir: &Path, webview_dir: &Path) -> Vec<S
     removed
 }
 
+/// 清理「回收站」里残留的目录（卸载时 rename 进来的，后台删除可能被中断）。
+///
+/// 启动时调用一次，把 `trash/` 下所有条目删掉。返回删除的条目数。
+/// 失败静默（下次启动再试）。
+pub fn cleanup_trash(trash_dir: &Path) -> usize {
+    let mut count = 0;
+    if let Ok(rd) = std::fs::read_dir(trash_dir) {
+        for e in rd.flatten() {
+            if std::fs::remove_dir_all(e.path()).is_ok() {
+                count += 1;
+            }
+        }
+    }
+    count
+}
+
 /// 运行 `pnpm store prune`，回收未被引用的包。
 ///
 /// - 低优先级（IDLE_PRIORITY_CLASS），让用户操作优先

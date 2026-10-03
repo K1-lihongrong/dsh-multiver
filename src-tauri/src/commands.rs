@@ -143,14 +143,25 @@ pub(crate) async fn uninstall_version(app: tauri::AppHandle, version: String) ->
     }
     // 卸载可能清掉了默认版本 / 隔离标记：重生成转发脚本（无默认版本时会删除 dsh.cmd）
     regenerate_forward_script(&mdir, &cfg);
-    // 删除目录可能很慢，放到后台线程
-    // WebView2 数据目录（<根>/webview/<版本>）也要一并清理，否则每卸载一次留一份缓存。
+    // 快速卸载：把版本目录 rename 到回收站（瞬时），实际删除交给后台线程。
+    // WebView2 数据目录（<根>/webview/<版本>）同样 rename 到回收站（也瞬时）。
+    // 这样用户点「卸载」后版本立即消失，不再盯着"卸载中..."等几十秒。
     let webview_dir = dirs.webview.join(&version);
+    let trash = dirs.trash.clone();
+    let versions_dir = dirs.versions.clone();
     let (ok, msg) = tauri::async_runtime::spawn_blocking(move || {
-        let result = versions::uninstall(&dirs.versions, &version);
-        // 实例目录删成功后，顺带清理 webview（失败不影响卸载结果）
-        if result.0 {
-            let _ = std::fs::remove_dir_all(&webview_dir);
+        let result = versions::uninstall_fast(&versions_dir, &trash, &version);
+        // 版本目录已 rename 走后，webview 目录也 rename 进回收站（失败不影响卸载结果）
+        if result.0 && webview_dir.exists() {
+            let _ = std::fs::create_dir_all(&trash);
+            let dest = trash.join(format!("webview-{}-{}", version, std::process::id()));
+            if std::fs::rename(&webview_dir, &dest).is_ok() {
+                std::thread::spawn(move || {
+                    let _ = std::fs::remove_dir_all(&dest);
+                });
+            } else {
+                let _ = std::fs::remove_dir_all(&webview_dir);
+            }
         }
         result
     })
@@ -624,7 +635,13 @@ pub(crate) async fn run_maintenance(app: tauri::AppHandle, kind: String) -> Resu
             cfg.maintenance.last_cleanup_at = Some(maintenance::now_secs());
             cfg.maintenance.last_cleanup_count = removed.len() as u64;
             logging::log_maintenance(&root, &format!("[手动] 清理孤立 webview：{} 项 {:?}", removed.len(), removed));
-            parts.push(format!("已清理孤立缓存 {} 项", removed.len()));
+            // 同时清空「回收站」残留（卸载时 rename 进来的，后台可能未删净）
+            let trashed = maintenance::cleanup_trash(&dirs.trash);
+            let mut s = format!("已清理孤立缓存 {} 项", removed.len());
+            if trashed > 0 {
+                s.push_str(&format!("；已清空回收站 {} 项", trashed));
+            }
+            parts.push(s);
         }
 
         if kind == "prune" || kind == "all" {

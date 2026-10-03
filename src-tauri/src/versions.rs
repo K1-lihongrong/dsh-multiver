@@ -386,6 +386,51 @@ mod tests {
         assert_eq!(classify_error("some totally unrelated failure"), "unknown");
         assert_eq!(classify_error(""), "unknown");
     }
+
+    // ── uninstall_fast：rename 到回收站 ──
+
+    fn uninstall_tmp(tag: &str) -> std::path::PathBuf {
+        let d = std::env::temp_dir().join(format!(
+            "dsh-uninstall-{}-{}",
+            tag,
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    #[test]
+    fn uninstall_fast_moves_version_to_trash() {
+        let base = uninstall_tmp("fast");
+        let versions = base.join("versions");
+        let trash = base.join("trash");
+        // 造一个"版本目录"
+        std::fs::create_dir_all(versions.join("0.1.0").join("node_modules")).unwrap();
+        assert!(versions.join("0.1.0").exists());
+
+        let (ok, msg) = uninstall_fast(&versions, &trash, "0.1.0");
+        assert!(ok, "msg={}", msg);
+        // 版本目录应立即消失
+        assert!(!versions.join("0.1.0").exists(), "版本目录应已移走");
+        // 回收站里应有一份（后台可能已删，故只验证"移走"而非"存在"）
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn uninstall_fast_missing_version_fails() {
+        let base = uninstall_tmp("missing");
+        let versions = base.join("versions");
+        let trash = base.join("trash");
+        std::fs::create_dir_all(&versions).unwrap();
+        let (ok, msg) = uninstall_fast(&versions, &trash, "9.9.9");
+        assert!(!ok);
+        assert!(msg.contains("不存在"), "msg={}", msg);
+        let _ = std::fs::remove_dir_all(&base);
+    }
 }
 
 /// 安装指定版本。on_progress 用于推送阶段进度。返回 (是否成功, 消息)
@@ -555,21 +600,50 @@ fn friendly_error(raw: &str) -> String {
     }
 }
 
-/// 卸载指定版本
-pub fn uninstall(versions_dir: &Path, version: &str) -> (bool, String) {
+/// 快速卸载：把版本目录 **rename** 到回收站（瞬时），实际删除交给后台。
+///
+/// Windows 上 `remove_dir_all` 删 26000 个文件可能要几十秒（NTFS + Defender），
+/// 用户盯着"卸载中..."干等。rename 只改目录项，**瞬时完成**；真正的删除放到后台，
+/// 由 `maintenance::cleanup_trash`（启动时）或本函数的后台线程负责。
+///
+/// 返回：(是否成功, 消息)。成功时版本目录已"消失"（rename 到了 trash）。
+/// 若 rename 失败（跨卷/被占用），回退到直接 `remove_dir_all`。
+pub fn uninstall_fast(versions_dir: &Path, trash_dir: &Path, version: &str) -> (bool, String) {
     let target = versions_dir.join(version);
     if !target.exists() {
         return (false, format!("版本 {} 不存在", version));
     }
-    match std::fs::remove_dir_all(&target) {
-        Ok(_) => (true, format!("已卸载 {}", version)),
-        Err(e) => {
-            let hint = if e.raw_os_error() == Some(32) {
-                "\n\n可能该版本的 dsh 进程正在运行，持有文件。\n请先关闭对应的 dsh 窗口/终端，再重试。"
-            } else {
-                ""
-            };
-            (false, format!("卸载失败: {}{}", e, hint))
+
+    // 确保回收站存在
+    let _ = std::fs::create_dir_all(trash_dir);
+    // 唯一名：<版本>-<时间戳>-<pid>，避免同名冲突
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0);
+    let dest = trash_dir.join(format!("{}-{}-{}", version, stamp, std::process::id()));
+
+    match std::fs::rename(&target, &dest) {
+        Ok(_) => {
+            // 后台线程慢慢删回收站里的这份（不阻塞命令返回）
+            std::thread::spawn(move || {
+                let _ = std::fs::remove_dir_all(&dest);
+            });
+            (true, format!("已卸载 {}", version))
+        }
+        Err(_) => {
+            // rename 失败（跨卷等）→ 回退直接删（可能慢，但保证功能）
+            match std::fs::remove_dir_all(&target) {
+                Ok(_) => (true, format!("已卸载 {}", version)),
+                Err(e) => {
+                    let hint = if e.raw_os_error() == Some(32) {
+                        "\n\n可能该版本的 dsh 进程正在运行，持有文件。\n请先关闭对应的 dsh 窗口/终端，再重试。"
+                    } else {
+                        ""
+                    };
+                    (false, format!("卸载失败: {}{}", e, hint))
+                }
+            }
         }
     }
 }
