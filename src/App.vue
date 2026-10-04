@@ -6,6 +6,7 @@ import { ask } from "@tauri-apps/plugin-dialog";
 import NotesPanel from "./components/NotesPanel.vue";
 import EnvCheck from "./components/EnvCheck.vue";
 import { useToast } from "./composables/useToast.js";
+import IsolatedMenu from "./components/IsolatedMenu.vue";
 
 const state = ref(null);
 const installed = ref([]);
@@ -347,10 +348,7 @@ async function toggleIsolated(v, current) {
   } catch (e) { notify("" + e); }
 }
 
-// ===== 隔离管理菜单 =====
-const openMenu = ref(null);       // 当前展开菜单的版本号
-const scanning = ref(null);       // 正在扫描的版本号（隔离数据）
-const sizes = ref({});            // 版本号 -> 隔离数据字节数
+// ===== 版本占用扫描 =====
 const scanningVer = ref(null);    // 正在扫描"整版本占用"的版本号
 const verSizes = ref({});         // 版本号 -> { total, shared_size, shared_count, exclusive_size }
 
@@ -366,56 +364,12 @@ async function scanVersionSize(v) {
   }
 }
 
-function toggleMenu(v) {
-  openMenu.value = openMenu.value === v ? null : v;
-}
-
-function closeMenu() {
-  openMenu.value = null;
-}
-
-async function openIsolatedDir(v) {
-  closeMenu();
-  try { await invoke("open_isolated_dir", { version: v }); }
-  catch (e) { notify("" + e); }
-}
-
-async function scanSize(v) {
-  scanning.value = v;
-  try {
-    const bytes = await invoke("scan_isolated_size", { version: v });
-    sizes.value = { ...sizes.value, [v]: bytes };
-  } catch (e) {
-    notify("" + e);
-  } finally {
-    scanning.value = null;
-  }
-}
-
 function fmtSize(bytes) {
   if (bytes == null) return "";
   if (bytes < 1024) return bytes + " B";
   if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + " KB";
   if (bytes < 1024 * 1024 * 1024) return (bytes / 1024 / 1024).toFixed(1) + " MB";
   return (bytes / 1024 / 1024 / 1024).toFixed(2) + " GB";
-}
-
-async function copyShared(v) {
-  closeMenu();
-  if (!(await ask("将把共享数据（<根>/home）复制到该版本的隔离目录。\n已存在的文件不会覆盖。\n\n继续吗？", { title: "复制共享数据", kind: "warning" }))) return;
-  try {
-    notify(await invoke("copy_shared_to_isolated", { version: v }));
-    sizes.value = { ...sizes.value, [v]: undefined };
-  } catch (e) { notify("" + e); }
-}
-
-async function clearIsolated(v) {
-  closeMenu();
-  if (!(await ask("将删除该版本的隔离数据（保留版本本身）。\n此操作不可恢复，继续吗？", { title: "清理隔离数据", kind: "warning" }))) return;
-  try {
-    notify(await invoke("clear_isolated_data", { version: v }));
-    sizes.value = { ...sizes.value, [v]: 0 };
-  } catch (e) { notify("" + e); }
 }
 
 async function applyRoot() {
@@ -503,13 +457,11 @@ onMounted(async () => {
     installFraction.value = p.fraction || 0;
   });
   await runEnvCheck();
-  document.addEventListener("click", closeMenu);
 });
 
 onUnmounted(() => {
   window.removeEventListener("error", onWindowError);
   window.removeEventListener("unhandledrejection", onUnhandledRejection);
-  document.removeEventListener("click", closeMenu);
   if (unlistenProgress) unlistenProgress();
   if (unlistenCrash) unlistenCrash();
 });
@@ -568,22 +520,12 @@ onUnmounted(() => {
             <button class="btn" @click="scanVersionSize(v.version)" :disabled="scanningVer === v.version || isBlocked(v.version)" title="统计该版本占用的磁盘空间">
               {{ scanningVer === v.version ? "扫描中..." : (verSizes[v.version] != null ? "重新扫描占用" : "扫描占用") }}
             </button>
-            <div class="menu-wrap" v-if="v.isolated">
-              <button class="btn active" @click.stop="toggleMenu(v.version)" :disabled="isBlocked(v.version)">
-                已隔离 ▾
-              </button>
-              <div class="menu" v-if="openMenu === v.version" @click.stop>
-                <button class="menu-item" @click="toggleIsolated(v.version, true)">关闭隔离</button>
-                <button class="menu-item" @click="openIsolatedDir(v.version)">打开隔离目录</button>
-                <button class="menu-item" @click="scanSize(v.version)" :disabled="scanning === v.version">
-                  <span v-if="scanning === v.version">扫描中...</span>
-                  <span v-else-if="sizes[v.version] != null">占用 {{ fmtSize(sizes[v.version]) }}（重新扫描）</span>
-                  <span v-else>扫描占用大小</span>
-                </button>
-                <button class="menu-item" @click="copyShared(v.version)">复制共享数据到此</button>
-                <button class="menu-item danger" @click="clearIsolated(v.version)">清理隔离数据</button>
-              </div>
-            </div>
+            <IsolatedMenu
+              v-if="v.isolated"
+              :version="v.version"
+              :disabled="isBlocked(v.version)"
+              @toggle-isolated="toggleIsolated(v.version, $event)"
+            />
             <button
               v-else
               class="btn"
@@ -913,23 +855,6 @@ body {
   display: flex; gap: 6px; align-items: center;
   flex-wrap: wrap; justify-content: flex-start;
 }
-
-.menu-wrap { position: relative; }
-.menu {
-  position: absolute; top: calc(100% + 4px); right: 0; z-index: 50;
-  background: #fff; border: 1px solid #e2e5ea; border-radius: 8px;
-  box-shadow: 0 6px 20px rgba(0,0,0,0.12); min-width: 200px;
-  padding: 4px; display: flex; flex-direction: column;
-}
-.menu-item {
-  text-align: left; border: none; background: none; color: #374151;
-  padding: 8px 12px; border-radius: 6px; font-size: 13px; cursor: pointer;
-  font-family: inherit; transition: background .12s;
-}
-.menu-item:hover:not(:disabled) { background: #f2f4f8; }
-.menu-item:disabled { opacity: .6; cursor: not-allowed; }
-.menu-item.danger { color: #d9534f; }
-.menu-item.danger:hover { background: #fdf2f2; }
 
 .btn {
   border: 1px solid #dcdfe4; background: #fff; color: #374151;
