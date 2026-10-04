@@ -7,6 +7,35 @@
 
 ---
 
+## [0.2.3] - 2026-10-05
+
+### 修复
+- **任务栏图标各归各位**：管理器窗口显示管理器图标、运行中的 dsh 窗口显示 dsh 图标
+  （此前两者颠倒——管理器显示 dsh 图标、dsh 窗口显示管理器图标）。根因是多层叠加：
+  Tauri 在 setup 回调之前就创建了主窗口，而进程级 AppUserModelID 必须在任何窗口创建之前设置，
+  导致管理器进程的 AUMID 从未生效，任务栏退化为"找指向该 exe 的快捷方式取图标"而被污染；
+  dsh 内嵌窗口与管理器同进程、共用进程级 AUMID；快捷方式设 AUMID 时误用了不支持该属性的 WScript.Shell。
+  修复：进程 AUMID 提前到 run() 开头；dsh 窗口用窗口级 AUMID（COM 的 IPropertyStore）+ 显示前设置；
+  快捷方式改用 COM 设置 AUMID。
+- **更新说明加载慢**：此前每次展开某版本的更新说明都要重新请求 GitHub（缓存写在组件实例里，
+  每次挂载都是空的）。改为**模块级缓存**，同一版本在任何入口看过一次后即秒出。
+- **根目录含首尾空格**：`resolve_root` 此前"判空用 trim、取值用原值"，若用户把数据根目录
+  设成末尾带空格的路径，会拼出带空格的子目录。现统一去首尾空格。
+
+### 变更
+- **桌面快捷方式使用 dsh 官方图标**：创建 `DSH <版本>.lnk` 时用 dsh 官方图标（不再是管理器图标），
+  语义更准确。
+- **路径设置支持「展开全部目录」**：默认只显示 5 个核心目录
+  （versions/home/store/cache/state），点「展开全部目录」可显示 logs/webview/trash/assets。
+
+### 重构（无功能变化）
+- **前端 `App.vue` 拆分完成**：单文件从 1336 行降到 173 行，按职责拆为 6 个组件
+  （NotesPanel / EnvCheck / IsolatedMenu / InstalledList / RemoteList / PathSettings）、
+  3 个 composable（useToast / useSharedHomeWarn / notesCache）与全局样式 common.css。
+  纯结构调整，行为不变。
+
+---
+
 ## [0.2.2] - 2026-10-04
 
 ### 新增
