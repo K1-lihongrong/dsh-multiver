@@ -297,9 +297,34 @@ fn parse_url(line: &str) -> Option<String> {
     }
 }
 
+/// dsh 官方图标（.ico），编译期内嵌进 exe。
+///
+/// 来源：deepseek-ai/deepseek-harness 的 apps/desktop/resources/icon-windows.png
+/// （由 `gen-dsh-shortcut-icon.mjs` 转成 ico）。按 BRAND_GUIDELINES，快捷方式如实指向"启动 dsh"，
+/// 用 dsh 官方图标标识 dsh 本身是合理的。
+#[cfg(windows)]
+const DSH_SHORTCUT_ICO: &[u8] = include_bytes!("../icons/dsh-shortcut.ico");
+
+/// 把内嵌的 dsh 图标释放到 `<manager_dir>/assets/dsh-shortcut.ico`，返回其路径。
+/// 已存在且大小一致则跳过（避免每次重写）。
+#[cfg(windows)]
+fn materialize_dsh_icon(exe_path: &Path) -> Option<PathBuf> {
+    let dir = exe_path.parent()?.join("assets");
+    let _ = std::fs::create_dir_all(&dir);
+    let path = dir.join("dsh-shortcut.ico");
+    // 大小一致就认为已是最新
+    if let Ok(meta) = std::fs::metadata(&path) {
+        if meta.len() == DSH_SHORTCUT_ICO.len() as u64 {
+            return Some(path);
+        }
+    }
+    std::fs::write(&path, DSH_SHORTCUT_ICO).ok()?;
+    Some(path)
+}
+
 /// 为某版本在桌面创建快捷方式。
 ///
-/// - Windows：`DSH <版本>.lnk`，用 PowerShell COM 生成（零依赖）
+/// - Windows：`DSH <版本>.lnk`，用 PowerShell COM 生成（零依赖）；图标用 dsh 官方图标
 /// - Unix：`DSH <版本>.desktop`，写 Desktop Entry 文件并置可执行
 #[cfg(windows)]
 pub fn create_desktop_shortcut(exe_path: &Path, version: &str) -> Result<String, String> {
@@ -307,7 +332,9 @@ pub fn create_desktop_shortcut(exe_path: &Path, version: &str) -> Result<String,
     let lnk_name = format!("DSH {}.lnk", version);
     let lnk_path = desktop.join(&lnk_name);
 
-    let script = build_shortcut_script(&lnk_path, exe_path, version);
+    // 快捷方式图标用 dsh 官方图标（而非管理器图标），语义为"启动 dsh"
+    let icon = materialize_dsh_icon(exe_path);
+    let script = build_shortcut_script(&lnk_path, exe_path, version, icon.as_deref());
 
     #[cfg(windows)]
     let out = {
@@ -374,19 +401,25 @@ pub fn create_desktop_shortcut(exe_path: &Path, version: &str) -> Result<String,
 }
 
 #[cfg(windows)]
-fn build_shortcut_script(lnk: &Path, exe_path: &Path, version: &str) -> String {
+fn build_shortcut_script(lnk: &Path, exe_path: &Path, version: &str, icon: Option<&Path>) -> String {
     let work = exe_path.parent().unwrap_or(Path::new("."));
     // AppUserModelID 必须与进程启动时设置的（lib.rs 的 set_windows_app_user_model_id，
     // 取自 app identifier）完全一致，否则 Windows 任务栏会把进程与快捷方式分到不同组，
     // 导致图标丢失。
     let aumid = "io.github.K1-lihongrong.dsh-multiver";
+    // IconLocation = "<ico 路径>,0"（第 0 个图标）；无 ico 则省略，退回 exe 内嵌图标
+    let icon_line = match icon {
+        Some(p) => format!(" $lnk.IconLocation = '{}';", escape_ps(&format!("{},0", p.to_string_lossy()))),
+        None => String::new(),
+    };
     format!(
-        "$ws = New-Object -ComObject WScript.Shell; $lnk = $ws.CreateShortcut('{}'); $lnk.TargetPath = '{}'; $lnk.Arguments = '--launch-version {}'; $lnk.WorkingDirectory = '{}'; $lnk.AppUserModelID = '{}'; $lnk.Save()",
+        "$ws = New-Object -ComObject WScript.Shell; $lnk = $ws.CreateShortcut('{}'); $lnk.TargetPath = '{}'; $lnk.Arguments = '--launch-version {}'; $lnk.WorkingDirectory = '{}'; $lnk.AppUserModelID = '{}';{} $lnk.Save()",
         escape_ps(&lnk.to_string_lossy()),
         escape_ps(&exe_path.to_string_lossy()),
         escape_ps(version),
         escape_ps(&work.to_string_lossy()),
         escape_ps(aumid),
+        icon_line,
     )
 }
 
