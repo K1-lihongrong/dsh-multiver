@@ -223,6 +223,11 @@ node gen-icons.mjs
 - Linux 下内嵌窗口在 WSLg 环境可能显示"重新连接中"（WSLg 专属，真桌面通常正常）；受影响时可改用「浏览器打开」
 - Linux 构建产物为 AppImage / deb（暂无 rpm、Snap、Flatpak）
 
+## 征求协助（非 Windows 平台）
+
+本项目主要在 Windows 上开发，**Linux 已通过 WSL 验证**，但**真实 Linux 桌面与 macOS 尚未验证**。
+若你有对应环境，欢迎帮忙实测或适配，详见 **[征求协助](docs/征求协助.md)**。
+
 ## 致谢
 
 - [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) — 本项目管理的对象
