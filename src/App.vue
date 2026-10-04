@@ -5,6 +5,7 @@ import { listen } from "@tauri-apps/api/event";
 import { ask } from "@tauri-apps/plugin-dialog";
 import NotesPanel from "./components/NotesPanel.vue";
 import EnvCheck from "./components/EnvCheck.vue";
+import { useToast } from "./composables/useToast.js";
 
 const state = ref(null);
 const installed = ref([]);
@@ -12,8 +13,8 @@ const remote = ref([]);
 const remoteQuery = ref("");      // 可用版本搜索词
 const remoteSortDesc = ref(true); // 排序：true=最新在前
 const loading = ref(false);
-const toast = ref("");
-const toastExpanded = ref(false);
+// toast（通知）由 useToast 提供（模块级单例，与拆出的组件共享）
+const { toast, toastExpanded, notify, dismissToast, toggleToast } = useToast();
 const installInput = ref("");
 const rootInput = ref("");
 const installStage = ref("");
@@ -105,22 +106,10 @@ async function batchUninstall() {
   }
 }
 const envCheckRef = ref(null);  // <EnvCheck> 组件引用（安装前调 run()）
-let toastTimer = null;
 let unlistenProgress = null;
 let unlistenCrash = null;
 // 「运行共享 home 版本时提示」开关（持久化到 localStorage）
 const warnSharedHomeEnabled = ref(localStorage.getItem("dsh-multiver.warnSharedHome") !== "0");
-
-function notify(msg) {
-  toast.value = msg;
-  toastExpanded.value = false;
-  if (toastTimer) clearTimeout(toastTimer);
-  // 短消息 6 秒后自动消失；长消息（含换行的错误详情）不自动消失，由用户关闭
-  const isLong = String(msg).length > 60 || String(msg).includes("\n");
-  if (!isLong) {
-    toastTimer = setTimeout(() => { toast.value = ""; }, 6000);
-  }
-}
 
 /// 各阶段的「起始百分比」与「权重百分比」（按实际耗时分配，和 ≈ 100）
 /// 索引 = step - 1。写入阶段（step 6）最耗时，权重最大。
@@ -133,17 +122,6 @@ function progressPct() {
   if (i < 0 || i >= STAGE_START.length) return 0;
   const frac = Math.min(1, Math.max(0, installFraction.value));
   return Math.round(STAGE_START[i] + STAGE_WEIGHT[i] * frac);
-}
-
-function dismissToast() {
-  if (toastTimer) clearTimeout(toastTimer);
-  toast.value = "";
-  toastExpanded.value = false;
-}
-
-function toggleToast() {
-  toastExpanded.value = !toastExpanded.value;
-  if (toastExpanded.value && toastTimer) clearTimeout(toastTimer);
 }
 
 async function refresh() {
