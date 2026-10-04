@@ -74,6 +74,10 @@ pub fn run() {
         }
     }
 
+    // 进程级 AUMID 必须在任何窗口创建之前设置（Tauri 在 setup 回调前就建了主窗口）。
+    // 否则任务栏会退化为"找指向本 exe 的快捷方式取图标"，被桌面 dsh 快捷方式污染。
+    window::set_process_aumid();
+
     let procs: ProcMap = Arc::new(Mutex::new(HashMap::new()));
     let procs_setup = procs.clone();
     tauri::Builder::default()
@@ -108,8 +112,16 @@ pub fn run() {
         ])
         .setup(move |app| {
             use tauri::Manager;
-            // 必须在任何窗口显示之前设置，否则任务栏图标可能不稳定
-            window::set_windows_app_user_model_id(&app.handle().clone());
+            // 注册各 AUMID 的任务栏图标（IconUri）。进程级 AUMID 已在 run() 开头设过。
+            window::register_aumid_icons();
+            // 主窗口（管理器）显式使用管理器自己的图标（exe 内嵌图标 = bundle.icon 的 icon.ico），
+            // 避免被任务栏缓存或其它窗口/快捷方式图标影响而显示错误图标。
+            #[cfg(windows)]
+            if let Some(main) = app.get_webview_window("main") {
+                if let Ok(img) = tauri::image::Image::from_app_icon_resource(256) {
+                    let _ = main.set_icon(img);
+                }
+            }
             // 精简启动模式：命令行带 --launch-version <版本> 时，
             // 关闭默认主窗口，直接打开该版本的内嵌窗口。
             if let Some(version) = window::parse_launch_version(&std::env::args().collect::<Vec<_>>()) {

@@ -305,10 +305,34 @@ fn parse_url(line: &str) -> Option<String> {
 #[cfg(windows)]
 const DSH_SHORTCUT_ICO: &[u8] = include_bytes!("../icons/dsh-shortcut.ico");
 
+/// 在注册表为某 AUMID 注册任务栏图标（IconUri 指向给定 .ico）。
+/// 设了 AUMID 后 Windows 从 `HKCU\Software\Classes\AppUserModelId\<aumid>` 的 IconUri 取图标，
+/// 不注册会显示占位图。
+#[cfg(windows)]
+pub(crate) fn register_aumid_icon(aumid: &str, ico_path: &Path) {
+    use std::os::windows::process::CommandExt;
+    const CREATE_NO_WINDOW: u32 = 0x08000000;
+    let key = format!("HKCU\\Software\\Classes\\AppUserModelId\\{}", aumid);
+    let _ = std::process::Command::new("reg")
+        .args([
+            "add",
+            &key,
+            "/v",
+            "IconUri",
+            "/t",
+            "REG_SZ",
+            "/d",
+            &ico_path.to_string_lossy(),
+            "/f",
+        ])
+        .creation_flags(CREATE_NO_WINDOW)
+        .output();
+}
+
 /// 把内嵌的 dsh 图标释放到 `<manager_dir>/assets/dsh-shortcut.ico`，返回其路径。
 /// 已存在且大小一致则跳过（避免每次重写）。
 #[cfg(windows)]
-fn materialize_dsh_icon(exe_path: &Path) -> Option<PathBuf> {
+pub(crate) fn materialize_dsh_icon(exe_path: &Path) -> Option<PathBuf> {
     let dir = exe_path.parent()?.join("assets");
     let _ = std::fs::create_dir_all(&dir);
     let path = dir.join("dsh-shortcut.ico");
@@ -403,23 +427,83 @@ pub fn create_desktop_shortcut(exe_path: &Path, version: &str) -> Result<String,
 #[cfg(windows)]
 fn build_shortcut_script(lnk: &Path, exe_path: &Path, version: &str, icon: Option<&Path>) -> String {
     let work = exe_path.parent().unwrap_or(Path::new("."));
-    // AppUserModelID 必须与进程启动时设置的（lib.rs 的 set_windows_app_user_model_id，
-    // 取自 app identifier）完全一致，否则 Windows 任务栏会把进程与快捷方式分到不同组，
-    // 导致图标丢失。
-    let aumid = "io.github.K1-lihongrong.dsh-multiver";
+    // 快捷方式的 AUMID 用「dsh 窗口」的（而非管理器的）：
+    //   - 快捷方式的目标虽同为管理器 exe，但语义是"启动某个 dsh 版本"
+    //   - 若用管理器的 AUMID，任务栏会把"管理器 exe"与这些快捷方式视为同一应用，
+    //     并取快捷方式的图标（鲸鱼）当作管理器的任务栏图标（管理器应为方块）
+    //   - 用 dsh 的 AUMID 后：快捷方式归 dsh 组（鲸鱼），管理器归自己的组（方块），各归各位
+    let aumid = crate::window::DSH_WINDOW_AUMID;
     // IconLocation = "<ico 路径>,0"（第 0 个图标）；无 ico 则省略，退回 exe 内嵌图标
     let icon_line = match icon {
-        Some(p) => format!(" $lnk.IconLocation = '{}';", escape_ps(&format!("{},0", p.to_string_lossy()))),
+        Some(p) => format!("$lnk.IconLocation = '{}';", escape_ps(&format!("{},0", p.to_string_lossy()))),
         None => String::new(),
     };
+    // 注意：WScript.Shell 的快捷方式对象**没有** AppUserModelID 属性
+    //（给它赋值会静默失败），必须改用 COM 的 IPropertyStore 写 PKEY_AppUserModel_ID。
+    let lnk_ps = escape_ps(&lnk.to_string_lossy());
+    let aumid_ps = escape_ps(aumid);
     format!(
-        "$ws = New-Object -ComObject WScript.Shell; $lnk = $ws.CreateShortcut('{}'); $lnk.TargetPath = '{}'; $lnk.Arguments = '--launch-version {}'; $lnk.WorkingDirectory = '{}'; $lnk.AppUserModelID = '{}';{} $lnk.Save()",
-        escape_ps(&lnk.to_string_lossy()),
-        escape_ps(&exe_path.to_string_lossy()),
-        escape_ps(version),
-        escape_ps(&work.to_string_lossy()),
-        escape_ps(aumid),
-        icon_line,
+        "$ws = New-Object -ComObject WScript.Shell; $lnk = $ws.CreateShortcut('{lnk}'); $lnk.TargetPath = '{exe}'; $lnk.Arguments = '--launch-version {ver}'; $lnk.WorkingDirectory = '{work}'; {icon}$lnk.Save(); {set_aumid}",
+        lnk = lnk_ps,
+        exe = escape_ps(&exe_path.to_string_lossy()),
+        ver = escape_ps(version),
+        work = escape_ps(&work.to_string_lossy()),
+        icon = icon_line,
+        set_aumid = build_set_aumid_ps(&lnk_ps, &aumid_ps),
+    )
+}
+
+/// 生成一段 PowerShell：用 COM 的 IPropertyStore 给 .lnk 设 PKEY_AppUserModel_ID。
+///
+/// 为什么不能直接用 WScript.Shell：其快捷方式对象根本没有 AppUserModelID 属性，
+/// 赋值会被静默忽略（快捷方式始终无 AUMID）。正确做法是经 IShellLink -> IPropertyStore。
+#[cfg(windows)]
+fn build_set_aumid_ps(lnk_ps: &str, aumid_ps: &str) -> String {
+    // C# 内联：SHGetPropertyStoreFromParsingName 取 IPropertyStore，SetValue + Commit。
+    // PKEY_AppUserModel_ID = {9F4C2855-9F79-4B39-A8D0-E1D42DE1D5F3}, 5
+    let cs = r#"
+using System;
+using System.Runtime.InteropServices;
+using System.Runtime.InteropServices.ComTypes;
+public static class LnkAumid {
+    [ComImport, Guid("886d8eeb-8cf2-4446-8d02-cdba1dbdcf99"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    interface IPropertyStore {
+        void GetCount(out uint c);
+        void GetAt(uint i, out PROPERTYKEY k);
+        void GetValue(ref PROPERTYKEY k, out PROPVARIANT v);
+        void SetValue(ref PROPERTYKEY k, ref PROPVARIANT v);
+        void Commit();
+    }
+    [StructLayout(LayoutKind.Sequential, Pack = 4)]
+    struct PROPERTYKEY { public Guid fmtid; public uint pid; }
+    [StructLayout(LayoutKind.Explicit)]
+    struct PROPVARIANT { [FieldOffset(0)] public ushort vt; [FieldOffset(8)] public IntPtr p; }
+    [DllImport("shell32.dll", CharSet = CharSet.Unicode, PreserveSig = false)]
+    static extern void SHGetPropertyStoreFromParsingName(string path, IntPtr pbc, uint flags, ref Guid riid, [MarshalAs(UnmanagedType.Interface)] out IPropertyStore store);
+    [DllImport("ole32.dll")] static extern int PropVariantClear(ref PROPVARIANT pvar);
+    public static void Set(string lnk, string aumid) {
+        var iid = new Guid("886d8eeb-8cf2-4446-8d02-cdba1dbdcf99");
+        IPropertyStore store;
+        SHGetPropertyStoreFromParsingName(lnk, IntPtr.Zero, 2, ref iid, out store); // GPS_READWRITE = 2
+        var key = new PROPERTYKEY { fmtid = new Guid("9F4C2855-9F79-4B39-A8D0-E1D42DE1D5F3"), pid = 5 };
+        var pv = new PROPVARIANT();
+        pv.vt = 31; // VT_LPWSTR
+        pv.p = Marshal.StringToCoTaskMemUni(aumid);
+        store.SetValue(ref key, ref pv);
+        store.Commit();
+        Marshal.FreeCoTaskMem(pv.p);
+        Marshal.ReleaseComObject(store);
+    }
+}
+"#;
+    // 用 here-string 内联 C# 并调用；Add-Type 已存在同名类型时跳过
+    format!(
+        "if (-not ('LnkAumid' -as [type])) {{ Add-Type -TypeDefinition @'
+{cs}
+'@ }}; [LnkAumid]::Set('{lnk}', '{aumid}')",
+        cs = cs,
+        lnk = lnk_ps,
+        aumid = aumid_ps,
     )
 }
 

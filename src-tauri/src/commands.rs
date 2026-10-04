@@ -341,6 +341,9 @@ pub(crate) async fn launch_window(
         // 放在数据根目录内（<根>/webview/<版本>），符合自包含原则。
         .data_directory(dirs.webview.join(&version))
         .initialization_script(&init_script)
+        // 先隐藏：任务栏项在窗口**显示时**按 AUMID 建图标，
+        // 必须等设好窗口级 AUMID / 图标（下面）后再 show()。
+        .visible(false)
         .build();
     let window = match built {
         Ok(w) => w,
@@ -351,6 +354,31 @@ pub(crate) async fn launch_window(
             return Err(format!("创建窗口失败: {}", e));
         }
     };
+
+    // 给 dsh 窗口设 dsh 图标（作用于标题栏 / Alt+Tab；任务栏图标由 AUMID 的 IconUri 决定）
+    #[cfg(windows)]
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(ico) = launcher::materialize_dsh_icon(&exe) {
+            if let Ok(img) = tauri::image::Image::from_path(&ico) {
+                let _ = window.set_icon(img);
+            }
+        }
+    }
+
+    // 给 dsh 窗口单独设 AUMID（任务栏显示 dsh 图标、与管理器窗口分开成组）。
+    // 必须在窗口**显示之前**设置（上面已用 .visible(false) 延迟显示）。
+    // 失败不阻塞（退回进程级 AUMID，即管理器图标）。
+    #[cfg(windows)]
+    {
+        if let Err(e) = window::set_window_app_user_model_id(&window, window::DSH_WINDOW_AUMID) {
+            logging::log_app_error(&dirs.root, "launch_window", &format!("{} 设窗口 AUMID 失败: {}", version, e));
+        }
+    }
+
+    // 设好 AUMID / 图标后再显示
+    if let Err(e) = window.show() {
+        logging::log_app_error(&dirs.root, "launch_window", &format!("{} 显示窗口失败: {}", version, e));
+    }
 
     lock_procs(&procs).insert(version.clone(), (label.clone(), generation, child, job));
 
