@@ -907,9 +907,6 @@ body {
 
 .empty, .hint { color: #9aa1ab; font-size: 13px; padding: 8px 0; }
 
-.badge-ok { background: #e8f5ec; color: #2f9e5f; font-size: 11px; padding: 2px 8px; border-radius: 10px; margin-left: 6px; }
-.badge-err { background: #fdf2f2; color: #d9534f; font-size: 11px; padding: 2px 8px; border-radius: 10px; margin-left: 6px; }
-
 .ver-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
 .ver-item {
   display: flex; align-items: center; flex-wrap: wrap;
