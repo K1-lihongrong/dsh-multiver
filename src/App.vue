@@ -188,16 +188,17 @@ async function clearBroken() {
   }
 }
 
+// ===== 版本更新说明（数据源：dsh 上游 GitHub releases）=====
+// 拉取 / 消毒 / 渲染都在 <NotesPanel> 组件内部；这里只保留"展开哪个版本"的状态。
+// 注意：这两个 ref 必须在下面的函数定义**之前**声明（否则函数调用时撞 const 的 TDZ）。
+const remoteNoteVer = ref(null);    // 可用版本里当前展开说明的版本号
+const installedNoteVer = ref(null); // 已安装版本里当前展开说明的版本号
+
 /// 点可用版本 chip：填入输入框 + 在其下方展开更新说明（再点一次收起）。
 function pickVersion(v) {
   installInput.value = v;
   remoteNoteVer.value = remoteNoteVer.value === v ? null : v;
 }
-
-// ===== 版本更新说明（数据源：dsh 上游 GitHub releases）=====
-// 拉取 / 消毒 / 渲染都在 <NotesPanel> 组件内部；这里只保留"展开哪个版本"的状态。
-const remoteNoteVer = ref(null);    // 可用版本里当前展开说明的版本号
-const installedNoteVer = ref(null); // 已安装版本里当前展开说明的版本号
 
 /// 点已安装版本的版本号：展开/收起该版本更新说明。
 function toggleInstalledNote(v) {
