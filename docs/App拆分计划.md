@@ -1,6 +1,15 @@
 # App.vue 拆分计划（GAP-009）
 
-> 目标：把 `src/App.vue`（当前 **1133 行**）按职责拆成多个组件 + composable，
+> **状态：✅ 已完成（2026-10-05）。App.vue 1336 → 173 行。**
+> 实际拆分出：NotesPanel / EnvCheck / IsolatedMenu / InstalledList / RemoteList /
+> PathSettings 六个组件，useToast / useSharedHomeWarn / notesCache 三个 composable，
+> 以及全局样式 `src/styles/common.css`。
+> 说明：第 8 步实际做的是"样式收拢到 common.css"（评估后认为抽 useManagerState 收益小、
+> 改动面大，未做）。下面保留原始计划以备查。
+
+---
+
+> 目标：把 `src/App.vue`（当时 **1133 行**）按职责拆成多个组件 + composable，
 > **分步实施、每步可验证**，避免一次性大重构的风险。
 >
 > 背景：本项目前端**无自动化测试**，靠"小步 + 手动验证"控制风险。每步拆完都要
