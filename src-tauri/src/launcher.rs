@@ -166,20 +166,63 @@ pub fn spawn_web_hidden(
                 // 进程若已退出，提前报错
                 if let Ok(Some(status)) = child.try_wait() {
                     let _ = child.wait();
-                    return Err(format!("dsh web 进程提前退出（状态: {}）", status));
+                    std::thread::sleep(Duration::from_millis(150)); // 给 stderr 读线程一点落盘时间
+                    let detail = read_recent_errors(&session_path, 6);
+                    if detail.is_empty() {
+                        return Err(format!(
+                            "dsh web 进程提前退出（状态: {}）。\n请查看日志目录：\n{}",
+                            status, log_dir.to_string_lossy()
+                        ));
+                    }
+                    return Err(format!(
+                        "dsh web 启动失败（进程退出，状态: {}）。dsh 输出：\n{}\n\n完整日志目录：\n{}",
+                        status, detail, log_dir.to_string_lossy()
+                    ));
                 }
             }
             Err(mpsc::RecvTimeoutError::Disconnected) => {
-                // 读线程结束但未解析到 URL（进程结束 / 输出格式变化）
+                // 读线程结束但未解析到 URL（进程结束）
                 kill_tree(&mut child);
                 let _ = child.wait();
+                std::thread::sleep(Duration::from_millis(150)); // 给 stderr 读线程一点落盘时间
+                let detail = read_recent_errors(&session_path, 6);
+                if detail.is_empty() {
+                    return Err(format!(
+                        "dsh web 未输出访问地址就退出了（dsh 未打印错误）。\n请查看日志目录：\n{}",
+                        log_dir.to_string_lossy()
+                    ));
+                }
                 return Err(format!(
-                    "未能从 dsh web 输出中解析到访问地址（输出格式可能已变化）。\n请查看日志目录：\n{}",
-                    log_dir.to_string_lossy()
+                    "dsh web 启动失败。dsh 输出：\n{}\n\n完整日志目录：\n{}",
+                    detail, log_dir.to_string_lossy()
                 ));
             }
         }
     }
+}
+
+/// 从会话日志里提取最近的 `[err]` 行（dsh 启动失败时的真实错误），用于拼进错误提示。
+/// 只取末尾最多 `max_lines` 行、总长不超过 ~800 字符，避免提示过长。
+fn read_recent_errors(session_path: &Path, max_lines: usize) -> String {
+    let content = match std::fs::read_to_string(session_path) {
+        Ok(c) => c,
+        Err(_) => return String::new(),
+    };
+    let errs: Vec<&str> = content
+        .lines()
+        .filter(|l| l.starts_with("[err] "))
+        .map(|l| l.trim_start_matches("[err] "))
+        .collect();
+    if errs.is_empty() {
+        return String::new();
+    }
+    // 取末尾 max_lines 行
+    let start = errs.len().saturating_sub(max_lines);
+    let mut joined = errs[start..].join("\n");
+    if joined.chars().count() > 800 {
+        joined = joined.chars().take(800).collect::<String>() + " …";
+    }
+    joined
 }
 
 /// 结束一个 dsh 进程及其整棵子进程树。
@@ -534,5 +577,57 @@ mod tests {
         // 非 127.0.0.1 / localhost 的地址不识别
         assert_eq!(parse_url("http://192.168.1.5:8080/"), None);
         assert_eq!(parse_url("no url here"), None);
+    }
+
+    // ── read_recent_errors：从会话日志提取 [err] 行 ──
+
+    fn tmp_session(content: &str) -> std::path::PathBuf {
+        // 用纳秒 + 原子计数保证唯一，避免同一秒内多个测试互相覆盖
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static N: AtomicU64 = AtomicU64::new(0);
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let p = std::env::temp_dir().join(format!(
+            "dsh-launch-{}-{}-{}.log",
+            std::process::id(),
+            nanos,
+            N.fetch_add(1, Ordering::Relaxed)
+        ));
+        std::fs::write(&p, content).unwrap();
+        p
+    }
+
+    #[test]
+    fn read_recent_errors_extracts_err_lines() {
+        let p = tmp_session(
+            "===== session =====\n[out] dsh web: http://x\n[err] boom 1\n[err] boom 2\n",
+        );
+        let got = read_recent_errors(&p, 6);
+        assert!(got.contains("boom 1"), "got={}", got);
+        assert!(got.contains("boom 2"), "got={}", got);
+        assert!(!got.contains("[err]"), "应去掉 [err] 前缀: {}", got);
+        let _ = std::fs::remove_file(&p);
+    }
+
+    #[test]
+    fn read_recent_errors_keeps_only_last_n() {
+        let content = (1..=10)
+            .map(|i| format!("[err] line {}\n", i))
+            .collect::<String>();
+        let p = tmp_session(&content);
+        let got = read_recent_errors(&p, 3);
+        assert!(got.contains("line 10"));
+        assert!(got.contains("line 8"));
+        assert!(!got.contains("line 7"), "只保留末尾 3 行: {}", got);
+        let _ = std::fs::remove_file(&p);
+    }
+
+    #[test]
+    fn read_recent_errors_empty_when_no_err() {
+        let p = tmp_session("[out] dsh web: http://x\n");
+        assert_eq!(read_recent_errors(&p, 6), "");
+        let _ = std::fs::remove_file(&p);
     }
 }
