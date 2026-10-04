@@ -259,9 +259,6 @@ function toggleInstalledNote(v) {
 .ver-num-clickable:hover { color: #4f6ef7; }
 .ver-caret { font-size: 10px; margin-left: 3px; color: #9aa1ab; }
 .ver-meta { color: #9aa1ab; font-size: 11px; }
-.badge { background: #e8f5ec; color: #2f9e5f; font-size: 11px; padding: 2px 8px; border-radius: 10px; font-weight: 500; }
-.badge-iso { background: #fff4e5; color: #c77d1a; }
-.badge-shared { background: #eef1f5; color: #6b7280; cursor: help; }
 .ver-actions { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; justify-content: flex-start; }
 .batch-bar {
   display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
@@ -269,18 +266,5 @@ function toggleInstalledNote(v) {
 }
 .batch-select-all { display: flex; align-items: center; gap: 6px; font-size: 13px; color: #6b7280; cursor: pointer; }
 .batch-count { font-size: 13px; color: #4f6ef7; font-weight: 600; }
-/* 按钮样式（组件内 scoped，需自带；与 App.vue 的 .btn 视觉一致） */
-.btn {
-  border: 1px solid #dcdfe4; background: #fff; color: #374151;
-  padding: 6px 14px; border-radius: 7px; font-size: 13px;
-  cursor: pointer; transition: all .15s; font-family: inherit;
-  white-space: nowrap; flex-shrink: 0;
-}
-.btn:hover:not(:disabled) { border-color: #c3c8d0; background: #f7f8fa; }
-.btn:disabled { opacity: .5; cursor: not-allowed; }
-.btn.primary { background: #4f6ef7; border-color: #4f6ef7; color: #fff; }
-.btn.primary:hover:not(:disabled) { background: #3f5ce0; border-color: #3f5ce0; }
-.btn.danger { color: #d9534f; }
-.btn.danger:hover:not(:disabled) { background: #fdf2f2; border-color: #f0c0c0; }
-.btn.small { padding: 4px 12px; font-size: 12px; }
+/* .btn / .badge 等公共样式见 src/styles/common.css（main.js 引入），此处不再重复 */
 </style>

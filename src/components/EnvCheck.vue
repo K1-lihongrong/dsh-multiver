@@ -95,6 +95,5 @@ defineExpose({ run });
   border-radius: 6px; font-size: 12px; color: #6b7280; line-height: 1.5;
 }
 .env-guide-text { flex: 1; min-width: 200px; }
-.badge-ok { background: #e8f5ec; color: #2f9e5f; font-size: 11px; padding: 2px 8px; border-radius: 10px; margin-left: 6px; }
-.badge-err { background: #fdf2f2; color: #d9534f; font-size: 11px; padding: 2px 8px; border-radius: 10px; margin-left: 6px; }
+/* .badge-ok / .badge-err 见 src/styles/common.css */
 </style>

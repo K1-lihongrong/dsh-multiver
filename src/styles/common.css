@@ -1,0 +1,76 @@
+/* 全局公共样式（跨组件复用）——由 main.js 引入。
+ *
+ * 这里放"多个组件都要用"的基础样式（按钮、徽章、面板、弹窗等）；
+ * 仅 App.vue 布局用的样式（topbar/content/toast 等）留在 App.vue 的 <style> 里。
+ * 组件自己的样式用 <style scoped>，不必重复定义这里的类。
+ */
+
+* { box-sizing: border-box; }
+html, body, #app { height: 100%; margin: 0; }
+body {
+  font-family: "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
+  background: #f5f6f8;
+  color: #1f2328;
+  font-size: 14px;
+}
+
+/* ---------- 面板 ---------- */
+.panel {
+  background: #fff; border: 1px solid #e6e8eb; border-radius: 12px;
+  padding: 16px 18px;
+}
+.panel-head {
+  display: flex; align-items: center; justify-content: space-between;
+  margin-bottom: 12px;
+}
+.panel-head h2 { font-size: 14px; margin: 0; font-weight: 600; color: #374151; }
+.count {
+  background: #eef1ff; color: #4f6ef7; font-size: 12px;
+  padding: 1px 8px; border-radius: 10px; margin-left: 8px;
+}
+.empty, .hint { color: #9aa1ab; font-size: 13px; padding: 8px 0; }
+
+/* ---------- 按钮 ---------- */
+.btn {
+  border: 1px solid #dcdfe4; background: #fff; color: #374151;
+  padding: 6px 14px; border-radius: 7px; font-size: 13px;
+  cursor: pointer; transition: all .15s; font-family: inherit;
+  white-space: nowrap; flex-shrink: 0;
+}
+.btn:hover:not(:disabled) { border-color: #c3c8d0; background: #f7f8fa; }
+.btn:disabled { opacity: .5; cursor: not-allowed; }
+.btn.primary { background: #4f6ef7; border-color: #4f6ef7; color: #fff; }
+.btn.primary:hover:not(:disabled) { background: #3f5ce0; border-color: #3f5ce0; }
+.btn.danger { color: #d9534f; }
+.btn.danger:hover:not(:disabled) { background: #fdf2f2; border-color: #f0c0c0; }
+.btn.small { padding: 4px 12px; font-size: 12px; }
+.btn.active {
+  background: #fff4e5; border-color: #f0c98a; color: #c77d1a;
+}
+.btn.active:hover:not(:disabled) { background: #ffedcc; border-color: #e0b46a; }
+
+/* ---------- 徽章 ---------- */
+.badge {
+  background: #e8f5ec; color: #2f9e5f; font-size: 11px;
+  padding: 2px 8px; border-radius: 10px; font-weight: 500;
+}
+.badge-iso { background: #fff4e5; color: #c77d1a; }
+.badge-shared { background: #eef1f5; color: #6b7280; cursor: help; }
+.badge-ok { background: #e8f5ec; color: #2f9e5f; font-size: 11px; padding: 2px 8px; border-radius: 10px; margin-left: 6px; }
+.badge-err { background: #fdf2f2; color: #d9534f; font-size: 11px; padding: 2px 8px; border-radius: 10px; margin-left: 6px; }
+
+/* ---------- 表单 ---------- */
+.field { margin-bottom: 12px; }
+.field label { display: block; font-size: 12px; color: #6b7280; margin-bottom: 6px; }
+.input {
+  width: 100%; box-sizing: border-box;
+  padding: 8px 12px; border: 1px solid #dcdfe4;
+  border-radius: 7px; font-size: 13px; font-family: inherit; outline: none;
+  background: #fff;
+}
+.input:focus { border-color: #4f6ef7; }
+
+/* ---------- 通用滚动条 ---------- */
+::-webkit-scrollbar { width: 8px; }
+::-webkit-scrollbar-thumb { background: #d6dae0; border-radius: 4px; }
+::-webkit-scrollbar-thumb:hover { background: #c3c8d0; }

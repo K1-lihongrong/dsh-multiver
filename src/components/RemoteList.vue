@@ -378,15 +378,6 @@ pnpm install &amp;&amp; pnpm build</pre>
 }
 .modal h3 { margin: 0 0 10px; font-size: 15px; }
 .modal-desc { font-size: 13px; color: #4b5563; margin-bottom: 14px; line-height: 1.5; }
-.field { margin-bottom: 12px; }
-.field label { display: block; font-size: 12px; color: #6b7280; margin-bottom: 6px; }
-.input {
-  width: 100%; box-sizing: border-box;
-  padding: 8px 12px; border: 1px solid #dcdfe4;
-  border-radius: 7px; font-size: 13px; font-family: inherit; outline: none;
-  background: #fff;
-}
-.input:focus { border-color: #4f6ef7; }
 .retry-detail { margin-bottom: 12px; font-size: 12px; color: #6b7280; }
 .retry-detail summary { cursor: pointer; }
 .adv-body { margin-top: 6px; line-height: 1.6; }
