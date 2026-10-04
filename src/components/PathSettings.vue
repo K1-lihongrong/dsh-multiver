@@ -17,6 +17,7 @@ const { warnSharedHomeEnabled, setWarnSharedHome } = useSharedHomeWarn();
 
 const rootInput = ref("");
 const maintBusy = ref("");
+const showAllDirs = ref(false); // 「展开全部」：显示 logs/webview/trash/assets
 
 // state 变化时同步根目录输入框（初始 + 应用后刷新都会走到）
 watch(
@@ -125,8 +126,22 @@ function fmtTs(sec) {
         <span class="path-desc">pnpm 运行状态（可安全删除）</span>
         <code>{{ state.state_dir }}</code>
       </div>
+
+      <!-- 展开后：额外目录（logs/webview/trash/assets） -->
+      <template v-if="showAllDirs && state.extra_dirs">
+        <div class="path-item" v-for="d in state.extra_dirs" :key="d.name" @click="openDir(d.name)">
+          <span class="path-name">{{ d.name }}</span>
+          <span class="path-desc">{{ d.desc }}</span>
+          <code>{{ d.path }}</code>
+        </div>
+      </template>
     </div>
-    <div class="hint">点击任意路径可在资源管理器中打开</div>
+    <div class="paths-toggle">
+      <button class="btn small" @click="showAllDirs = !showAllDirs">
+        {{ showAllDirs ? "收起" : "展开全部目录" }}
+      </button>
+      <span class="hint">点击任意路径可在资源管理器中打开</span>
+    </div>
 
     <!-- 维护 -->
     <div class="maint" v-if="state">
@@ -182,6 +197,8 @@ function fmtTs(sec) {
   text-overflow: ellipsis; white-space: nowrap;
 }
 .hint { color: #9aa1ab; font-size: 13px; padding: 8px 0; }
+.paths-toggle { display: flex; align-items: center; gap: 10px; padding: 6px 0 2px; }
+.paths-toggle .hint { padding: 0; font-size: 12px; }
 .maint { margin-top: 16px; padding-top: 14px; border-top: 1px solid #eef1f5; }
 .maint-rules { font-size: 12px; color: #6b7280; line-height: 1.8; margin: 4px 0 10px; }
 .maint-status { font-size: 12px; color: #9aa1ab; line-height: 1.8; margin-bottom: 10px; }

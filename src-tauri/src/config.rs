@@ -145,6 +145,8 @@ pub struct Dirs {
     /// 「回收站」目录：卸载时先把版本目录 rename 到这里（瞬时），再由后台慢慢删。
     /// 避免 Windows 上直接删 26000 个文件导致的长时间无响应等待。
     pub trash: PathBuf,
+    /// 管理器资源目录（如桌面快捷方式用的 dsh 图标）；仅 Windows 使用。
+    pub assets: PathBuf,
 }
 
 impl Dirs {
@@ -157,6 +159,7 @@ impl Dirs {
             state: root.join("state"),
             webview: root.join("webview"),
             trash: root.join("trash"),
+            assets: root.join("assets"),
             root,
         }
     }
@@ -182,7 +185,9 @@ impl Dirs {
             "cache" => self.cache.clone(),
             "state" => self.state.clone(),
             "logs" => self.root.join("logs"),
+            "webview" => self.webview.clone(),
             "trash" => self.trash.clone(),
+            "assets" => self.assets.clone(),
             "root" => self.root.clone(),
             _ => self.root.clone(),
         }

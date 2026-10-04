@@ -11,6 +11,17 @@ use crate::{lock_procs, manager_dir, ProcMap, NEXT_GEN};
 use serde::Serialize;
 use std::path::PathBuf;
 
+/// 「路径设置」里额外展示的目录项（默认收起，点"展开"才显示）。
+#[derive(Serialize)]
+pub(crate) struct ExtraDir {
+    /// 目录名（同时是 open_dir 的 which 值）
+    name: String,
+    /// 中文说明
+    desc: String,
+    /// 绝对路径
+    path: String,
+}
+
 /// 一次返回给前端的完整状态
 #[derive(Serialize)]
 pub(crate) struct AppState {
@@ -22,6 +33,8 @@ pub(crate) struct AppState {
     store_dir: String,
     cache_dir: String,
     state_dir: String,
+    /// 额外目录（logs/webview/trash/assets），由前端"展开全部"时展示
+    extra_dirs: Vec<ExtraDir>,
     default_version: Option<String>,
     manager_dir: String,
     broken_versions: Vec<String>,
@@ -35,6 +48,28 @@ pub(crate) fn get_state(app: tauri::AppHandle) -> AppState {
     let root = cfg.resolve_root(&mdir);
     let dirs = Dirs::new(root.clone());
     let _ = dirs.ensure();
+    let extra_dirs = vec![
+        ExtraDir {
+            name: "logs".into(),
+            desc: "管理器与 dsh 的运行日志".into(),
+            path: dirs.resolve("logs").to_string_lossy().to_string(),
+        },
+        ExtraDir {
+            name: "webview".into(),
+            desc: "各版本的 WebView2 数据（删了会丢登录态）".into(),
+            path: dirs.webview.to_string_lossy().to_string(),
+        },
+        ExtraDir {
+            name: "trash".into(),
+            desc: "卸载回收站（后台自动清空）".into(),
+            path: dirs.trash.to_string_lossy().to_string(),
+        },
+        ExtraDir {
+            name: "assets".into(),
+            desc: "内部资源（桌面快捷方式图标）".into(),
+            path: dirs.assets.to_string_lossy().to_string(),
+        },
+    ];
     AppState {
         version: cli::VERSION.to_string(),
         root_dir: root.to_string_lossy().to_string(),
@@ -43,6 +78,7 @@ pub(crate) fn get_state(app: tauri::AppHandle) -> AppState {
         store_dir: dirs.store.to_string_lossy().to_string(),
         cache_dir: dirs.cache.to_string_lossy().to_string(),
         state_dir: dirs.state.to_string_lossy().to_string(),
+        extra_dirs,
         default_version: cfg.default_version.clone(),
         manager_dir: mdir.to_string_lossy().to_string(),
         broken_versions: cfg.broken_versions.clone(),
