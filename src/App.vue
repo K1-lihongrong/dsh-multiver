@@ -3,6 +3,7 @@ import { ref, computed, onMounted, onUnmounted } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { ask } from "@tauri-apps/plugin-dialog";
+import NotesPanel from "./components/NotesPanel.vue";
 
 const state = ref(null);
 const installed = ref([]);
@@ -222,85 +223,16 @@ async function clearBroken() {
 function pickVersion(v) {
   installInput.value = v;
   remoteNoteVer.value = remoteNoteVer.value === v ? null : v;
-  if (remoteNoteVer.value) loadNotes(v);
 }
 
 // ===== 版本更新说明（数据源：dsh 上游 GitHub releases）=====
-// tag 形如 dsh-v0.2.0-rc.2。策略：点开时实时拉取 + 内存缓存；失败静默降级为只显示「打开原文」。
-const RELEASE_REPO = "deepseek-ai/deepseek-harness";
-const notesCache = ref({});         // version -> { status: 'loading'|'ok'|'error', html, url, empty }
+// 拉取 / 消毒 / 渲染都在 <NotesPanel> 组件内部；这里只保留"展开哪个版本"的状态。
 const remoteNoteVer = ref(null);    // 可用版本里当前展开说明的版本号
 const installedNoteVer = ref(null); // 已安装版本里当前展开说明的版本号
-
-function releaseUrl(v) {
-  return "https://github.com/" + RELEASE_REPO + "/releases/tag/dsh-v" + v;
-}
-
-/// 消毒 GitHub release 的 HTML：只保留安全标签，去掉所有属性（a 仅保留安全 href）。
-function sanitizeNotes(html) {
-  const doc = new DOMParser().parseFromString(html, "text/html");
-  const ALLOWED = new Set(["H1","H2","H3","H4","H5","H6","UL","OL","LI","P","BR",
-    "STRONG","EM","B","I","CODE","PRE","BLOCKQUOTE","A","HR","TT","SPAN"]);
-  // 这些标签连同其内容一起删除（不提升子内容，避免 script/style 内容泄漏）
-  const DROP_WITH_CONTENT = new Set(["SCRIPT","STYLE","IFRAME","OBJECT","EMBED","LINK","META","NOSCRIPT","TEMPLATE"]);
-  const walk = (node) => {
-    for (const child of Array.from(node.childNodes)) {
-      if (child.nodeType === 1) {
-        if (DROP_WITH_CONTENT.has(child.tagName)) {
-          child.remove();
-          continue;
-        }
-        if (!ALLOWED.has(child.tagName)) {
-          // 非危险、但不在白名单的标签：去掉标签本身，把子内容提升到当前位置
-          const frag = doc.createDocumentFragment();
-          while (child.firstChild) frag.appendChild(child.firstChild);
-          node.replaceChild(frag, child);
-          walk(node); // 重新遍历（刚提升进来的节点）
-          return;
-        }
-        const href = child.tagName === "A" ? child.getAttribute("href") : null;
-        for (const attr of Array.from(child.attributes)) child.removeAttribute(attr.name);
-        if (child.tagName === "A" && href && /^(https?:\/\/|#)/i.test(href)) {
-          child.setAttribute("href", href);
-          if (!href.startsWith("#")) {
-            child.setAttribute("target", "_blank");
-            child.setAttribute("rel", "noopener noreferrer");
-          }
-        }
-        walk(child);
-      } else if (child.nodeType !== 3) {
-        child.remove();
-      }
-    }
-  };
-  walk(doc.body);
-  return doc.body.innerHTML;
-}
-
-/// 拉取某版本的更新说明（带缓存；失败静默降级）。
-async function loadNotes(v) {
-  if (notesCache.value[v]) return;
-  notesCache.value = { ...notesCache.value, [v]: { status: "loading" } };
-  const url = releaseUrl(v);
-  try {
-    const api = "https://api.github.com/repos/" + RELEASE_REPO + "/releases/tags/dsh-v" + v;
-    // html+json：让 GitHub 直接返回渲染好的 HTML（body_html），Markdown 已被转换
-    const resp = await fetch(api, { headers: { Accept: "application/vnd.github.html+json" } });
-    if (!resp.ok) throw new Error("HTTP " + resp.status);
-    const data = await resp.json();
-    const body = data && typeof data.body_html === "string" ? data.body_html : "";
-    notesCache.value = { ...notesCache.value, [v]: {
-      status: "ok", url, empty: !body.trim(), html: sanitizeNotes(body),
-    } };
-  } catch (e) {
-    notesCache.value = { ...notesCache.value, [v]: { status: "error", url } };
-  }
-}
 
 /// 点已安装版本的版本号：展开/收起该版本更新说明。
 function toggleInstalledNote(v) {
   installedNoteVer.value = installedNoteVer.value === v ? null : v;
-  if (installedNoteVer.value) loadNotes(v);
 }
 
 async function install(v) {
@@ -727,21 +659,13 @@ onUnmounted(() => {
             >隔离</button>
             <button class="btn danger" @click="uninstall(v.version)" :disabled="!!uninstalling || batchBusy">{{ uninstalling === v.version ? "卸载中..." : "卸载" }}</button>
           </div>
-          <div class="notes-panel notes-inline" v-if="installedNoteVer === v.version">
-            <div class="notes-head" @click="installedNoteVer = null" title="点击收起">
-              <span class="notes-title">DSH {{ v.version }} 更新说明</span>
-              <span class="notes-close">×</span>
-            </div>
-            <div class="notes-body">
-              <div v-if="!notesCache[v.version] || notesCache[v.version].status === 'loading'" class="notes-hint">加载中...</div>
-              <div v-else-if="notesCache[v.version].status === 'ok' && notesCache[v.version].empty" class="notes-hint">该版本没有提供更新说明。</div>
-              <div v-else-if="notesCache[v.version].status === 'ok'" class="notes-html" v-html="notesCache[v.version].html"></div>
-              <div v-else class="notes-hint">无法获取更新说明（可能网络不通）。可点击下方按钮在浏览器查看。</div>
-            </div>
-            <div class="notes-foot">
-              <button class="btn small" @click="openUrl((notesCache[v.version] && notesCache[v.version].url) || releaseUrl(v.version))">在浏览器打开原文</button>
-            </div>
-          </div>
+          <NotesPanel
+            v-if="installedNoteVer === v.version"
+            :version="v.version"
+            inline
+            @close="installedNoteVer = null"
+            @open-url="openUrl"
+          />
         </li>
       </ul>
 
@@ -777,22 +701,12 @@ onUnmounted(() => {
         <button class="btn primary" @click="install()" :disabled="loading">安装</button>
       </div>
 
-      <div class="notes-panel" v-if="remoteNoteVer">
-        <div class="notes-head" @click="remoteNoteVer = null" title="点击收起">
-          <span class="notes-title">DSH {{ remoteNoteVer }} 更新说明</span>
-          <span class="notes-close">×</span>
-        </div>
-        <div class="notes-body">
-          <div v-if="!notesCache[remoteNoteVer]" class="notes-hint">加载中...</div>
-          <div v-else-if="notesCache[remoteNoteVer].status === 'loading'" class="notes-hint">加载中...</div>
-          <div v-else-if="notesCache[remoteNoteVer].status === 'ok' && notesCache[remoteNoteVer].empty" class="notes-hint">该版本没有提供更新说明。</div>
-          <div v-else-if="notesCache[remoteNoteVer].status === 'ok'" class="notes-html" v-html="notesCache[remoteNoteVer].html"></div>
-          <div v-else class="notes-hint">无法获取更新说明（可能网络不通）。可点击下方按钮在浏览器查看。</div>
-        </div>
-        <div class="notes-foot">
-          <button class="btn small" @click="openUrl(notesCache[remoteNoteVer] && notesCache[remoteNoteVer].url || releaseUrl(remoteNoteVer))">在浏览器打开原文</button>
-        </div>
-      </div>
+      <NotesPanel
+        v-if="remoteNoteVer"
+        :version="remoteNoteVer"
+        @close="remoteNoteVer = null"
+        @open-url="openUrl"
+      />
 
       <div class="install-progress" v-if="installStage">
         <div class="spinner"></div>
@@ -1078,37 +992,6 @@ body {
 .ver-num-clickable { cursor: pointer; user-select: none; }
 .ver-num-clickable:hover { color: #4f6ef7; }
 .ver-caret { font-size: 10px; margin-left: 3px; color: #9aa1ab; }
-
-/* 版本更新说明面板（可用版本：输入框下方；已安装：行内展开） */
-.notes-panel {
-  margin: 0 0 12px; padding: 10px 14px; border: 1px solid #e2e5ea; border-radius: 9px;
-  background: #fafbfc;
-}
-.notes-inline { flex-basis: 100%; margin: 8px 0 0; }
-/* 标题栏整行可点收起：加 padding 撑满、hover 有反馈，鼠标不必对准 × */
-.notes-head {
-  display: flex; align-items: center; justify-content: space-between;
-  margin: -6px -8px 4px; padding: 6px 8px; border-radius: 6px;
-  cursor: pointer; user-select: none; transition: background .12s;
-}
-.notes-head:hover { background: #eef1f5; }
-.notes-title { font-weight: 600; font-size: 13px; color: #374151; }
-.notes-close { font-size: 18px; line-height: 1; color: #9aa1ab; flex-shrink: 0; }
-.notes-head:hover .notes-close { color: #d9534f; }
-.notes-body { max-height: 260px; overflow-y: auto; }
-.notes-hint { color: #9aa1ab; font-size: 12px; }
-.notes-html { font-size: 13px; color: #374151; line-height: 1.65; }
-.notes-html h1, .notes-html h2, .notes-html h3, .notes-html h4 {
-  font-size: 13px; font-weight: 600; margin: 10px 0 4px; color: #1f2937;
-}
-.notes-html h3:first-child, .notes-html h4:first-child { margin-top: 0; }
-.notes-html ul, .notes-html ol { margin: 4px 0; padding-left: 20px; }
-.notes-html li { margin: 2px 0; }
-.notes-html p { margin: 6px 0; }
-.notes-html a { color: #4f6ef7; }
-.notes-html code { background: #eef1f5; padding: 1px 5px; border-radius: 4px; font-size: 12px; }
-.notes-html img { max-width: 100%; }
-.notes-foot { margin-top: 8px; display: flex; justify-content: flex-end; }
 .ver-meta { color: #9aa1ab; font-size: 11px; }
 .badge {
   background: #e8f5ec; color: #2f9e5f; font-size: 11px;
