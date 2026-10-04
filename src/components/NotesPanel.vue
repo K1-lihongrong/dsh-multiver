@@ -1,5 +1,6 @@
 <script setup>
-import { ref, onMounted } from "vue";
+import { onMounted } from "vue";
+import { notesCache as cache, hasNotes, setNotes } from "../composables/notesCache.js";
 
 // 版本更新说明面板：自包含（自己拉取 dsh 上游 GitHub Releases 并消毒渲染）。
 // 父组件只传 version，监听 close；打开时才加载（懒加载 + 内存缓存）。
@@ -10,9 +11,6 @@ const props = defineProps({
 const emit = defineEmits(["close", "open-url"]);
 
 const RELEASE_REPO = "deepseek-ai/deepseek-harness";
-
-// 模块级缓存：跨多次挂载/多实例共享，避免同一版本重复请求
-const cache = ref({}); // version -> { status: 'loading'|'ok'|'error', html, url, empty }
 
 function releaseUrl(v) {
   return "https://github.com/" + RELEASE_REPO + "/releases/tag/dsh-v" + v;
@@ -57,8 +55,9 @@ function sanitizeNotes(html) {
 
 /// 拉取某版本的更新说明（带缓存；失败静默降级）。
 async function loadNotes(v) {
-  if (cache.value[v]) return;
-  cache.value = { ...cache.value, [v]: { status: "loading" } };
+  // 命中模块级缓存（含"加载中"）则跳过：既避免重复请求，也做并发去重
+  if (hasNotes(v)) return;
+  setNotes(v, { status: "loading" });
   const url = releaseUrl(v);
   try {
     const api = "https://api.github.com/repos/" + RELEASE_REPO + "/releases/tags/dsh-v" + v;
@@ -67,9 +66,9 @@ async function loadNotes(v) {
     if (!resp.ok) throw new Error("HTTP " + resp.status);
     const data = await resp.json();
     const body = data && typeof data.body_html === "string" ? data.body_html : "";
-    cache.value = { ...cache.value, [v]: { status: "ok", url, empty: !body.trim(), html: sanitizeNotes(body) } };
+    setNotes(v, { status: "ok", url, empty: !body.trim(), html: sanitizeNotes(body) });
   } catch (e) {
-    cache.value = { ...cache.value, [v]: { status: "error", url } };
+    setNotes(v, { status: "error", url });
   }
 }
 
