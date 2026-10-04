@@ -83,9 +83,13 @@ impl Config {
     }
 
     /// 解析出实际的数据根目录
+    ///
+    /// 注意：用户可能误输入首尾空格（如 `D:\DSH `），若原样使用会让后续
+    /// `root.join("home")` 拼出带空格的路径（如 `D:\DSH \home`），
+    /// 在 NTFS 上生成"看似重复"的目录项。故这里统一 `trim()` 去首尾空格。
     pub fn resolve_root(&self, manager_dir: &Path) -> PathBuf {
         match &self.root_dir {
-            Some(r) if !r.trim().is_empty() => PathBuf::from(r),
+            Some(r) if !r.trim().is_empty() => PathBuf::from(r.trim()),
             _ => manager_dir.to_path_buf(),
         }
     }
@@ -227,6 +231,16 @@ mod tests {
             ..Config::default()
         };
         assert_eq!(cfg.resolve_root(&PathBuf::from("C:\\m")), PathBuf::from("D:\\data"));
+    }
+
+    #[test]
+    fn root_with_surrounding_spaces_is_trimmed() {
+        // 用户误输入首尾空格时，应去掉，避免拼出带空格的子目录路径（如 "D:\DSH \home"）
+        let cfg = Config {
+            root_dir: Some("  D:\\DSH  ".to_string()),
+            ..Config::default()
+        };
+        assert_eq!(cfg.resolve_root(&PathBuf::from("C:\\m")), PathBuf::from("D:\\DSH"));
     }
 
     #[test]
