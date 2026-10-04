@@ -6,7 +6,9 @@ import { ask } from "@tauri-apps/plugin-dialog";
 import NotesPanel from "./components/NotesPanel.vue";
 import EnvCheck from "./components/EnvCheck.vue";
 import { useToast } from "./composables/useToast.js";
+import { useSharedHomeWarn } from "./composables/useSharedHomeWarn.js";
 import IsolatedMenu from "./components/IsolatedMenu.vue";
+import PathSettings from "./components/PathSettings.vue";
 
 const state = ref(null);
 const installed = ref([]);
@@ -17,7 +19,6 @@ const loading = ref(false);
 // toast（通知）由 useToast 提供（模块级单例，与拆出的组件共享）
 const { toast, toastExpanded, notify, dismissToast, toggleToast } = useToast();
 const installInput = ref("");
-const rootInput = ref("");
 const installStage = ref("");
 // 换源重试弹窗
 const retryOpen = ref(false);
@@ -109,8 +110,8 @@ async function batchUninstall() {
 const envCheckRef = ref(null);  // <EnvCheck> 组件引用（安装前调 run()）
 let unlistenProgress = null;
 let unlistenCrash = null;
-// 「运行共享 home 版本时提示」开关（持久化到 localStorage）
-const warnSharedHomeEnabled = ref(localStorage.getItem("dsh-multiver.warnSharedHome") !== "0");
+// 「运行共享 home 版本时提示」开关（与 PathSettings 共享，持久化到 localStorage）
+const { warnSharedHomeEnabled } = useSharedHomeWarn();
 
 /// 各阶段的「起始百分比」与「权重百分比」（按实际耗时分配，和 ≈ 100）
 /// 索引 = step - 1。写入阶段（step 6）最耗时，权重最大。
@@ -128,7 +129,6 @@ function progressPct() {
 async function refresh() {
   state.value = await invoke("get_state");
   installed.value = await invoke("list_installed");
-  rootInput.value = state.value.root_dir;
 }
 
 /// 调 EnvCheck 组件跑一次环境检查（安装前用），返回是否通过。
@@ -312,12 +312,6 @@ async function confirmSharedHome(v) {
   );
 }
 
-/// 切换提示开关并持久化
-function setWarnSharedHome(val) {
-  warnSharedHomeEnabled.value = val;
-  localStorage.setItem("dsh-multiver.warnSharedHome", val ? "1" : "0");
-}
-
 async function run(v) {
   if (!(await confirmSharedHome(v))) return;
   if (runningVersion.value) return; // 已有版本在启动，忽略重复点击
@@ -373,18 +367,6 @@ function fmtSize(bytes) {
   return (bytes / 1024 / 1024 / 1024).toFixed(2) + " GB";
 }
 
-async function applyRoot() {
-  try {
-    notify(await invoke("set_root", { root: rootInput.value.trim() || null }));
-    await refresh();
-  } catch (e) { notify("" + e); }
-}
-
-async function resetRoot() {
-  rootInput.value = "";
-  await applyRoot();
-}
-
 async function openUrl(url) {
   try { await invoke("open_url", { url }); }
   catch (e) { notify("打开链接失败：" + e); }
@@ -393,39 +375,6 @@ async function openUrl(url) {
 async function openDir(which) {
   try { await invoke("open_dir", { which }); }
   catch (e) { notify("" + e); }
-}
-
-/// 维护：手动触发
-const maintBusy = ref("");
-async function doMaintenance(kind) {
-  maintBusy.value = kind;
-  try {
-    const msg = await invoke("run_maintenance", { kind });
-    notify(msg);
-    await refresh();
-  } catch (e) {
-    notify("" + e);
-  } finally {
-    maintBusy.value = "";
-  }
-}
-
-/// 维护：切换自动维护开关
-async function toggleAutoMaint(on) {
-  try {
-    await invoke("set_auto_maintenance", { enabled: on });
-    await refresh();
-  } catch (e) {
-    notify("" + e);
-  }
-}
-
-/// unix 秒 -> 可读时间
-function fmtTs(sec) {
-  if (!sec) return "从未";
-  const d = new Date(sec * 1000);
-  const p = (n) => String(n).padStart(2, "0");
-  return d.getFullYear() + "-" + p(d.getMonth() + 1) + "-" + p(d.getDate()) + " " + p(d.getHours()) + ":" + p(d.getMinutes());
 }
 
 // 全局错误捕获：把 WebView 侧未处理异常/拒绝上报到后端落盘（frontend.log）。
@@ -622,80 +571,13 @@ onUnmounted(() => {
       </div>
     </section>
 
-    <section class="panel">
-      <div class="panel-head">
-        <h2>路径设置</h2>
-        <button class="btn small" @click="clearDefault" v-if="state && state.default_version">清除默认</button>
-      </div>
-
-      <div class="field">
-        <label>数据根目录</label>
-        <div class="field-row">
-          <input v-model="rootInput" placeholder="留空则使用软件所在目录" />
-          <button class="btn primary" @click="applyRoot">应用</button>
-          <button class="btn" @click="resetRoot">默认</button>
-        </div>
-      </div>
-
-      <label class="checkbox-row">
-        <input
-          type="checkbox"
-          :checked="warnSharedHomeEnabled"
-          @change="setWarnSharedHome($event.target.checked)"
-        />
-        <span>运行「共享 home」版本时提示（多版本混用可能错配）</span>
-      </label>
-
-      <div class="paths" v-if="state">
-        <div class="path-item" @click="openDir('versions')">
-          <span class="path-name">versions</span>
-          <span class="path-desc">已安装的各版本 dsh</span>
-          <code>{{ state.versions_dir }}</code>
-        </div>
-        <div class="path-item" @click="openDir('home')">
-          <span class="path-name">home</span>
-          <span class="path-desc">dsh 数据目录（相当于 ~/.dsh）</span>
-          <code>{{ state.home_dir }}</code>
-        </div>
-        <div class="path-item" @click="openDir('store')">
-          <span class="path-name">store</span>
-          <span class="path-desc">pnpm 依赖仓库（硬链接省磁盘）</span>
-          <code>{{ state.store_dir }}</code>
-        </div>
-        <div class="path-item" @click="openDir('cache')">
-          <span class="path-name">cache</span>
-          <span class="path-desc">pnpm 下载/元数据缓存（可安全删除）</span>
-          <code>{{ state.cache_dir }}</code>
-        </div>
-        <div class="path-item" @click="openDir('state')">
-          <span class="path-name">state</span>
-          <span class="path-desc">pnpm 运行状态（可安全删除）</span>
-          <code>{{ state.state_dir }}</code>
-        </div>
-      </div>
-      <div class="hint">点击任意路径可在资源管理器中打开</div>
-
-      <!-- 维护 -->
-      <div class="maint" v-if="state">
-        <label class="checkbox-row">
-          <input type="checkbox" :checked="state.maintenance.auto_enabled" @change="toggleAutoMaint($event.target.checked)" />
-          <span>启动时自动维护</span>
-        </label>
-        <div class="maint-rules">
-          <div>· 每次启动清理<strong>孤立缓存</strong>（版本已卸载的 WebView2 残留）</div>
-          <div>· 距上次 ≥ 7 天时，自动<strong>回收依赖仓库</strong>（pnpm store prune）</div>
-        </div>
-        <div class="maint-status">
-          <span>上次清理孤立缓存：{{ fmtTs(state.maintenance.last_cleanup_at) }}（{{ state.maintenance.last_cleanup_count }} 项）</span>
-          <span>上次回收依赖仓库：{{ fmtTs(state.maintenance.last_prune_at) }}</span>
-        </div>
-        <div class="maint-actions">
-          <button class="btn small" @click="doMaintenance('cleanup')" :disabled="!!maintBusy">{{ maintBusy === 'cleanup' ? '清理中...' : '清理孤立缓存' }}</button>
-          <button class="btn small" @click="doMaintenance('prune')" :disabled="!!maintBusy">{{ maintBusy === 'prune' ? '回收中...' : '回收依赖仓库' }}</button>
-          <button class="btn small" @click="openDir('logs')">打开日志目录</button>
-        </div>
-      </div>
-    </section>
+    <PathSettings
+      :state="state"
+      :default-version="state && state.default_version"
+      @refresh="refresh"
+      @open-dir="openDir"
+      @clear-default="clearDefault"
+    />
   </main>
 
   <transition name="fade">
@@ -909,48 +791,6 @@ body {
 }
 .chip:hover:not(:disabled) { border-color: #4f6ef7; color: #4f6ef7; background: #f5f7ff; }
 .chip:disabled { opacity: .5; cursor: not-allowed; }
-
-.checkbox-row {
-  display: flex; align-items: center; gap: 8px;
-  font-size: 12px; color: #6b7280; margin: 4px 0 14px; cursor: pointer;
-}
-.checkbox-row input { cursor: pointer; }
-
-/* ---------- 维护 ---------- */
-.maint { margin-top: 16px; padding-top: 14px; border-top: 1px solid #eef1f5; }
-.maint-rules { font-size: 12px; color: #6b7280; line-height: 1.8; margin: 4px 0 10px; }
-.maint-status { font-size: 12px; color: #9aa1ab; line-height: 1.8; margin-bottom: 10px; }
-.maint-status span { display: block; }
-.maint-actions { display: flex; gap: 8px; flex-wrap: wrap; }
-.maint-actions .btn { color: #4f6ef7; border-color: #c3cdf5; }
-.maint-actions .btn:hover:not(:disabled) { background: #f5f7ff; border-color: #4f6ef7; }
-.field { margin-bottom: 14px; }
-.field label { display: block; font-size: 12px; color: #6b7280; margin-bottom: 6px; }
-.field-row { display: flex; gap: 8px; }
-.field-row input {
-  flex: 1; padding: 8px 12px; border: 1px solid #dcdfe4;
-  border-radius: 7px; font-size: 13px; font-family: inherit; outline: none;
-}
-.field-row input:focus { border-color: #4f6ef7; }
-
-.paths { display: flex; flex-direction: column; gap: 6px; }
-.path-item {
-  display: flex; align-items: center; gap: 10px;
-  padding: 8px 12px; border-radius: 8px; cursor: pointer;
-  transition: background .15s;
-}
-.path-item:hover { background: #f5f7ff; }
-.path-name {
-  font-size: 12px; font-weight: 600; color: #4f6ef7;
-  min-width: 64px; font-family: ui-monospace, Consolas, monospace;
-}
-.path-desc {
-  font-size: 11px; color: #9aa1ab; min-width: 180px;
-}
-.path-item code {
-  font-size: 12px; color: #6b7280; overflow: hidden;
-  text-overflow: ellipsis; white-space: nowrap;
-}
 
 .toast {
   position: fixed; bottom: 22px; left: 50%; transform: translateX(-50%);
