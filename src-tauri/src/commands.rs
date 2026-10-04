@@ -370,6 +370,57 @@ pub(crate) async fn launch_window(
         }
     });
 
+    // ── 建窗后延迟 3 秒的「双条件检查」──
+    // 目的：捕捉"dsh 输出了 URL、窗口也建了，但进程随即崩溃"的情况（例：老版本 dsh 的
+    // profile / HMR 错误）。此时 launch_window 已返回成功，用户会看到 WebView 的"拒绝连接"。
+    //
+    // 只有**同时满足**「窗口仍开着」+「该版本进程已退出（且仍是本代次）」才提示——
+    // 用户关窗会销毁窗口、重启会换成新代次，都不会命中，因此误报极低。
+    {
+        let app2 = app.clone();
+        let procs3 = procs.clone();
+        let version3 = version.clone();
+        let label3 = label.clone();
+        let gen3 = generation;
+        let logs_dir = dirs.root.join("logs");
+        std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_secs(3));
+            use tauri::Manager;
+            // ① 窗口还开着吗？
+            if app2.get_webview_window(&label3).is_none() {
+                return; // 用户已关窗，正常
+            }
+            // ② 该版本进程还活着吗？（且仍是本代次）
+            let dead = {
+                let mut map = lock_procs(&procs3);
+                match map.get_mut(&version3) {
+                    Some((_, g, child, _)) if *g == gen3 => {
+                        // try_wait 返回 Ok(Some(_)) 表示已退出
+                        matches!(child.try_wait(), Ok(Some(_)))
+                    }
+                    // 条目已不在（重启/关窗已移除）或代次不符 → 不提示
+                    _ => false,
+                }
+            };
+            if !dead {
+                return;
+            }
+            let detail = launcher::latest_session_errors(&logs_dir, &version3, 6);
+            let msg = if detail.is_empty() {
+                format!("版本 {} 的 dsh 启动后立即退出。请查看日志目录：\n{}", version3, logs_dir.to_string_lossy())
+            } else {
+                format!("版本 {} 的 dsh 启动后立即退出。dsh 输出：\n{}", version3, detail)
+            };
+            logging::log_app_error(&logs_dir, "launch_window", &format!("{} 启动后立即退出", version3));
+            use tauri::Emitter;
+            let _ = app2.emit("launch-crashed", serde_json::json!({
+                "version": version3,
+                "detail": detail,
+                "message": msg,
+            }));
+        });
+    }
+
     Ok(format!("已在窗口打开 DSH {}", version))
 }
 

@@ -107,6 +107,7 @@ const envChecked = ref(false);
 const envPassed = ref(false);
 let toastTimer = null;
 let unlistenProgress = null;
+let unlistenCrash = null;
 // 「运行共享 home 版本时提示」开关（持久化到 localStorage）
 const warnSharedHomeEnabled = ref(localStorage.getItem("dsh-multiver.warnSharedHome") !== "0");
 
@@ -589,6 +590,10 @@ onMounted(async () => {
   window.addEventListener("error", onWindowError);
   window.addEventListener("unhandledrejection", onUnhandledRejection);
   await refresh();
+  unlistenCrash = await listen("launch-crashed", (e) => {
+    const p = e.payload || {};
+    notify(p.message || ("版本 " + p.version + " 启动后立即退出，请查看日志。"));
+  });
   unlistenProgress = await listen("install-progress", (e) => {
     const p = e.payload;
     installStage.value = p.stage || "";
@@ -606,6 +611,7 @@ onUnmounted(() => {
   window.removeEventListener("unhandledrejection", onUnhandledRejection);
   document.removeEventListener("click", closeMenu);
   if (unlistenProgress) unlistenProgress();
+  if (unlistenCrash) unlistenCrash();
 });
 </script>
 
@@ -722,9 +728,9 @@ onUnmounted(() => {
             <button class="btn danger" @click="uninstall(v.version)" :disabled="!!uninstalling || batchBusy">{{ uninstalling === v.version ? "卸载中..." : "卸载" }}</button>
           </div>
           <div class="notes-panel notes-inline" v-if="installedNoteVer === v.version">
-            <div class="notes-head">
+            <div class="notes-head" @click="installedNoteVer = null" title="点击收起">
               <span class="notes-title">DSH {{ v.version }} 更新说明</span>
-              <button class="notes-close" @click="installedNoteVer = null" title="收起">×</button>
+              <span class="notes-close">×</span>
             </div>
             <div class="notes-body">
               <div v-if="!notesCache[v.version] || notesCache[v.version].status === 'loading'" class="notes-hint">加载中...</div>
@@ -772,9 +778,9 @@ onUnmounted(() => {
       </div>
 
       <div class="notes-panel" v-if="remoteNoteVer">
-        <div class="notes-head">
+        <div class="notes-head" @click="remoteNoteVer = null" title="点击收起">
           <span class="notes-title">DSH {{ remoteNoteVer }} 更新说明</span>
-          <button class="notes-close" @click="remoteNoteVer = null" title="收起">×</button>
+          <span class="notes-close">×</span>
         </div>
         <div class="notes-body">
           <div v-if="!notesCache[remoteNoteVer]" class="notes-hint">加载中...</div>
@@ -1079,10 +1085,16 @@ body {
   background: #fafbfc;
 }
 .notes-inline { flex-basis: 100%; margin: 8px 0 0; }
-.notes-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; }
+/* 标题栏整行可点收起：加 padding 撑满、hover 有反馈，鼠标不必对准 × */
+.notes-head {
+  display: flex; align-items: center; justify-content: space-between;
+  margin: -6px -8px 4px; padding: 6px 8px; border-radius: 6px;
+  cursor: pointer; user-select: none; transition: background .12s;
+}
+.notes-head:hover { background: #eef1f5; }
 .notes-title { font-weight: 600; font-size: 13px; color: #374151; }
-.notes-close { border: none; background: none; font-size: 16px; line-height: 1; cursor: pointer; color: #9aa1ab; padding: 0 4px; }
-.notes-close:hover { color: #d9534f; }
+.notes-close { font-size: 18px; line-height: 1; color: #9aa1ab; flex-shrink: 0; }
+.notes-head:hover .notes-close { color: #d9534f; }
 .notes-body { max-height: 260px; overflow-y: auto; }
 .notes-hint { color: #9aa1ab; font-size: 12px; }
 .notes-html { font-size: 13px; color: #374151; line-height: 1.65; }

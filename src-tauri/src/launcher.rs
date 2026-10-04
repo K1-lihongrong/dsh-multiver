@@ -203,7 +203,7 @@ pub fn spawn_web_hidden(
 
 /// 从会话日志里提取最近的 `[err]` 行（dsh 启动失败时的真实错误），用于拼进错误提示。
 /// 只取末尾最多 `max_lines` 行、总长不超过 ~800 字符，避免提示过长。
-fn read_recent_errors(session_path: &Path, max_lines: usize) -> String {
+pub(crate) fn read_recent_errors(session_path: &Path, max_lines: usize) -> String {
     let content = match std::fs::read_to_string(session_path) {
         Ok(c) => c,
         Err(_) => return String::new(),
@@ -223,6 +223,29 @@ fn read_recent_errors(session_path: &Path, max_lines: usize) -> String {
         joined = joined.chars().take(800).collect::<String>() + " …";
     }
     joined
+}
+
+/// 在日志目录里找该版本**最新**的会话日志，提取其 `[err]` 行。
+/// 用于「dsh 启动后立即崩溃」时向用户展示真实错误。
+pub(crate) fn latest_session_errors(log_dir: &Path, version: &str, max_lines: usize) -> String {
+    let suffix = format!("-{}.log", version);
+    let mut newest_name = String::new();
+    let mut newest_path: Option<std::path::PathBuf> = None;
+    if let Ok(rd) = std::fs::read_dir(log_dir) {
+        for e in rd.flatten() {
+            let name = e.file_name().to_string_lossy().to_string();
+            if name.starts_with("session-") && name.ends_with(&suffix) {
+                // 文件名内嵌时间戳，字典序即时间序
+                if newest_path.is_none() || name > newest_name {
+                    newest_name = name;
+                    newest_path = Some(e.path());
+                }
+            }
+        }
+    }
+    newest_path
+        .map(|p| read_recent_errors(&p, max_lines))
+        .unwrap_or_default()
 }
 
 /// 结束一个 dsh 进程及其整棵子进程树。
