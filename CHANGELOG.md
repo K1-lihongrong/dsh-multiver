@@ -29,6 +29,10 @@
   - 身份令牌读不到时（进程已死 / 平台不支持）**一律保守跳过**——宁漏杀，不误杀。macOS 暂返回 `None`（未适配）。
 
 ### 修复（补充）
+- **终端转发脚本加 Node 守卫**（GAP-012 延伸）：`~/.local/bin/dsh`（Unix）与 `dsh.cmd`（Windows）
+  此前不做 Node 能力检查 —— 当用户的默认 `node` 仍是 22.16 时，`dsh --version` 会**静默无输出、
+  exit 0**（纯 CLI 用户遇到"命令没反应"）。现在转发脚本在调用 dsh 前先做 `import.meta.main`
+  特性探测，不满足则打 stderr 并退出 1（与 GUI 环境检查一致）。
 - **环境检查的 Node 下限判错**（GAP-012）：`envcheck.rs` 此前只比较**主版本号**（`>= 22`），
   于是 **Node 22.16 会"检查通过"但实际跑不起 dsh** —— dsh 入口依赖 `import.meta.main`
   （22.18/22.19 一线回溯支持），缺失时 dsh **零输出、静默退出**，表现为内嵌窗口连不上，
@@ -41,7 +45,7 @@
 ### 测试
 - 新增回归测试 `jobobj::tests::gap008_pdeathsig_kills_child_on_thread_exit`：
   对照实验证明「无 PDEATHSIG → 子进程存活；有 PDEATHSIG → 子进程被杀」。
-  测试数：Windows 66 / **Linux 75**，全通过。
+  测试数：Windows 67 / **Linux 77**，全通过。
 
 ### 说明
 - **集成验证局限**：开发机的 WSL 上 `dsh web` 自身无法启动（node v20 低于 dsh 要求的 22），

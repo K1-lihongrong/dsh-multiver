@@ -90,6 +90,14 @@ pub fn build_forward_script(version: &str, root_dir: &str, isolated: bool) -> St
     let mut s = String::new();
     s.push_str("@echo off\r\n");
     s.push_str("setlocal\r\n");
+    // Node 能力守卫：dsh 依赖 import.meta.main（Node 22.19+ / 24+）；缺失时 dsh 会静默
+    // 退出（零输出、exit 0），用户会以为"命令没反应"。这里提前拦下并说明。
+    s.push_str("node -e \"if(typeof import.meta.main!=='boolean')process.exit(1)\" 2>nul\r\n");
+    s.push_str("if errorlevel 1 (\r\n");
+    s.push_str("  echo [dsh] 当前 Node 不支持 dsh 所需的 import.meta.main 特性。 1>&2\r\n");
+    s.push_str("  echo [dsh] 需要 Node 22.19+ 或 24+。请升级 Node，或在管理器界面查看「环境检查」。 1>&2\r\n");
+    s.push_str("  exit /b 1\r\n");
+    s.push_str(")\r\n");
     // 版本号直接写死在脚本里（由 Rust 在设默认时生成），避免解析 JSON 的脆弱性
     s.push_str(&format!("set \"VER={}\"\r\n", version));
     s.push_str(&format!("set \"ROOT={}\"\r\n", root_dir));
@@ -123,6 +131,14 @@ pub fn build_forward_script(version: &str, root_dir: &str, isolated: bool) -> St
     format!(
         "#!/bin/sh\n\
          # dsh-multiver 转发脚本（自动生成，请勿手改）\n\
+         # Node 能力守卫：dsh 依赖 import.meta.main（Node 22.19+ / 24+）；缺失时\n\
+         # dsh 会静默退出（零输出、exit 0），用户会以为\"命令没反应\"。这里提前拦下并说明。\n\
+         if ! node -e 'if(typeof import.meta.main!==\"boolean\")process.exit(1)' 2>/dev/null; then\n\
+         \x20 echo \"[dsh] 当前 Node 不支持 dsh 所需的 import.meta.main 特性。\" >&2\n\
+         \x20 echo \"[dsh] 需要 Node 22.19+ 或 24+，当前：$(node --version 2>/dev/null || echo 未安装)\" >&2\n\
+         \x20 echo \"[dsh] 请升级 Node，或在管理器界面查看「环境检查」。\" >&2\n\
+         \x20 exit 1\n\
+         fi\n\
          VER='{version}'\n\
          ROOT='{root}'\n\
          BIN=\"$ROOT/versions/$VER/node_modules/.bin/dsh\"\n\
@@ -194,6 +210,36 @@ pub fn open_folder(path: &Path) -> (bool, String) {
     }
 }
 
+// Unix 版转发脚本的测试（守卫 + 基本结构）
+#[cfg(all(test, unix))]
+mod unix_tests {
+    use super::*;
+
+    #[test]
+    fn unix_forward_script_has_node_guard() {
+        // Unix 转发脚本也必须在调 dsh 前做 Node 能力守卫
+        // （否则 22.16 下 dsh 静默退出，纯 CLI 用户会遇到"命令没反应"）
+        let s = build_forward_script("0.2.0-rc.2", "/home/u/dsh", false);
+        assert!(s.contains("import.meta.main"), "应含 Node 特性探测");
+        assert!(s.contains("22.19"), "应提示所需版本");
+        assert!(s.contains("exit 1"), "应有失败退出");
+        // 守卫应在 exec dsh 之前
+        let guard_pos = s.find("import.meta.main").unwrap();
+        let exec_pos = s.find("exec \"$BIN\"").unwrap();
+        assert!(guard_pos < exec_pos, "守卫必须在 exec dsh 之前");
+    }
+
+    #[test]
+    fn unix_forward_script_sets_home_and_bin() {
+        let s = build_forward_script("0.2.0-rc.2", "/home/u/dsh", true);
+        assert!(s.contains("VER='0.2.0-rc.2'"));
+        assert!(s.contains("ROOT='/home/u/dsh'"));
+        // 隔离版本 → home 指向版本目录
+        assert!(s.contains("/home/u/dsh/versions/0.2.0-rc.2/home"));
+        assert!(s.contains("#!/bin/sh"), "应是 POSIX sh 脚本");
+    }
+}
+
 // 转发脚本的测试断言针对 Windows 批处理格式；Unix 版内容不同，
 // 故仅在 Windows 下编译（Unix 分支待真机验证，见 GAP-005）。
 #[cfg(all(test, windows))]
@@ -227,6 +273,15 @@ mod tests {
         // root 用正斜杠、且不以反斜杠结尾 → 应归一化为反斜杠并补尾
         let s = build_forward_script("1.0.0", "D:/data/root", false);
         assert!(s.contains("set \"DSH_HOME_CANDIDATE=D:\\data\\root\\home\""));
+    }
+
+    #[test]
+    fn forward_script_has_node_guard() {
+        // 转发脚本必须在调 dsh 前做 Node 能力守卫（否则 22.16 下 dsh 静默退出）
+        let s = build_forward_script("0.1.7", "D:\\DSH", false);
+        assert!(s.contains("import.meta.main"), "应含 Node 特性探测");
+        assert!(s.contains("22.19"), "应提示所需版本");
+        assert!(s.contains("errorlevel 1"), "应有失败分支");
     }
 
     #[test]
