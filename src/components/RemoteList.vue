@@ -4,6 +4,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { useToast } from "../composables/useToast.js";
 import NotesPanel from "./NotesPanel.vue";
+import { t } from "../composables/useI18n.js";
 
 // 可用版本列表 + 安装（含安装进度与"换源重试"弹窗）。
 // state 由父组件传入（读 broken_versions 标灰）；安装前环境检查经 checkEnv 回调
@@ -34,13 +35,14 @@ const retryRegistry = ref("https://registry.npmjs.org/");
 const retryCustom = ref("");
 // 错误分类："network" | "private-package" | "incomplete-version" | "unknown"
 const retryKind = ref("unknown");
-// 可选 npm 源（值 = registry url；空串 = 用 pnpm 默认）
-const REGISTRIES = [
-  { label: "npm 官方源（推荐）", value: "https://registry.npmjs.org/" },
-  { label: "阿里云 npmmirror", value: "https://registry.npmmirror.com" },
-  { label: "腾讯云", value: "https://mirrors.cloud.tencent.com/npm/" },
-  { label: "华为云", value: "https://repo.huaweicloud.com/repository/npm/" },
+// 可选 npm 源（值 = registry url）。label 走 i18n，用 computed 以便切换语言时更新。
+const REGISTRY_VALUES = [
+  { key: "registry.official", value: "https://registry.npmjs.org/" },
+  { key: "registry.aliyun", value: "https://registry.npmmirror.com" },
+  { key: "registry.tencent", value: "https://mirrors.cloud.tencent.com/npm/" },
+  { key: "registry.huawei", value: "https://repo.huaweicloud.com/repository/npm/" },
 ];
+const REGISTRIES = computed(() => REGISTRY_VALUES.map((r) => ({ label: t(r.key), value: r.value })));
 // 版本更新说明：当前展开说明的可用版本号（点 chip 切换）
 const remoteNoteVer = ref(null);
 let unlistenProgress = null;
@@ -73,7 +75,7 @@ async function loadRemote() {
   try {
     remote.value = await invoke("list_remote");
   } catch (e) {
-    notify("获取可用版本失败: " + e);
+    notify(t("remote.fetchFailed") + ": " + e);
   } finally {
     loading.value = false;
   }
@@ -109,12 +111,12 @@ function isBroken(v) {
 /// 清除「已知安装失败」标记
 async function clearBroken() {
   if (!props.state || !props.state.broken_versions || !props.state.broken_versions.length) {
-    return notify("没有需要清除的标记");
+    return notify(t("remote.noBrokenMarks"));
   }
   try {
     await invoke("clear_broken", { version: null });
     emit("refresh");
-    notify("已清除失败标记");
+    notify(t("remote.clearedMarks"));
   } catch (e) {
     notify("" + e);
   }
@@ -128,16 +130,16 @@ function pickVersion(v) {
 
 async function install(v) {
   const ver = (v || installInput.value).trim();
-  if (!ver) return notify("请输入版本号");
+  if (!ver) return notify(t("remote.enterVersion"));
 
   // 安装前环境检查
   loading.value = true;
-  installStage.value = "正在检查环境...";
+  installStage.value = t("remote.checkingEnv");
   const passed = await props.checkEnv();
   if (!passed) {
     loading.value = false;
     installStage.value = "";
-    notify("环境检查未通过，无法安装。请查看「环境检查」面板。");
+    notify(t("remote.envFailed"));
     return;
   }
 
@@ -148,7 +150,7 @@ async function install(v) {
 /// 失败且疑似网络问题时，弹出「换源重试」框（不静默重试）。
 async function doInstall(ver, registry) {
   loading.value = true;
-  installStage.value = "准备中...";
+  installStage.value = t("remote.preparing");
   try {
     const msg = await invoke("install_version", {
       version: ver,
@@ -205,15 +207,15 @@ onUnmounted(() => {
 <template>
   <section class="panel">
     <div class="panel-head">
-      <h2>可用版本</h2>
+      <h2>{{ t("remote.title") }}</h2>
       <button class="btn small" @click="loadRemote" :disabled="loading">
-        {{ loading ? "加载中..." : "刷新列表" }}
+        {{ loading ? t("remote.loading") : t("remote.refresh") }}
       </button>
     </div>
 
     <div class="install-row">
-      <input v-model="installInput" placeholder="输入版本号，如 0.1.5" @keyup.enter="install()" />
-      <button class="btn primary" @click="install()" :disabled="loading">安装</button>
+      <input v-model="installInput" :placeholder="t('remote.versionPlaceholder')" @keyup.enter="install()" />
+      <button class="btn primary" @click="install()" :disabled="loading">{{ t("remote.install") }}</button>
     </div>
 
     <NotesPanel
@@ -236,9 +238,9 @@ onUnmounted(() => {
     </div>
 
     <div class="remote-toolbar" v-if="remote.length">
-      <input v-model="remoteQuery" class="input remote-search" placeholder="搜索版本号，如 0.1.7" />
-      <button class="btn small" @click="remoteSortDesc = !remoteSortDesc" :title="remoteSortDesc ? '当前最新在前' : '当前最早在前'">
-        {{ remoteSortDesc ? "最新在前 ↓" : "最早在前 ↑" }}
+      <input v-model="remoteQuery" class="input remote-search" :placeholder="t('remote.searchPlaceholder')" />
+      <button class="btn small" @click="remoteSortDesc = !remoteSortDesc" :title="remoteSortDesc ? t('remote.sortDescTip') : t('remote.sortAscTip')">
+        {{ remoteSortDesc ? t("remote.sortDesc") + " ↓" : t("remote.sortAsc") + " ↑" }}
       </button>
     </div>
     <div class="chips" v-if="remote.length">
@@ -247,16 +249,16 @@ onUnmounted(() => {
         :key="v"
         class="chip"
         :class="{ 'chip-broken': isBroken(v) }"
-        :title="isBroken(v) ? '此版本上次安装失败（依赖已下架），点右下角可清除标记' : ''"
+        :title="isBroken(v) ? t('remote.brokenTip') : ''"
         @click="pickVersion(v)"
         :disabled="loading"
       >{{ v }}</button>
-      <div class="hint" v-if="!filteredRemote.length">没有匹配的版本</div>
+      <div class="hint" v-if="!filteredRemote.length">{{ t("remote.noMatch") }}</div>
     </div>
-    <div v-else class="hint">点击“刷新列表”从 npm 拉取所有可安装版本</div>
+    <div v-else class="hint">{{ t("remote.clickRefresh") }}</div>
     <div class="broken-hint" v-if="state && state.broken_versions && state.broken_versions.length">
-      灰色版本曾被标记为无法安装（依赖已下架）：{{ state.broken_versions.join("、") }}
-      <button class="btn small" @click="clearBroken">清除标记</button>
+      {{ t("remote.brokenHint") }}{{ state.broken_versions.join(", ") }}
+      <button class="btn small" @click="clearBroken">{{ t("remote.clearBroken") }}</button>
     </div>
   </section>
 
@@ -265,53 +267,52 @@ onUnmounted(() => {
     <div class="modal">
       <!-- 网络类 -->
       <template v-if="retryKind === 'network'">
-        <h3>安装失败（网络问题）</h3>
+        <h3>{{ t("remote.modalNetTitle") }}</h3>
         <div class="modal-desc">
-          安装 <b>{{ retryVersion }}</b> 时网络请求失败。可换个 npm 源重试：
+          {{ t("remote.modalNetDesc1") }} <b>{{ retryVersion }}</b> {{ t("remote.modalNetDesc2") }}
         </div>
         <div class="field">
-          <label>选择源</label>
+          <label>{{ t("remote.chooseRegistry") }}</label>
           <select v-model="retryRegistry" class="input">
             <option v-for="r in REGISTRIES" :key="r.value" :value="r.value">{{ r.label }}</option>
           </select>
         </div>
         <div class="field">
-          <label>或自定义源（填写后优先）</label>
+          <label>{{ t("remote.customRegistry") }}</label>
           <input v-model="retryCustom" class="input" placeholder="https://.../npm/" />
         </div>
       </template>
 
       <!-- 私有包 / 版本不完整 -->
       <template v-else>
-        <h3>此版本无法安装</h3>
+        <h3>{{ t("remote.modalBadTitle") }}</h3>
         <div class="modal-desc">
-          安装 <b>{{ retryVersion }}</b> 失败：该版本依赖的官方子包已下架（或未完整发布），
-          任何 npm 源都无法获取。<b>建议换用更新的版本</b>。
+          {{ t("remote.modalBadDesc1") }} <b>{{ retryVersion }}</b> {{ t("remote.modalBadDesc2") }}
         </div>
         <details class="retry-detail">
-          <summary>其他安装方式（进阶）</summary>
+          <summary>{{ t("remote.advanced") }}</summary>
           <div class="adv-body">
-            <p><b>1. 配置官方私有源令牌</b>（需官方授权）：</p>
+            <p><b>{{ t("remote.adv1") }}</b></p>
             <pre>//registry.npmjs.org/:_authToken=&lt;你的 NPM_TOKEN&gt;
 @deepseek-ai:registry=https://registry.npmjs.org/</pre>
-            <p>将上面两行写入 <code>%USERPROFILE%.npmrc</code>，再回本工具重试。</p>
-            <p><b>2. 从源码构建</b>：</p>
+            <p>{{ t("remote.adv1b") }} <code>%USERPROFILE%\.npmrc</code>{{ t("remote.adv1c") }}</p>
+            <p><b>{{ t("remote.adv2") }}</b></p>
             <pre>git clone https://github.com/deepseek-ai/deepseek-harness.git
 cd deepseek-harness
 pnpm install &amp;&amp; pnpm build</pre>
-            <p>源码构建不受 npm 包发布状态影响，但需自行维护版本。</p>
+            <p>{{ t("remote.adv2b") }}</p>
           </div>
         </details>
       </template>
 
       <details class="retry-detail">
-        <summary>原始错误</summary>
+        <summary>{{ t("remote.rawError") }}</summary>
         <pre>{{ retryError }}</pre>
       </details>
       <div class="modal-actions">
-        <button class="btn" @click="retryOpen = false">{{ retryKind === 'network' ? '取消' : '知道了' }}</button>
-        <button v-if="retryKind === 'network'" class="btn primary" @click="retryInstall">换源重试</button>
-        <button v-else class="btn primary" @click="retryOpen = false">好</button>
+        <button class="btn" @click="retryOpen = false">{{ retryKind === 'network' ? t("remote.cancel") : t("remote.gotIt") }}</button>
+        <button v-if="retryKind === 'network'" class="btn primary" @click="retryInstall">{{ t("remote.retryWithRegistry") }}</button>
+        <button v-else class="btn primary" @click="retryOpen = false">{{ t("remote.ok") }}</button>
       </div>
     </div>
   </div>

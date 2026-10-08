@@ -6,6 +6,7 @@ import { useToast } from "../composables/useToast.js";
 import { useSharedHomeWarn } from "../composables/useSharedHomeWarn.js";
 import IsolatedMenu from "./IsolatedMenu.vue";
 import NotesPanel from "./NotesPanel.vue";
+import { t } from "../composables/useI18n.js";
 
 // 已安装版本列表（含批量操作、占用扫描、隔离、更新说明）。
 // installed 由父组件传入；动作自包含（自己 invoke），完成后 emit refresh 让父组件重拉列表。
@@ -69,13 +70,8 @@ async function confirmSharedHome(v) {
   const ver = props.installed.find((x) => x.version === v);
   if (!ver || ver.isolated) return true; // 隔离版本无此风险
   return await ask(
-    "版本 " + v + " 使用【共享 home】（<根>/home）。\n\n" +
-    "多个版本共用同一个 home 时，插件/依赖可能相互影响，\n" +
-    "导致某些功能异常（例如 0.1.7 的「在文件管理器中打开」失效会连累其它版本）。\n\n" +
-    "建议对测试版本开启【数据隔离】。\n\n" +
-    "（可在「路径设置」里关闭此提示）\n\n" +
-    "继续运行吗？",
-    { title: "共享 home 提示", kind: "warning" }
+    t("installed.sharedHomeConfirm", { v }),
+    { title: t("installed.sharedHomeTitle"), kind: "warning" }
   );
 }
 
@@ -83,7 +79,7 @@ async function run(v) {
   if (!(await confirmSharedHome(v))) return;
   if (runningVersion.value) return;
   runningVersion.value = v;
-  notify("正在启动 DSH " + v + "，请稍候...");
+  notify(t("installed.starting", { v }));
   try { notify(await invoke("run_version", { version: v })); }
   catch (e) { notify("" + e); }
   finally { runningVersion.value = ""; }
@@ -114,9 +110,9 @@ async function toggleIsolated(v, current) {
 
 async function uninstall(v) {
   if (uninstalling.value) return;
-  if (!(await ask("确定卸载版本 " + v + " ?", { title: "卸载版本", kind: "warning" }))) return;
+  if (!(await ask(t("installed.uninstallConfirm", { v }), { title: t("installed.uninstallTitle"), kind: "warning" }))) return;
   uninstalling.value = v;
-  notify("正在卸载 " + v + "...");
+  notify(t("installed.uninstallingMsg", { v }));
   try {
     notify(await invoke("uninstall_version", { version: v }));
     emit("refresh");
@@ -127,26 +123,26 @@ async function uninstall(v) {
 /// 批量卸载已选版本
 async function batchUninstall() {
   const names = Array.from(selected.value);
-  if (!names.length) return notify("未选择任何项");
-  if (!(await ask("确定卸载选中的 " + names.length + " 个版本？此操作不可恢复。", { title: "批量卸载", kind: "warning" }))) return;
+  if (!names.length) return notify(t("installed.nothingSelected"));
+  if (!(await ask(t("installed.batchConfirm", { n: names.length }), { title: t("installed.batchUninstall"), kind: "warning" }))) return;
   batchBusy.value = true;
   let okCount = 0;
   const failed = [];
   for (let i = 0; i < names.length; i++) {
     const name = names[i];
-    notify("正在卸载（" + (i + 1) + "/" + names.length + "）：" + name);
+    notify(t("installed.batchProgress", { i: i + 1, n: names.length, name }));
     uninstalling.value = name;
     try { await invoke("uninstall_version", { version: name }); okCount++; }
-    catch (e) { failed.push(name + "：" + e); }
+    catch (e) { failed.push(name + ": " + e); }
   }
   emit("refresh");
   uninstalling.value = "";
   selected.value = new Set();
   batchBusy.value = false;
   if (failed.length) {
-    notify("批量卸载完成：成功 " + okCount + " 个，失败 " + failed.length + " 个。\n失败详情：\n" + failed.join("\n"));
+    notify(t("installed.batchDoneFail", { ok: okCount, fail: failed.length }) + "\n" + failed.join("\n"));
   } else {
-    notify("批量卸载完成：共 " + okCount + " 个");
+    notify(t("installed.batchDone", { n: okCount }));
   }
 }
 
@@ -158,39 +154,39 @@ function toggleInstalledNote(v) {
 <template>
   <section class="panel">
     <div class="panel-head">
-      <h2>已安装版本</h2>
+      <h2>{{ t("installed.title") }}</h2>
       <span class="count" v-if="installed.length">{{ installed.length }}</span>
     </div>
 
     <div v-if="!installed.length" class="empty">
-      还没有安装任何版本，从下方列表安装一个吧
+      {{ t("installed.empty") }}
     </div>
 
     <ul class="ver-list" v-else>
       <li v-for="v in installed" :key="v.version" class="ver-item" :class="{ 'item-selected': isSelected(v.version) }">
         <input type="checkbox" class="sel-box" :checked="isSelected(v.version)" :disabled="batchBusy" @change="toggleSelect(v.version)" />
         <div class="ver-main">
-          <span class="ver-num ver-num-clickable" title="点击查看该版本更新说明" @click="toggleInstalledNote(v.version)">
+          <span class="ver-num ver-num-clickable" :title="t('installed.clickNotes')" @click="toggleInstalledNote(v.version)">
             {{ v.version }}<span class="ver-caret">{{ installedNoteVer === v.version ? "▾" : "▸" }}</span>
           </span>
-          <span class="badge" v-if="v.is_default">默认</span>
-          <span class="badge badge-iso" v-if="v.isolated">隔离</span>
-          <span class="badge badge-shared" v-else title="使用共享 home：多版本混用可能导致插件/依赖版本错配，测试版建议开隔离">共享 home</span>
-          <span class="ver-meta" v-if="v.installed_at">安装于 {{ v.installed_at }}</span>
+          <span class="badge" v-if="v.is_default">{{ t("installed.default") }}</span>
+          <span class="badge badge-iso" v-if="v.isolated">{{ t("installed.isolated") }}</span>
+          <span class="badge badge-shared" v-else :title="t('installed.sharedHomeTip')">{{ t("installed.sharedHome") }}</span>
+          <span class="ver-meta" v-if="v.installed_at">{{ t("installed.installedAt") }} {{ v.installed_at }}</span>
           <span class="ver-meta" v-if="verSizes[v.version] != null">
-            占用 {{ fmtSize(verSizes[v.version].total) }}
+            {{ t("installed.usage") }} {{ fmtSize(verSizes[v.version].total) }}
             <template v-if="verSizes[v.version].shared_count">
-              （复用 {{ fmtSize(verSizes[v.version].shared_size) }} / 独占 {{ fmtSize(verSizes[v.version].exclusive_size) }}）
+              ({{ t("installed.reused") }} {{ fmtSize(verSizes[v.version].shared_size) }} / {{ t("installed.exclusive") }} {{ fmtSize(verSizes[v.version].exclusive_size) }})
             </template>
           </span>
         </div>
         <div class="ver-actions">
-          <button class="btn primary" @click="run(v.version)" :disabled="!!runningVersion || isBlocked(v.version)">{{ runningVersion === v.version ? "启动中..." : "运行" }}</button>
-          <button class="btn" @click="openInBrowser(v.version)" :disabled="isBlocked(v.version)" title="在新终端启动并在系统浏览器打开">浏览器打开</button>
-          <button class="btn" @click="setDefault(v.version)" :disabled="v.is_default || isBlocked(v.version)">设为默认</button>
-          <button class="btn" @click="createShortcut(v.version)" :disabled="isBlocked(v.version)" title="在桌面创建 DSH 快捷方式">桌面快捷方式</button>
-          <button class="btn" @click="scanVersionSize(v.version)" :disabled="scanningVer === v.version || isBlocked(v.version)" title="统计该版本占用的磁盘空间">
-            {{ scanningVer === v.version ? "扫描中..." : (verSizes[v.version] != null ? "重新扫描占用" : "扫描占用") }}
+          <button class="btn primary" @click="run(v.version)" :disabled="!!runningVersion || isBlocked(v.version)">{{ runningVersion === v.version ? t("installed.running") : t("installed.run") }}</button>
+          <button class="btn" @click="openInBrowser(v.version)" :disabled="isBlocked(v.version)" :title="t('installed.openBrowserTip')">{{ t("installed.openBrowser") }}</button>
+          <button class="btn" @click="setDefault(v.version)" :disabled="v.is_default || isBlocked(v.version)">{{ t("installed.setDefault") }}</button>
+          <button class="btn" @click="createShortcut(v.version)" :disabled="isBlocked(v.version)" :title="t('installed.shortcutTip')">{{ t("installed.shortcut") }}</button>
+          <button class="btn" @click="scanVersionSize(v.version)" :disabled="scanningVer === v.version || isBlocked(v.version)" :title="t('installed.scanTip')">
+            {{ scanningVer === v.version ? t("installed.scanning") : (verSizes[v.version] != null ? t("installed.rescanSize") : t("installed.scanSize")) }}
           </button>
           <IsolatedMenu
             v-if="v.isolated"
@@ -203,9 +199,9 @@ function toggleInstalledNote(v) {
             class="btn"
             @click="toggleIsolated(v.version, false)"
             :disabled="isBlocked(v.version)"
-            title="开启隔离（该版本使用独立数据目录）"
-          >隔离</button>
-          <button class="btn danger" @click="uninstall(v.version)" :disabled="!!uninstalling || batchBusy">{{ uninstalling === v.version ? "卸载中..." : "卸载" }}</button>
+            :title="t('installed.isolateTip')"
+          >{{ t("installed.isolate") }}</button>
+          <button class="btn danger" @click="uninstall(v.version)" :disabled="!!uninstalling || batchBusy">{{ uninstalling === v.version ? t("installed.uninstalling") : t("installed.uninstall") }}</button>
         </div>
         <NotesPanel
           v-if="installedNoteVer === v.version"
@@ -224,13 +220,13 @@ function toggleInstalledNote(v) {
           :checked="installed.length > 0 && installed.every((x) => isSelected(x.version))"
           :disabled="batchBusy"
           @change="toggleSelectAll($event.target.checked)" />
-        全选
+        {{ t("installed.selectAll") }}
       </label>
       <template v-if="selected.size">
-        <span class="batch-count">已选 {{ selected.size }} 项</span>
-        <button class="btn small" @click="clearSelection" :disabled="batchBusy">清除选择</button>
+        <span class="batch-count">{{ t("installed.selected") }} {{ selected.size }} {{ t("installed.items") }}</span>
+        <button class="btn small" @click="clearSelection" :disabled="batchBusy">{{ t("installed.clearSelection") }}</button>
         <button class="btn danger small" @click="batchUninstall" :disabled="batchBusy">
-          {{ batchBusy ? "批量卸载中..." : "批量卸载" }}
+          {{ batchBusy ? t("installed.batchUninstalling") : t("installed.batchUninstall") }}
         </button>
       </template>
     </div>

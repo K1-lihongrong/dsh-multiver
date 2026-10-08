@@ -21,7 +21,7 @@ async function run() {
     passed.value = checks.value.filter((c) => c.critical).every((c) => c.ok);
     return passed.value;
   } catch (e) {
-    emit("error", "环境检查失败: " + e);
+    emit("error", t("env.checkFailed") + ": " + e);
     return false;
   } finally {
     loading.value = false;

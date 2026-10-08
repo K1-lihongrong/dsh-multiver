@@ -35,7 +35,7 @@ async function clearDefault() {
 
 async function openUrl(url) {
   try { await invoke("open_url", { url }); }
-  catch (e) { notify("打开链接失败：" + e); }
+  catch (e) { notify(t("app.openLinkFailed") + "：" + e); }
 }
 
 async function openDir(which) {
@@ -62,7 +62,7 @@ onMounted(async () => {
   await refresh();
   unlistenCrash = await listen("launch-crashed", (e) => {
     const p = e.payload || {};
-    notify(p.message || ("版本 " + p.version + " 启动后立即退出，请查看日志。"));
+    notify(p.message || t("app.launchCrashed", { v: p.version }));
   });
   await runEnvCheck();
 });
