@@ -1,6 +1,7 @@
 <script setup>
 import { onMounted } from "vue";
 import { notesCache as cache, hasNotes, setNotes } from "../composables/notesCache.js";
+import { t } from "../composables/useI18n.js";
 
 // 版本更新说明面板：自包含（自己拉取 dsh 上游 GitHub Releases 并消毒渲染）。
 // 父组件只传 version，监听 close；打开时才加载（懒加载 + 内存缓存）。
@@ -82,18 +83,18 @@ onMounted(() => loadNotes(props.version));
 
 <template>
   <div class="notes-panel" :class="{ 'notes-inline': inline }">
-    <div class="notes-head" @click="emit('close')" title="点击收起">
-      <span class="notes-title">DSH {{ version }} 更新说明</span>
+    <div class="notes-head" @click="emit('close')" :title="t('notes.clickCollapse')">
+      <span class="notes-title">DSH {{ version }} {{ t("notes.suffix") }}</span>
       <span class="notes-close">×</span>
     </div>
     <div class="notes-body">
-      <div v-if="!cache[version] || cache[version].status === 'loading'" class="notes-hint">加载中...</div>
-      <div v-else-if="cache[version].status === 'ok' && cache[version].empty" class="notes-hint">该版本没有提供更新说明。</div>
+      <div v-if="!cache[version] || cache[version].status === 'loading'" class="notes-hint">{{ t("remote.loading") }}</div>
+      <div v-else-if="cache[version].status === 'ok' && cache[version].empty" class="notes-hint">{{ t("notes.empty") }}</div>
       <div v-else-if="cache[version].status === 'ok'" class="notes-html" v-html="cache[version].html"></div>
-      <div v-else class="notes-hint">无法获取更新说明（可能网络不通）。可点击下方按钮在浏览器查看。</div>
+      <div v-else class="notes-hint">{{ t("notes.loadFailedHint") }}</div>
     </div>
     <div class="notes-foot">
-      <button class="btn small" @click="openOriginal">在浏览器打开原文</button>
+      <button class="btn small" @click="openOriginal">{{ t("notes.openOriginal") }}</button>
     </div>
   </div>
 </template>

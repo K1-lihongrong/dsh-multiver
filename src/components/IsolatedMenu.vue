@@ -3,6 +3,7 @@ import { ref, onMounted, onUnmounted } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import { ask } from "@tauri-apps/plugin-dialog";
 import { useToast } from "../composables/useToast.js";
+import { t } from "../composables/useI18n.js";
 
 // 隔离管理下拉菜单（仅"已隔离"版本显示）。
 // 自包含：自己管菜单开关、隔离数据大小扫描。
@@ -56,7 +57,7 @@ async function openDir() {
 
 async function copyShared() {
   close();
-  if (!(await ask("将把共享数据（<根>/home）复制到该版本的隔离目录。\n已存在的文件不会覆盖。\n\n继续吗？", { title: "复制共享数据", kind: "warning" }))) return;
+  if (!(await ask(t("iso.copySharedConfirm"), { title: t("iso.copyShared"), kind: "warning" }))) return;
   try {
     notify(await invoke("copy_shared_to_isolated", { version: props.version }));
     size.value = undefined;
@@ -65,7 +66,7 @@ async function copyShared() {
 
 async function clearIsolated() {
   close();
-  if (!(await ask("将删除该版本的隔离数据（保留版本本身）。\n此操作不可恢复，继续吗？", { title: "清理隔离数据", kind: "warning" }))) return;
+  if (!(await ask(t("iso.clearConfirm"), { title: t("iso.clear"), kind: "warning" }))) return;
   try {
     notify(await invoke("clear_isolated_data", { version: props.version }));
     size.value = 0;
@@ -88,18 +89,18 @@ onUnmounted(() => document.removeEventListener("click", onDocClick));
 <template>
   <div class="menu-wrap" @click.stop>
     <button class="btn active" @click.stop="toggle" :disabled="disabled">
-      已隔离 ▾
+      {{ t("installed.isolatedMenu") }} ▾
     </button>
     <div class="menu" v-if="open" @click.stop>
-      <button class="menu-item" @click="closeIsolated">关闭隔离</button>
-      <button class="menu-item" @click="openDir">打开隔离目录</button>
+      <button class="menu-item" @click="closeIsolated">{{ t("iso.close") }}</button>
+      <button class="menu-item" @click="openDir">{{ t("iso.openDir") }}</button>
       <button class="menu-item" @click="scanSize" :disabled="scanning">
-        <span v-if="scanning">扫描中...</span>
-        <span v-else-if="size != null">占用 {{ fmtSize(size) }}（重新扫描）</span>
-        <span v-else>扫描占用大小</span>
+        <span v-if="scanning">{{ t("installed.scanning") }}</span>
+        <span v-else-if="size != null">{{ t("installed.usage") }} {{ fmtSize(size) }}（{{ t("iso.rescan") }}）</span>
+        <span v-else>{{ t("iso.scanSize") }}</span>
       </button>
-      <button class="menu-item" @click="copyShared">复制共享数据到此</button>
-      <button class="menu-item danger" @click="clearIsolated">清理隔离数据</button>
+      <button class="menu-item" @click="copyShared">{{ t("iso.copyShared") }}</button>
+      <button class="menu-item danger" @click="clearIsolated">{{ t("iso.clear") }}</button>
     </div>
   </div>
 </template>

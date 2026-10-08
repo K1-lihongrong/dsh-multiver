@@ -1,6 +1,7 @@
 <script setup>
 import { ref, onMounted } from "vue";
 import { invoke } from "@tauri-apps/api/core";
+import { t } from "../composables/useI18n.js";
 
 // 环境自检面板：自己调 check_env、自己管状态。
 // 父组件通过 ref 调用 run()（安装前检查）；错误经 open-url 事件交给父组件打开链接。
@@ -36,11 +37,11 @@ defineExpose({ run });
   <section class="panel">
     <div class="panel-head">
       <h2>
-        环境检查
-        <span class="badge-ok" v-if="checked && passed">通过</span>
-        <span class="badge-err" v-else-if="checked">未通过</span>
+        {{ t("env.title") }}
+        <span class="badge-ok" v-if="checked && passed">{{ t("env.pass") }}</span>
+        <span class="badge-err" v-else-if="checked">{{ t("env.fail") }}</span>
       </h2>
-      <button class="btn small" @click="run" :disabled="loading">重新检查</button>
+      <button class="btn small" @click="run" :disabled="loading">{{ t("env.recheck") }}</button>
     </div>
     <ul class="env-list" v-if="checks.length">
       <li
@@ -53,7 +54,7 @@ defineExpose({ run });
           <span class="env-icon" :class="c.ok ? 'ok' : 'err'">{{ c.ok ? "✓" : "✕" }}</span>
           <span class="env-name">{{ c.name }}</span>
           <span class="env-detail">{{ c.detail }}</span>
-          <span class="env-critical" v-if="!c.ok && !c.critical">（非致命）</span>
+          <span class="env-critical" v-if="!c.ok && !c.critical">{{ t("env.nonCritical") }}</span>
         </div>
         <div class="env-guide" v-if="!c.ok && c.install_hint">
           <span class="env-guide-text">{{ c.install_hint }}</span>
@@ -61,11 +62,11 @@ defineExpose({ run });
             v-if="c.install_url"
             class="btn small primary"
             @click="emit('open-url', c.install_url)"
-          >打开下载页</button>
+          >{{ t("env.openDownload") }}</button>
         </div>
       </li>
     </ul>
-    <div v-else class="hint">正在检查环境...</div>
+    <div v-else class="hint">{{ t("env.checking") }}</div>
   </section>
 </template>
 

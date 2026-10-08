@@ -4,6 +4,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import EnvCheck from "./components/EnvCheck.vue";
 import { useToast } from "./composables/useToast.js";
+import { t } from "./composables/useI18n.js";
 import PathSettings from "./components/PathSettings.vue";
 import InstalledList from "./components/InstalledList.vue";
 import RemoteList from "./components/RemoteList.vue";
@@ -78,11 +79,11 @@ onUnmounted(() => {
   <header class="topbar">
     <div class="brand">
       <span class="dot"></span>
-      <h1>DSH 版本管理器</h1>
+      <h1>{{ t("app.title") }}</h1>
       <span class="app-version" v-if="state && state.version">v{{ state.version }}</span>
     </div>
     <div class="root-line" v-if="state">
-      <span class="label">根目录</span>
+      <span class="label">{{ t("app.rootDir") }}</span>
       <code>{{ state.root_dir }}</code>
     </div>
   </header>
@@ -121,7 +122,7 @@ onUnmounted(() => {
     >
       <div class="toast-text">{{ toast }}</div>
       <div class="toast-hint" v-if="String(toast).length > 60 && !toastExpanded">
-        点击查看完整内容
+        {{ t("app.toastHint") }}
       </div>
       <button class="toast-close" @click.stop="dismissToast">×</button>
     </div>
