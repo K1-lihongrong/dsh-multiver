@@ -85,34 +85,81 @@ fn run_version(program: &str) -> Option<String> {
     }
 }
 
-/// 解析版本号中的主版本，如 "v22.19.0" -> 22
-fn major_version(s: &str) -> Option<u32> {
+/// 解析版本号为 (major, minor, patch)，如 "v22.19.0" -> (22, 19, 0)。
+/// 缺失的段按 0 处理（"22" -> (22, 0, 0)）。
+fn parse_semver(s: &str) -> Option<(u32, u32, u32)> {
     let cleaned: String = s.chars().filter(|c| c.is_ascii_digit() || *c == '.').collect();
-    cleaned.split('.').next()?.parse::<u32>().ok()
+    let mut it = cleaned.split('.');
+    let major = it.next()?.parse::<u32>().ok()?;
+    let minor = it.next().and_then(|x| x.parse().ok()).unwrap_or(0);
+    let patch = it.next().and_then(|x| x.parse().ok()).unwrap_or(0);
+    Some((major, minor, patch))
 }
 
-/// 检查 Node.js 是否可用且版本满足 >= 22
+/// dsh 需要的 Node 版本：`^22.19.0` 或 `>=24`。
+///
+/// 为什么不是简单的 ">= 22"：dsh 的入口用了 `import.meta.main`（Node 22.18/22.19 一线
+/// 回溯支持、24.2 正式引入）。**22.16 这类">= 22 但不含该特性"的版本会静默失败**——
+/// `dsh` 零输出、exit 0，表现为内嵌窗口连不上。故下限收紧到 22.19。
+fn node_version_ok((major, minor, _patch): (u32, u32, u32)) -> bool {
+    (major == 22 && minor >= 19) || major >= 24
+}
+
+/// 特性探测：当前 node 是否支持 `import.meta.main`（dsh 启动的必要条件）。
+///
+/// 返回 Some(true)=支持 / Some(false)=不支持 / None=探测失败（不阻塞，仅作参考）。
+/// 版本号可能骗人（发行版 backport / 自定义构建），故实际能力比版本号更可靠。
+fn probe_import_meta_main() -> Option<bool> {
+    let mut cmd = cmd_command("node");
+    cmd.arg("-e").arg("console.log(typeof import.meta.main)");
+    match cmd.output() {
+        Ok(out) if out.status.success() => {
+            let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
+            match s.as_str() {
+                "boolean" => Some(true),
+                "undefined" => Some(false),
+                _ => None,
+            }
+        }
+        _ => None,
+    }
+}
+
+/// 检查 Node.js 是否可用，且版本与能力都满足 dsh 的要求。
+///
+/// 两层判断：
+/// 1. **版本号**（快速拦截）—— 需 `^22.19.0` 或 `>=24`
+/// 2. **特性探测**（兜底）—— 实测 `import.meta.main` 是否可用；仅在**版本号通过但探测失败**时报警
 pub fn check_node() -> CheckItem {
     match run_version("node") {
         Some(v) => {
-            let major = major_version(&v).unwrap_or(0);
-            if major >= 22 {
-                ok_item("Node.js", format!("{}（满足 >= 22）", v), true)
-            } else {
-                fail_item(
+            let ok_ver = parse_semver(&v).map(node_version_ok).unwrap_or(false);
+            if !ok_ver {
+                return fail_item(
                     "Node.js",
-                    format!("{}（需要 22 或更高）", v),
+                    format!("{}（需要 22.19+ 或 24+）", v),
                     true,
-                    "请到 Node.js 官网下载 LTS 版（22 或更高）安装，安装后重新检查。",
+                    "dsh 需要 Node.js 22.19 或更高（或 24+）。旧版 22.x 缺少 dsh 依赖的 \"import.meta.main\" 特性，会导致内嵌窗口连不上。请到官网下载 LTS 版（22.19+ / 24+）安装后重新检查。",
                     "https://nodejs.org/zh-cn/download",
-                )
+                );
+            }
+            // 版本号通过 → 特性探测兜底
+            match probe_import_meta_main() {
+                Some(false) => fail_item(
+                    "Node.js",
+                    format!("{}（版本看似满足，但缺少 import.meta.main 特性）", v),
+                    true,
+                    "当前 Node 虽满足版本号要求，但实测不支持 dsh 依赖的 \"import.meta.main\"（可能是定制构建或异常版本）。建议改用 Node.js 官网的 LTS 版（22.19+ / 24+）。",
+                    "https://nodejs.org/zh-cn/download",
+                ),
+                _ => ok_item("Node.js", format!("{}（满足 22.19+ / 24+）", v), true),
             }
         }
         None => fail_item(
             "Node.js",
-            "未找到 node 命令，请先安装 Node.js 22+".to_string(),
+            "未找到 node 命令，请先安装 Node.js 22.19+（或 24+）".to_string(),
             true,
-            "请到 Node.js 官网下载 LTS 版（22 或更高）安装。安装时勾选「Add to PATH」，装完重开本工具。",
+            "请到 Node.js 官网下载 LTS 版（22.19 或更高，或 24+）安装。安装时勾选「Add to PATH」，装完重开本工具。",
             "https://nodejs.org/zh-cn/download",
         ),
     }
@@ -195,4 +242,40 @@ pub fn run_all(root: &Path) -> Vec<CheckItem> {
         check_disk(root),
         check_registry(),
     ]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_semver_basic() {
+        assert_eq!(parse_semver("v22.19.0"), Some((22, 19, 0)));
+        assert_eq!(parse_semver("24.2.0"), Some((24, 2, 0)));
+        assert_eq!(parse_semver("22"), Some((22, 0, 0)));
+        assert_eq!(parse_semver("v20.19.2"), Some((20, 19, 2)));
+    }
+
+    /// 核心回归：22.16 不满足（旧阈值 22 会误放行）。
+    #[test]
+    fn node_version_requires_22_19_or_24() {
+        // 22.x 需次版本 >= 19
+        assert!(!node_version_ok((22, 0, 0)));
+        assert!(!node_version_ok((22, 16, 0)));   // ← 本次修复的关键用例
+        assert!(!node_version_ok((22, 18, 0)));
+        assert!(node_version_ok((22, 19, 0)));
+        assert!(node_version_ok((22, 20, 1)));
+        // 23 处于 22 与 24 之间，按 ^22.19 || >=24 的语义**不满足**
+        assert!(!node_version_ok((23, 5, 0)));
+        // 24+ 任意次版本均可
+        assert!(node_version_ok((24, 0, 0)));
+        assert!(node_version_ok((24, 2, 0)));
+        assert!(node_version_ok((25, 0, 0)));
+    }
+
+    #[test]
+    fn parse_semver_rejects_garbage() {
+        assert_eq!(parse_semver(""), None);
+        assert_eq!(parse_semver("not-a-version"), None);
+    }
 }

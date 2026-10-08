@@ -29,13 +29,19 @@
   - 身份令牌读不到时（进程已死 / 平台不支持）**一律保守跳过**——宁漏杀，不误杀。macOS 暂返回 `None`（未适配）。
 
 ### 修复（补充）
+- **环境检查的 Node 下限判错**（GAP-012）：`envcheck.rs` 此前只比较**主版本号**（`>= 22`），
+  于是 **Node 22.16 会"检查通过"但实际跑不起 dsh** —— dsh 入口依赖 `import.meta.main`
+  （22.18/22.19 一线回溯支持），缺失时 dsh **零输出、静默退出**，表现为内嵌窗口连不上，
+  极易被误判为 PDEATHSIG 或前端兼容问题（与 GAP-008 症状相同）。
+  现改为**双层判断**：① 版本号需 `^22.19.0` 或 `>=24`（与文档一致）；② 特性探测
+  `node -e "typeof import.meta.main"` 兜底，防发行版 backport / 版本号骗人。
 - **改数据根目录后，旧 root 的残留不被打扫**（GAP-011）：`set_root` 切换前对旧 root 调一次
   `procreg::cleanup_stale`，避免旧 root 下的 dsh 永久残留。
 
 ### 测试
 - 新增回归测试 `jobobj::tests::gap008_pdeathsig_kills_child_on_thread_exit`：
   对照实验证明「无 PDEATHSIG → 子进程存活；有 PDEATHSIG → 子进程被杀」。
-  测试数：Windows 63 / **Linux 72**，全通过。
+  测试数：Windows 66 / **Linux 75**，全通过。
 
 ### 说明
 - **集成验证局限**：开发机的 WSL 上 `dsh web` 自身无法启动（node v20 低于 dsh 要求的 22），
