@@ -101,8 +101,8 @@ onMounted(() => loadNotes(props.version));
 <style scoped>
 /* 就地展开的更新说明面板 */
 .notes-panel {
-  margin: 0 0 12px; padding: 10px 14px; border: 1px solid #e2e5ea; border-radius: 9px;
-  background: #fafbfc;
+  margin: 0 0 12px; padding: 10px 14px; border: 1px solid var(--surface-5); border-radius: 9px;
+  background: var(--surface-1);
 }
 .notes-inline { flex-basis: 100%; margin: 8px 0 0; }
 /* 标题栏整行可点收起：加 padding 撑满、hover 有反馈，鼠标不必对准 × */
@@ -111,22 +111,22 @@ onMounted(() => loadNotes(props.version));
   margin: -6px -8px 4px; padding: 6px 8px; border-radius: 6px;
   cursor: pointer; user-select: none; transition: background .12s;
 }
-.notes-head:hover { background: #eef1f5; }
-.notes-title { font-weight: 600; font-size: 13px; color: #374151; }
-.notes-close { font-size: 18px; line-height: 1; color: #9aa1ab; flex-shrink: 0; }
-.notes-head:hover .notes-close { color: #d9534f; }
+.notes-head:hover { background: var(--gray-chip); }
+.notes-title { font-weight: 600; font-size: 13px; color: var(--text-2); }
+.notes-close { font-size: 18px; line-height: 1; color: var(--text-muted); flex-shrink: 0; }
+.notes-head:hover .notes-close { color: var(--danger); }
 .notes-body { max-height: 260px; overflow-y: auto; }
-.notes-hint { color: #9aa1ab; font-size: 12px; }
-.notes-html { font-size: 13px; color: #374151; line-height: 1.65; }
+.notes-hint { color: var(--text-muted); font-size: 12px; }
+.notes-html { font-size: 13px; color: var(--text-2); line-height: 1.65; }
 .notes-html h1, .notes-html h2, .notes-html h3, .notes-html h4 {
-  font-size: 13px; font-weight: 600; margin: 10px 0 4px; color: #1f2937;
+  font-size: 13px; font-weight: 600; margin: 10px 0 4px; color: var(--text-strong);
 }
 .notes-html h3:first-child, .notes-html h4:first-child { margin-top: 0; }
 .notes-html ul, .notes-html ol { margin: 4px 0; padding-left: 20px; }
 .notes-html li { margin: 2px 0; }
 .notes-html p { margin: 6px 0; }
-.notes-html a { color: #4f6ef7; }
-.notes-html code { background: #eef1f5; padding: 1px 5px; border-radius: 4px; font-size: 12px; }
+.notes-html a { color: var(--accent); }
+.notes-html code { background: var(--gray-chip); padding: 1px 5px; border-radius: 4px; font-size: 12px; }
 .notes-html img { max-width: 100%; }
 .notes-foot { margin-top: 8px; display: flex; justify-content: flex-end; }
 </style>

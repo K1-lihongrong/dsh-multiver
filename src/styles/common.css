@@ -5,72 +5,205 @@
  * 组件自己的样式用 <style scoped>，不必重复定义这里的类。
  */
 
+/* ═══════════════════ 设计令牌（Design Tokens）═══════════════════
+ *
+ * 所有颜色集中在此，组件与样式一律用 var(--x) 引用。
+ * 亮色为默认值；暗色主题在 [data-theme="dark"] 覆盖（见文件末尾）。
+ *
+ * 命名原则：按「角色」命名（--text / --panel-bg），而非色值（--gray-700），
+ * 这样暗色覆盖时语义不变、无需猜。
+ */
+:root {
+  /* ── 基底 ── */
+  --bg:              #f5f6f8;   /* 页面背景 */
+  --panel-bg:        #fff;      /* 面板/卡片背景 */
+  --panel-border:    #e6e8eb;   /* 面板边框 */
+  --border:          #dcdfe4;   /* 通用边框（按钮/输入框） */
+  --border-strong:   #c3c8d0;   /* 边框 hover/强调 */
+
+  /* ── 文字 ── */
+  --text:            #1f2328;   /* 主文字 */
+  --text-2:          #374151;   /* 次级文字（面板标题/按钮） */
+  --text-3:          #6b7280;   /* 三级文字（字段标签） */
+  --text-muted:      #9aa1ab;   /* 弱化文字（提示/空态） */
+
+  /* ── 主色（蓝）── */
+  --accent:          #4f6ef7;
+  --accent-hover:    #3f5ce0;
+  --accent-weak:     #eef1ff;   /* 主色浅底（计数徽章） */
+  --accent-weak-2:   #f5f7ff;   /* 主色浅底（hover / 选中） */
+  --accent-weak-3:   #e2e7ff;   /* 主色浅底（进度条槽） */
+  --accent-border:   #c3cdf5;   /* 主色描边 */
+  --accent-border-2: #c9d4ff;   /* 主色描边（spinner） */
+
+  /* ── 危险（红）── */
+  --danger:          #d9534f;
+  --danger-weak:     #fdf2f2;
+  --danger-border:   #f0c0c0;
+
+  /* ── 警告（橙）── */
+  --warn:            #c77d1a;
+  --warn-weak:       #fff4e5;
+  --warn-weak-2:     #ffedcc;
+  --warn-border:     #f0c98a;
+  --warn-border-2:   #e0b46a;
+
+  /* ── 成功（绿）── */
+  --ok:              #2f9e5f;
+  --ok-weak:         #e8f5ec;
+
+  /* ── 中性灰（背景/分隔）── */
+  --gray-hover:      #f7f8fa;   /* 按钮 hover 底 */
+  --gray-chip:       #eef1f5;   /* 共享 home 徽章底 / code 底 */
+  --gray-scroll:     #d6dae0;   /* 滚动条 */
+  --surface-1:       #fafbfc;   /* 浅底块（env 项 / notes 头） */
+  --surface-2:       #f2f3f5;   /* root 路径 chip */
+  --surface-3:       #f0f2f5;   /* 版本号 chip */
+  --surface-4:       #f2f4f8;   /* 菜单项 hover */
+  --surface-5:       #e2e5ea;   /* 弹层/notes 边框 */
+
+  /* ── 其它语义 ── */
+  --text-strong:     #1f2937;   /* notes 小标题 */
+  --text-code:       #4b5563;   /* root 路径文字 */
+  --ok-2:            #30a46c;   /* env 通过图标 */
+  --danger-2:        #e5484d;   /* env 失败图标 / 非致命标记 */
+  --danger-weak-2:   #fff8f8;   /* env 失败项底 */
+  --danger-border-2: #f0d0d0;   /* env 引导框边框 */
+  --overlay:         rgba(10,20,40,.28);   /* 模态遮罩 */
+  --shadow-strong:   rgba(20,26,36,.45);   /* 强阴影（模态） */
+  --toast-bg:        #1f2328;   /* toast 底色（亮色下是深色） */
+  --toast-text:      #fff;
+  --shadow-pop:      rgba(0,0,0,0.12);
+  --shadow-pop2:     rgba(0,0,0,0.18);
+  --accent-glow:     rgba(79,110,247,0.15);
+}
+
 * { box-sizing: border-box; }
 html, body, #app { height: 100%; margin: 0; }
 body {
   font-family: "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
-  background: #f5f6f8;
-  color: #1f2328;
+  background: var(--bg);
+  color: var(--text);
   font-size: 14px;
 }
 
 /* ---------- 面板 ---------- */
 .panel {
-  background: #fff; border: 1px solid #e6e8eb; border-radius: 12px;
+  background: var(--panel-bg); border: 1px solid var(--panel-border); border-radius: 12px;
   padding: 16px 18px;
 }
 .panel-head {
   display: flex; align-items: center; justify-content: space-between;
   margin-bottom: 12px;
 }
-.panel-head h2 { font-size: 14px; margin: 0; font-weight: 600; color: #374151; }
+.panel-head h2 { font-size: 14px; margin: 0; font-weight: 600; color: var(--text-2); }
 .count {
-  background: #eef1ff; color: #4f6ef7; font-size: 12px;
+  background: var(--accent-weak); color: var(--accent); font-size: 12px;
   padding: 1px 8px; border-radius: 10px; margin-left: 8px;
 }
-.empty, .hint { color: #9aa1ab; font-size: 13px; padding: 8px 0; }
+.empty, .hint { color: var(--text-muted); font-size: 13px; padding: 8px 0; }
 
 /* ---------- 按钮 ---------- */
 .btn {
-  border: 1px solid #dcdfe4; background: #fff; color: #374151;
+  border: 1px solid var(--border); background: var(--panel-bg); color: var(--text-2);
   padding: 6px 14px; border-radius: 7px; font-size: 13px;
   cursor: pointer; transition: all .15s; font-family: inherit;
   white-space: nowrap; flex-shrink: 0;
 }
-.btn:hover:not(:disabled) { border-color: #c3c8d0; background: #f7f8fa; }
+.btn:hover:not(:disabled) { border-color: var(--border-strong); background: var(--gray-hover); }
 .btn:disabled { opacity: .5; cursor: not-allowed; }
-.btn.primary { background: #4f6ef7; border-color: #4f6ef7; color: #fff; }
-.btn.primary:hover:not(:disabled) { background: #3f5ce0; border-color: #3f5ce0; }
-.btn.danger { color: #d9534f; }
-.btn.danger:hover:not(:disabled) { background: #fdf2f2; border-color: #f0c0c0; }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+.btn.primary:hover:not(:disabled) { background: var(--accent-hover); border-color: var(--accent-hover); }
+.btn.danger { color: var(--danger); }
+.btn.danger:hover:not(:disabled) { background: var(--danger-weak); border-color: var(--danger-border); }
 .btn.small { padding: 4px 12px; font-size: 12px; }
 .btn.active {
-  background: #fff4e5; border-color: #f0c98a; color: #c77d1a;
+  background: var(--warn-weak); border-color: var(--warn-border); color: var(--warn);
 }
-.btn.active:hover:not(:disabled) { background: #ffedcc; border-color: #e0b46a; }
+.btn.active:hover:not(:disabled) { background: var(--warn-weak-2); border-color: var(--warn-border-2); }
 
 /* ---------- 徽章 ---------- */
 .badge {
-  background: #e8f5ec; color: #2f9e5f; font-size: 11px;
+  background: var(--ok-weak); color: var(--ok); font-size: 11px;
   padding: 2px 8px; border-radius: 10px; font-weight: 500;
 }
-.badge-iso { background: #fff4e5; color: #c77d1a; }
-.badge-shared { background: #eef1f5; color: #6b7280; cursor: help; }
-.badge-ok { background: #e8f5ec; color: #2f9e5f; font-size: 11px; padding: 2px 8px; border-radius: 10px; margin-left: 6px; }
-.badge-err { background: #fdf2f2; color: #d9534f; font-size: 11px; padding: 2px 8px; border-radius: 10px; margin-left: 6px; }
+.badge-iso { background: var(--warn-weak); color: var(--warn); }
+.badge-shared { background: var(--gray-chip); color: var(--text-3); cursor: help; }
+.badge-ok { background: var(--ok-weak); color: var(--ok); font-size: 11px; padding: 2px 8px; border-radius: 10px; margin-left: 6px; }
+.badge-err { background: var(--danger-weak); color: var(--danger); font-size: 11px; padding: 2px 8px; border-radius: 10px; margin-left: 6px; }
 
 /* ---------- 表单 ---------- */
 .field { margin-bottom: 12px; }
-.field label { display: block; font-size: 12px; color: #6b7280; margin-bottom: 6px; }
+.field label { display: block; font-size: 12px; color: var(--text-3); margin-bottom: 6px; }
 .input {
   width: 100%; box-sizing: border-box;
-  padding: 8px 12px; border: 1px solid #dcdfe4;
+  padding: 8px 12px; border: 1px solid var(--border);
   border-radius: 7px; font-size: 13px; font-family: inherit; outline: none;
-  background: #fff;
+  background: var(--panel-bg); color: var(--text);
 }
-.input:focus { border-color: #4f6ef7; }
+.input:focus { border-color: var(--accent); }
 
 /* ---------- 通用滚动条 ---------- */
 ::-webkit-scrollbar { width: 8px; }
-::-webkit-scrollbar-thumb { background: #d6dae0; border-radius: 4px; }
-::-webkit-scrollbar-thumb:hover { background: #c3c8d0; }
+::-webkit-scrollbar-thumb { background: var(--gray-scroll); border-radius: 4px; }
+::-webkit-scrollbar-thumb:hover { background: var(--border-strong); }
+
+/* ═══════════════════ 暗色主题 ═══════════════════
+ * 由 App.vue 在 <html> 上设 data-theme="dark" 启用。
+ * 仅覆盖颜色令牌，布局/尺寸不变。
+ */
+[data-theme="dark"] {
+  --bg:              #1a1d21;
+  --panel-bg:        #24282e;
+  --panel-border:    #363b42;
+  --border:          #3d434b;
+  --border-strong:   #4e555e;
+
+  --text:            #e6e8eb;
+  --text-2:          #c9ced6;
+  --text-3:          #9aa1ab;
+  --text-muted:      #7a828c;
+
+  --accent:          #6b86ff;
+  --accent-hover:    #5878ff;
+  --accent-weak:     #2a3350;
+  --accent-weak-2:   #252d45;
+  --accent-weak-3:   #2f3a5c;
+  --accent-border:   #3a4670;
+  --accent-border-2: #44507e;
+
+  --danger:          #f0716d;
+  --danger-weak:     #3a2526;
+  --danger-border:   #5a3536;
+
+  --warn:            #e0a94a;
+  --warn-weak:       #3a3020;
+  --warn-weak-2:     #4a3d26;
+  --warn-border:     #6a5528;
+  --warn-border-2:   #7a6230;
+
+  --ok:              #4caf7d;
+  --ok-weak:         #1e3329;
+
+  --gray-hover:      #2c3138;
+  --gray-chip:       #2c3138;
+  --gray-scroll:     #3d434b;
+  --surface-1:       #202429;
+  --surface-2:       #2a2f36;
+  --surface-3:       #2a2f36;
+  --surface-4:       #2c3138;
+  --surface-5:       #3d434b;
+
+  --text-strong:     #e6e8eb;
+  --text-code:       #b8bfc8;
+  --ok-2:            #4caf7d;
+  --danger-2:        #f0716d;
+  --danger-weak-2:   #3a2526;
+  --danger-border-2: #5a3536;
+  --toast-bg:        #e6e8eb;
+  --toast-text:      #1a1d21;
+  --shadow-strong:   rgba(0,0,0,0.6);
+  --shadow-pop:      rgba(0,0,0,0.45);
+  --shadow-pop2:     rgba(0,0,0,0.55);
+  --accent-glow:     rgba(107,134,255,0.2);
+}

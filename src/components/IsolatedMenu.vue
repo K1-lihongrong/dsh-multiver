@@ -108,17 +108,17 @@ onUnmounted(() => document.removeEventListener("click", onDocClick));
 .menu-wrap { position: relative; }
 .menu {
   position: absolute; top: calc(100% + 4px); right: 0; z-index: 50;
-  background: #fff; border: 1px solid #e2e5ea; border-radius: 8px;
-  box-shadow: 0 6px 20px rgba(0,0,0,0.12); min-width: 200px;
+  background: var(--panel-bg); border: 1px solid var(--surface-5); border-radius: 8px;
+  box-shadow: 0 6px 20px var(--shadow-pop); min-width: 200px;
   padding: 4px; display: flex; flex-direction: column;
 }
 .menu-item {
-  text-align: left; border: none; background: none; color: #374151;
+  text-align: left; border: none; background: none; color: var(--text-2);
   padding: 8px 12px; border-radius: 6px; font-size: 13px; cursor: pointer;
   font-family: inherit; transition: background .12s;
 }
-.menu-item:hover:not(:disabled) { background: #f2f4f8; }
+.menu-item:hover:not(:disabled) { background: var(--surface-4); }
 .menu-item:disabled { opacity: .6; cursor: not-allowed; }
-.menu-item.danger { color: #d9534f; }
-.menu-item.danger:hover { background: #fdf2f2; }
+.menu-item.danger { color: var(--danger); }
+.menu-item.danger:hover { background: var(--danger-weak); }
 </style>

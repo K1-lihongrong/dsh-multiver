@@ -136,8 +136,8 @@ onUnmounted(() => {
 
 .topbar {
   padding: 16px 22px;
-  background: #fff;
-  border-bottom: 1px solid #e6e8eb;
+  background: var(--panel-bg);
+  border-bottom: 1px solid var(--panel-border);
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -147,16 +147,16 @@ onUnmounted(() => {
 .brand { display: flex; align-items: center; gap: 10px; }
 .dot {
   width: 10px; height: 10px; border-radius: 50%;
-  background: #4f6ef7;
-  box-shadow: 0 0 0 4px rgba(79,110,247,0.15);
+  background: var(--accent);
+  box-shadow: 0 0 0 4px var(--accent-glow);
 }
 .brand h1 { font-size: 16px; margin: 0; font-weight: 600; letter-spacing: 0.2px; }
-.app-version { font-size: 11px; color: #9aa1ab; background: #f0f2f5; padding: 1px 6px; border-radius: 8px; font-weight: 500; }
-.root-line { display: flex; align-items: center; gap: 8px; font-size: 12px; color: #6b7280; }
-.root-line .label { color: #9aa1ab; }
+.app-version { font-size: 11px; color: var(--text-muted); background: var(--surface-3); padding: 1px 6px; border-radius: 8px; font-weight: 500; }
+.root-line { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--text-3); }
+.root-line .label { color: var(--text-muted); }
 .root-line code {
-  background: #f2f3f5; padding: 3px 8px; border-radius: 5px;
-  font-size: 12px; color: #4b5563; max-width: 420px;
+  background: var(--surface-2); padding: 3px 8px; border-radius: 5px;
+  font-size: 12px; color: var(--text-code); max-width: 420px;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 
@@ -167,9 +167,9 @@ onUnmounted(() => {
 
 .toast {
   position: fixed; bottom: 22px; left: 50%; transform: translateX(-50%);
-  background: #1f2328; color: #fff; padding: 12px 40px 12px 18px;
+  background: var(--toast-bg); color: var(--toast-text); padding: 12px 40px 12px 18px;
   border-radius: 9px; font-size: 13px; max-width: 80%;
-  box-shadow: 0 6px 24px rgba(0,0,0,0.18); z-index: 100;
+  box-shadow: 0 6px 24px var(--shadow-pop2); z-index: 100;
   cursor: pointer; user-select: text;
 }
 .toast.long { max-height: 60vh; overflow-y: auto; }
@@ -180,14 +180,14 @@ onUnmounted(() => {
 }
 .toast.expanded .toast-text { max-height: none; }
 .toast-hint {
-  margin-top: 6px; font-size: 11px; color: #9aa1ab;
+  margin-top: 6px; font-size: 11px; color: var(--text-muted);
 }
 .toast-close {
   position: absolute; top: 8px; right: 10px;
-  background: none; border: none; color: #9aa1ab;
+  background: none; border: none; color: var(--text-muted);
   font-size: 18px; line-height: 1; cursor: pointer; padding: 0 4px;
 }
-.toast-close:hover { color: #fff; }
+.toast-close:hover { color: var(--toast-text); }
 .fade-enter-active, .fade-leave-active { transition: opacity .25s; }
 .fade-enter-from, .fade-leave-to { opacity: 0; }
 </style>

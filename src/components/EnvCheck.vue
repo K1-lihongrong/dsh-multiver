@@ -73,7 +73,7 @@ defineExpose({ run });
 .env-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
 .env-item {
   display: flex; flex-direction: column; align-items: stretch; gap: 0;
-  padding: 8px 12px; border-radius: 8px; background: #fafbfc;
+  padding: 8px 12px; border-radius: 8px; background: var(--surface-1);
   font-size: 13px;
 }
 .env-icon {
@@ -81,18 +81,18 @@ defineExpose({ run });
   display: flex; align-items: center; justify-content: center;
   font-size: 11px; font-weight: 700; color: #fff;
 }
-.env-icon.ok { background: #30a46c; }
-.env-icon.err { background: #e5484d; }
-.env-name { font-weight: 600; color: #374151; min-width: 90px; }
-.env-detail { color: #6b7280; font-size: 12px; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.env-critical { color: #e5484d; font-size: 11px; }
-.env-item-fail { background: #fff8f8; }
+.env-icon.ok { background: var(--ok-2); }
+.env-icon.err { background: var(--danger-2); }
+.env-name { font-weight: 600; color: var(--text-2); min-width: 90px; }
+.env-detail { color: var(--text-3); font-size: 12px; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.env-critical { color: var(--danger-2); font-size: 11px; }
+.env-item-fail { background: var(--danger-weak-2); }
 .env-row { display: flex; align-items: center; gap: 10px; }
 .env-guide {
   display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
   margin-top: 8px; margin-left: 28px;
-  padding: 8px 10px; background: #fff; border: 1px solid #f0d0d0;
-  border-radius: 6px; font-size: 12px; color: #6b7280; line-height: 1.5;
+  padding: 8px 10px; background: var(--panel-bg); border: 1px solid var(--danger-border-2);
+  border-radius: 6px; font-size: 12px; color: var(--text-3); line-height: 1.5;
 }
 .env-guide-text { flex: 1; min-width: 200px; }
 /* .badge-ok / .badge-err 见 src/styles/common.css */

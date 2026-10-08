@@ -239,32 +239,32 @@ function toggleInstalledNote(v) {
 
 <style scoped>
 .count {
-  background: #eef1f5; color: #6b7280; font-size: 12px; font-weight: 600;
+  background: var(--gray-chip); color: var(--text-3); font-size: 12px; font-weight: 600;
   padding: 1px 8px; border-radius: 10px; margin-left: 8px;
 }
-.empty { color: #9aa1ab; font-size: 13px; padding: 8px 0; }
+.empty { color: var(--text-muted); font-size: 13px; padding: 8px 0; }
 .ver-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
 .ver-item {
   display: flex; align-items: center; flex-wrap: wrap;
   gap: 6px 12px;
-  padding: 10px 14px; border: 1px solid #eceef1; border-radius: 9px;
-  background: #fcfcfd; transition: border-color .15s, background .15s;
+  padding: 10px 14px; border: 1px solid var(--surface-5); border-radius: 9px;
+  background: var(--panel-bg); transition: border-color .15s, background .15s;
 }
-.ver-item:hover { border-color: #d6dae0; background: #fff; }
-.ver-item.item-selected { border-color: #4f6ef7; background: #f5f7ff; }
+.ver-item:hover { border-color: var(--gray-scroll); background: var(--panel-bg); }
+.ver-item.item-selected { border-color: var(--accent); background: var(--accent-weak-2); }
 .sel-box { flex-shrink: 0; cursor: pointer; }
 .ver-main { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; min-width: 0; flex: 1 1 auto; }
 .ver-num { font-weight: 600; font-size: 14px; font-variant-numeric: tabular-nums; }
 .ver-num-clickable { cursor: pointer; user-select: none; }
-.ver-num-clickable:hover { color: #4f6ef7; }
-.ver-caret { font-size: 10px; margin-left: 3px; color: #9aa1ab; }
-.ver-meta { color: #9aa1ab; font-size: 11px; }
+.ver-num-clickable:hover { color: var(--accent); }
+.ver-caret { font-size: 10px; margin-left: 3px; color: var(--text-muted); }
+.ver-meta { color: var(--text-muted); font-size: 11px; }
 .ver-actions { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; justify-content: flex-start; }
 .batch-bar {
   display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
-  margin-top: 12px; padding-top: 12px; border-top: 1px solid #eef1f5;
+  margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--gray-chip);
 }
-.batch-select-all { display: flex; align-items: center; gap: 6px; font-size: 13px; color: #6b7280; cursor: pointer; }
-.batch-count { font-size: 13px; color: #4f6ef7; font-weight: 600; }
+.batch-select-all { display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--text-3); cursor: pointer; }
+.batch-count { font-size: 13px; color: var(--accent); font-weight: 600; }
 /* .btn / .badge 等公共样式见 src/styles/common.css（main.js 引入），此处不再重复 */
 </style>
