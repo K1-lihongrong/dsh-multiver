@@ -46,6 +46,16 @@ dsh 依赖 Node 的 `import.meta.main` 特性（22.18/22.19 一线回溯支持�
 **终端转发脚本同样加守卫**：`~/.local/bin/dsh`（Linux）/ `dsh.cmd`（Windows）在调用 dsh 前
 先做同样的特性探测；不满足时打 stderr 提示，而不是让 dsh 静默退出（避免纯 CLI 用户遇到"命令没反应"）。
 
+### ✨ 新增：CLI `--dry-run`
+
+破坏性命令支持 `--dry-run`，只预览不执行：
+
+```bash
+dsh-multiver --install 0.2.0-rc.2 --dry-run    # 只打印"将安装 X 到 Y"
+dsh-multiver --uninstall 0.1.5 --dry-run
+dsh-multiver --maintenance --prune --dry-run
+```
+
 ### 🧪 测试
 
 新增对照实验回归测试，直接证明根因与修复：
@@ -53,7 +63,7 @@ dsh 依赖 Node 的 `import.meta.main` 特性（22.18/22.19 一线回溯支持�
 - 无 `PDEATHSIG` → 子进程**存活** ✅
 - 有 `PDEATHSIG` → 子进程**被杀** ✅
 
-测试数：Windows 67 / Linux 77，全部通过。
+测试数：Windows 68 / Linux 78，全部通过。
 
 ---
 

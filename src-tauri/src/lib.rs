@@ -64,7 +64,9 @@ pub fn run() {
     match cli::parse(&args) {
         Ok(Some(cmd)) => {
             cli::setup_console();
-            let code = cli::run(cmd);
+            // --dry-run：破坏性命令只预览不执行（--list 等只读命令不受影响）
+            let dry_run = args.iter().any(|a| a == "--dry-run");
+            let code = cli::run(cmd, dry_run);
             std::process::exit(code);
         }
         Ok(None) => {} // 无 CLI 参数 → 正常启动 GUI

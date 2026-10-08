@@ -50,6 +50,9 @@ pub enum CliCommand {
 ///
 /// 注意：`--launch-version`（精简启动，内部用）和 `--debug-progress`（开发者用）
 /// **不在**此列——它们仍走 GUI 路径。
+///
+/// `--dry-run` 也**不在**此列：它是**修饰符**（不带命令时不构成 CLI 调用），
+/// 单独出现应报错而非启动 GUI（由 `is_dry_run` 单独处理）。
 fn is_cli_flag(a: &str) -> bool {
     matches!(
         a,
@@ -65,13 +68,24 @@ fn is_cli_flag(a: &str) -> bool {
     )
 }
 
+/// 是否含 `--dry-run`（只预览不执行）。仅对破坏性命令有意义。
+fn has_dry_run(args: &[String]) -> bool {
+    args.iter().any(|a| a == "--dry-run")
+}
+
 /// 解析命令行参数。
 ///
 /// - `Ok(None)`：无 CLI 参数 → 启动 GUI
 /// - `Ok(Some(cmd))`：执行该 CLI 命令
 /// - `Err(msg)`：CLI 参数有误（调用方打印 msg + 用法后退出 1）
 pub fn parse(args: &[String]) -> Result<Option<CliCommand>, String> {
+    // `--dry-run` 是修饰符，必须搭配一个命令。单独出现（或无其它 CLI 参数）→ 报错，
+    // 避免误启动 GUI。
+    let dry_only = has_dry_run(args);
     if !args.iter().any(|a| is_cli_flag(a)) {
+        if dry_only {
+            return Err("--dry-run 需要搭配一个命令（如 --install X --dry-run）".to_string());
+        }
         // 没有 CLI 参数：GUI 只认 --launch-version（精简启动）和 --debug-progress（开发者用），
         // 其余 -- 开头的参数大概率是打错字 —— 直接报错，别默默弹个 GUI 窗口。
         const GUI_FLAGS: [&str; 2] = ["--launch-version", "--debug-progress"];
@@ -239,7 +253,9 @@ fn load_ctx() -> Ctx {
 }
 
 /// 执行 CLI 命令，返回进程退出码（成功 0 / 失败 1）。
-pub fn run(cmd: CliCommand) -> i32 {
+///
+/// `dry_run` 为 true 时，破坏性命令只**打印将要做的事**，不实际执行（见各 cmd_*）。
+pub fn run(cmd: CliCommand, dry_run: bool) -> i32 {
     match cmd {
         CliCommand::Help => {
             print_help();
@@ -249,11 +265,12 @@ pub fn run(cmd: CliCommand) -> i32 {
             println!("dsh-multiver {}", VERSION);
             0
         }
+        // --list 是只读命令，dry-run 对它无意义（照常执行）
         CliCommand::List => cmd_list(),
-        CliCommand::Install { version, registry } => cmd_install(&version, registry.as_deref()),
-        CliCommand::Uninstall { version } => cmd_uninstall(&version),
-        CliCommand::SetDefault { version } => cmd_set_default(&version),
-        CliCommand::Maintenance { kind } => cmd_maintenance(&kind),
+        CliCommand::Install { version, registry } => cmd_install(&version, registry.as_deref(), dry_run),
+        CliCommand::Uninstall { version } => cmd_uninstall(&version, dry_run),
+        CliCommand::SetDefault { version } => cmd_set_default(&version, dry_run),
+        CliCommand::Maintenance { kind } => cmd_maintenance(&kind, dry_run),
     }
 }
 
@@ -276,8 +293,16 @@ fn cmd_list() -> i32 {
 }
 
 /// `--install <版本> [--registry <url>]`
-fn cmd_install(version: &str, registry: Option<&str>) -> i32 {
+fn cmd_install(version: &str, registry: Option<&str>, dry_run: bool) -> i32 {
     let mut ctx = load_ctx();
+    if dry_run {
+        println!("[dry-run] 将安装版本 {} 到 {}", version, ctx.dirs.versions.join(version).to_string_lossy());
+        if let Some(r) = registry {
+            println!("[dry-run] 使用 npm 源：{}", r);
+        }
+        println!("[dry-run] 未执行任何操作");
+        return 0;
+    }
     if let Err(e) = ctx.dirs.ensure() {
         eprintln!("创建数据目录失败：{}", e);
         return 1;
@@ -332,8 +357,25 @@ fn cmd_install(version: &str, registry: Option<&str>) -> i32 {
 }
 
 /// `--uninstall <版本>`（与 GUI 的 uninstall_version 行为一致）
-fn cmd_uninstall(version: &str) -> i32 {
+fn cmd_uninstall(version: &str, dry_run: bool) -> i32 {
     let mut ctx = load_ctx();
+    if dry_run {
+        let installed = versions::exists(&ctx.dirs.versions, version);
+        println!("[dry-run] 将卸载版本 {}", version);
+        if installed {
+            println!("[dry-run] 该版本已安装");
+        } else {
+            println!("[dry-run] 警告：该版本未安装（实际执行会失败）");
+        }
+        if ctx.cfg.default_version.as_deref() == Some(version) {
+            println!("[dry-run] 注意：这是当前默认版本，卸载后会清除默认设置");
+        }
+        if ctx.cfg.isolated_versions.iter().any(|v| v == version) {
+            println!("[dry-run] 注意：该版本开启了数据隔离，会一并移除隔离标记");
+        }
+        println!("[dry-run] 未执行任何操作");
+        return 0;
+    }
 
     // 卸载的是默认版本 / 隔离版本 → 同步清配置，并重生成转发脚本
     let mut need_save = false;
@@ -373,8 +415,21 @@ fn cmd_uninstall(version: &str) -> i32 {
 }
 
 /// `--set-default <版本>`
-fn cmd_set_default(version: &str) -> i32 {
+fn cmd_set_default(version: &str, dry_run: bool) -> i32 {
     let mut ctx = load_ctx();
+    if dry_run {
+        let installed = versions::exists(&ctx.dirs.versions, version);
+        println!("[dry-run] 将把默认版本设为 {}", version);
+        if installed {
+            println!("[dry-run] 该版本已安装");
+        } else {
+            println!("[dry-run] 警告：该版本未安装（实际执行会失败）");
+        }
+        println!("[dry-run] 会重生成终端转发脚本 dsh");
+        println!("[dry-run] 未执行任何操作");
+        // dry-run 下不因未安装而失败（只是预览）
+        return 0;
+    }
     if !versions::exists(&ctx.dirs.versions, version) {
         eprintln!("版本 {} 未安装", version);
         return 1;
@@ -390,8 +445,18 @@ fn cmd_set_default(version: &str) -> i32 {
 }
 
 /// `--maintenance [--cleanup|--prune]`
-fn cmd_maintenance(kind: &str) -> i32 {
+fn cmd_maintenance(kind: &str, dry_run: bool) -> i32 {
     let mut ctx = load_ctx();
+    if dry_run {
+        if kind == "cleanup" || kind == "all" {
+            println!("[dry-run] 将清理孤立 webview 缓存（{}）", ctx.dirs.webview.to_string_lossy());
+        }
+        if kind == "prune" || kind == "all" {
+            println!("[dry-run] 将回收依赖仓库（pnpm store prune）");
+        }
+        println!("[dry-run] 未执行任何操作");
+        return 0;
+    }
     if let Err(e) = ctx.dirs.ensure() {
         eprintln!("创建数据目录失败：{}", e);
         return 1;
@@ -452,6 +517,7 @@ fn print_help() {
   --uninstall    卸载指定版本
   --set-default  设为默认版本，并重生成终端 dsh 命令
   --maintenance  磁盘维护：--cleanup 清孤立缓存 / --prune 回收依赖仓库 / 不带则两者都做
+  --dry-run      只预览不执行（可搭配 --install / --uninstall / --set-default / --maintenance）
 
   不带上述任一参数时，启动图形界面。
   退出码：成功 0 / 失败 1。",
@@ -532,6 +598,20 @@ mod tests {
             Ok(Some(CliCommand::SetDefault { version })) => assert_eq!(version, "0.1.6"),
             other => panic!("unexpected: {:?}", other),
         }
+    }
+
+    #[test]
+    fn dry_run_parses_as_modifier() {
+        // --dry-run 是修饰符，不改变命令解析（由 lib.rs 侧读取）
+        assert!(has_dry_run(&args(&["--install", "0.1.7", "--dry-run"])));
+        assert!(!has_dry_run(&args(&["--install", "0.1.7"])));
+        // 命令本身仍正确解析
+        match parse(&args(&["--install", "0.1.7", "--dry-run"])) {
+            Ok(Some(CliCommand::Install { version, .. })) => assert_eq!(version, "0.1.7"),
+            other => panic!("unexpected: {:?}", other),
+        }
+        // 只 --dry-run（无命令）→ 报错（不启动 GUI）
+        assert!(parse(&args(&["--dry-run"])).is_err());
     }
 
     #[test]

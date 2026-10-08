@@ -134,6 +134,7 @@ dsh-multiver.exe --install <版本> [--registry <url>]       # 无头安装
 dsh-multiver.exe --uninstall <版本>                        # 无头卸载
 dsh-multiver.exe --set-default <版本>                      # 设默认版本
 dsh-multiver.exe --maintenance [--cleanup|--prune]         # 无头维护
+dsh-multiver.exe --install <版本> --dry-run                 # 只预览，不执行
 dsh-multiver.exe --help                                    # 帮助
 ```
 

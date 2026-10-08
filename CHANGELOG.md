@@ -17,6 +17,8 @@
   **修复**：Unix 侧移除 `PR_SET_PDEATHSIG`，只保留 `process_group(0)`（供 `killpg` 清理）。
 
 ### 新增
+- **CLI `--dry-run`**：破坏性命令（`--install` / `--uninstall` / `--set-default` / `--maintenance`）
+  支持 `--dry-run`，只打印将要做的事、不实际执行。适合确认参数是否正确。
 - **残留进程兜底清理**（`procreg.rs`）：Unix 侧把 dsh 的进程组 ID 登记到 `<数据根>/logs/dsh-procs.json`，
   管理器启动时清理仍存活的残留进程（覆盖"管理器被 `kill -9` / 崩溃、来不及清理"的场景）。
   正常关窗 / 退出仍走 `killpg`，登记随之注销。
@@ -45,7 +47,7 @@
 ### 测试
 - 新增回归测试 `jobobj::tests::gap008_pdeathsig_kills_child_on_thread_exit`：
   对照实验证明「无 PDEATHSIG → 子进程存活；有 PDEATHSIG → 子进程被杀」。
-  测试数：Windows 67 / **Linux 77**，全通过。
+  测试数：Windows 68 / **Linux 78**，全通过。
 
 ### 说明
 - **集成验证局限**：开发机的 WSL 上 `dsh web` 自身无法启动（node v20 低于 dsh 要求的 22），
