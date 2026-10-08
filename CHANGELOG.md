@@ -28,6 +28,10 @@
     清理只移除已处理条目，不再整体清空（保留活跃实例的登记）。
   - 身份令牌读不到时（进程已死 / 平台不支持）**一律保守跳过**——宁漏杀，不误杀。macOS 暂返回 `None`（未适配）。
 
+### 修复（补充）
+- **改数据根目录后，旧 root 的残留不被打扫**（GAP-011）：`set_root` 切换前对旧 root 调一次
+  `procreg::cleanup_stale`，避免旧 root 下的 dsh 永久残留。
+
 ### 测试
 - 新增回归测试 `jobobj::tests::gap008_pdeathsig_kills_child_on_thread_exit`：
   对照实验证明「无 PDEATHSIG → 子进程存活；有 PDEATHSIG → 子进程被杀」。

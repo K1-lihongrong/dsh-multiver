@@ -834,6 +834,25 @@ pub(crate) fn open_isolated_dir(app: tauri::AppHandle, version: String) -> Resul
 pub(crate) fn set_root(app: tauri::AppHandle, root: Option<String>) -> Result<String, String> {
     let mdir = manager_dir(&app);
     let mut cfg = Config::load(&mdir);
+
+    // 切换前：对**旧**数据根做一次残留进程清理（GAP-011）。
+    // 否则旧 root 下遗留的登记不会被新 root 的启动清理触及，其中的 dsh 可能永久残留。
+    #[cfg(unix)]
+    {
+        let old_root = cfg.resolve_root(&mdir);
+        if old_root != mdir {
+            // 仅在旧 root 与管理器目录不同、且确实存在时才尝试（避免误清管理器自身目录）
+            let n = crate::procreg::cleanup_stale(&old_root);
+            if n > 0 {
+                logging::write_line(
+                    &old_root.join("logs"),
+                    "maintenance.log",
+                    &format!("切换数据根前清理旧 root 残留 dsh：{} 个", n),
+                );
+            }
+        }
+    }
+
     cfg.root_dir = root.clone();
     cfg.save(&mdir).map_err(|e| e.to_string())?;
     let dirs = Dirs::new(cfg.resolve_root(&mdir));
