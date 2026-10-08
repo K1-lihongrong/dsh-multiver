@@ -7,6 +7,31 @@
 
 ---
 
+## [0.2.4] - 2026-10-08
+
+### 修复
+- **Linux：内嵌窗口「重新连接中」**（GAP-008）—— 根因是 `jobobj.rs` 在 Unix 侧设置了
+  `PR_SET_PDEATHSIG=SIGKILL`。该信号绑定的是**发起 spawn 的线程**（`spawn_blocking` 的池线程），
+  命令返回后线程被回收，内核随即杀掉 dsh 子进程，导致内嵌窗口所有 API 请求失败、常驻「重新连接中」。
+  此问题**影响所有 Linux 环境**（非 WSLg 专属），Windows 因用 Job Object 而不受影响。
+  **修复**：Unix 侧移除 `PR_SET_PDEATHSIG`，只保留 `process_group(0)`（供 `killpg` 清理）。
+
+### 新增
+- **残留进程兜底清理**（`procreg.rs`）：Unix 侧把 dsh 的进程组 ID 登记到 `<数据根>/logs/dsh-procs.json`，
+  管理器启动时清理仍存活的残留进程（覆盖"管理器被 `kill -9` / 崩溃、来不及清理"的场景）。
+  正常关窗 / 退出仍走 `killpg`，登记随之注销。
+
+### 测试
+- 新增回归测试 `jobobj::tests::gap008_pdeathsig_kills_child_on_thread_exit`：
+  对照实验证明「无 PDEATHSIG → 子进程存活；有 PDEATHSIG → 子进程被杀」。
+  测试数：Windows 63 / **Linux 64**，全通过。
+
+### 说明
+- **集成验证局限**：开发机的 WSL 上 `dsh web` 自身无法启动（node v20 低于 dsh 要求的 22），
+  故"真实 dsh web 进程存活"的端到端验证未完成；根因与修复由单元级对照实验证明。
+
+---
+
 ## [0.2.3] - 2026-10-05
 
 ### 修复

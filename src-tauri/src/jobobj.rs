@@ -6,10 +6,21 @@
 //! 平台实现：
 //! - **Windows**：Job Object + `KILL_ON_JOB_CLOSE`。spawn **后** `attach` 把子进程加入 Job
 //!   并持有句柄；句柄关闭（管理器退出）→ OS 结束组内进程。
-//! - **Unix**：进程组 + `PDEATHSIG`（Linux）。spawn **前** `configure_command` 让子进程成为
-//!   新进程组组长（pgid = pid）并设置父死信号；`kill_tree` 用 `killpg` 杀整组。
+//! - **Unix**：进程组。spawn **前** `configure_command` 让子进程成为新进程组组长
+//!   （pgid = pid）；`kill_tree` 用 `killpg` 杀整组。
 //!
 //! 因时机不同，抽象接口分两阶段：`configure_command`（spawn 前）+ `attach`（spawn 后）。
+//!
+//! ## ⚠️ 为什么 Unix 侧【不】用 `PR_SET_PDEATHSIG`（GAP-008 的教训）
+//!
+//! `PDEATHSIG` 绑定的是**发起 `spawn()` 的那个线程**，不是进程。本项目的 spawn 发生在
+//! `tauri::async_runtime::spawn_blocking` 的线程池线程上——命令返回后该线程被回收，
+//! 内核随即按 `PDEATHSIG=SIGKILL` 把 dsh 子进程杀掉，表现为内嵌窗口"重新连接中"。
+//!
+//! 要让 `PDEATHSIG` 语义正确，必须把 `spawn()` 放在一个**生命周期与进程一致**的常驻线程上
+//! （见 docs/开发缺口.md 的 GAP-010）。当前未实现，故**不使用** `PDEATHSIG`：
+//! - 正常关窗 / 正常退出：`kill_tree`（killpg）负责清理
+//! - 管理器被 `kill -9`：靠**下次启动时的残留清理**兜底（见 GAP-010）
 
 use std::process::{Child, Command};
 
@@ -94,22 +105,15 @@ pub fn attach(child: &Child) -> Option<ProcessGuard> {
 #[cfg(unix)]
 pub struct ProcessGuard;
 
-/// spawn 前配置命令：
-/// - 让子进程成为**新进程组组长**（pgid = 子进程 pid），便于 `killpg` 杀整组
-/// - Linux 上设置 `PR_SET_PDEATHSIG=SIGKILL`：父（线程）死亡时子进程被内核杀，
-///   兜底"管理器被强杀、来不及跑清理代码"的情况
+/// spawn 前配置命令：让子进程成为**新进程组组长**（pgid = 子进程 pid），
+/// 便于 `kill_tree` 用 `killpg` 杀整组。
+///
+/// 注意：这里**不设** `PR_SET_PDEATHSIG`——它绑的是 spawn 线程而非进程，
+/// 会在池线程回收时误杀子进程（GAP-008）。详见模块头部注释。
 #[cfg(unix)]
 pub fn configure_command(cmd: &mut Command) {
     use std::os::unix::process::CommandExt;
     cmd.process_group(0);
-
-    #[cfg(target_os = "linux")]
-    unsafe {
-        cmd.pre_exec(|| {
-            libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL);
-            Ok(())
-        });
-    }
 }
 
 /// spawn 后：进程组已由 `configure_command` 设定，无需额外操作。
@@ -129,4 +133,66 @@ pub fn configure_command(_cmd: &mut Command) {}
 #[cfg(not(any(windows, unix)))]
 pub fn attach(_child: &Child) -> Option<ProcessGuard> {
     None
+}
+
+// ─────────────────────── 测试（GAP-008 回归） ───────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::process::{Command, Stdio};
+    use std::time::Duration;
+
+    fn alive_after(child: &mut Child, ms: u64) -> bool {
+        std::thread::sleep(Duration::from_millis(ms));
+        matches!(child.try_wait(), Ok(None))
+    }
+
+    // 对照实验（GAP-008）：
+    // - 实验组：configure_command（无 PDEATHSIG）→ 线程退出后子进程应存活
+    // - 对照组：手写 PDEATHSIG → 线程退出后子进程应被 SIGKILL
+    //
+    // 证明「去掉 PDEATHSIG」修复了内嵌窗口"重新连接中"（spawn 池线程回收误杀 dsh）。
+    #[cfg(unix)]
+    #[test]
+    fn gap008_pdeathsig_kills_child_on_thread_exit() {
+        let mut ok_child = {
+            let (tx, rx) = std::sync::mpsc::channel();
+            std::thread::spawn(move || {
+                let mut cmd = Command::new("sleep");
+                cmd.arg("5").stdout(Stdio::null()).stderr(Stdio::null());
+                configure_command(&mut cmd);
+                let child = cmd.spawn().expect("spawn sleep");
+                let _ = tx.send(child);
+            });
+            rx.recv_timeout(Duration::from_secs(3)).expect("no child")
+        };
+        let ok_alive = alive_after(&mut ok_child, 800);
+        let _ = ok_child.kill();
+        let _ = ok_child.wait();
+
+        let mut dead_child = {
+            let (tx, rx) = std::sync::mpsc::channel();
+            std::thread::spawn(move || {
+                let mut cmd = Command::new("sleep");
+                cmd.arg("5").stdout(Stdio::null()).stderr(Stdio::null());
+                unsafe {
+                    use std::os::unix::process::CommandExt;
+                    cmd.pre_exec(|| {
+                        libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL);
+                        Ok(())
+                    });
+                }
+                let child = cmd.spawn().expect("spawn sleep");
+                let _ = tx.send(child);
+            });
+            rx.recv_timeout(Duration::from_secs(3)).expect("no child")
+        };
+        let dead_alive = alive_after(&mut dead_child, 800);
+        let _ = dead_child.kill();
+        let _ = dead_child.wait();
+
+        assert!(ok_alive, "experimental child should be alive (no PDEATHSIG)");
+        assert!(!dead_alive, "control child should be killed by PDEATHSIG");
+    }
 }
