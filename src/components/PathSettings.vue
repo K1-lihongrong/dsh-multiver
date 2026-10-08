@@ -3,6 +3,7 @@ import { ref, watch } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import { useToast } from "../composables/useToast.js";
 import { useSharedHomeWarn } from "../composables/useSharedHomeWarn.js";
+import { themeMode, setTheme } from "../composables/useTheme.js";
 
 // 路径设置 + 维护面板。
 // state 由父组件传入（用于显示各目录路径与维护状态）；动作自包含（自己 invoke + emit refresh）。
@@ -143,6 +144,21 @@ function fmtTs(sec) {
       <span class="hint">点击任意路径可在资源管理器中打开</span>
     </div>
 
+    <!-- 外观 -->
+    <div class="maint">
+      <label class="checkbox-row" style="margin-bottom: 8px;">
+        <span style="font-weight: 600;">外观</span>
+      </label>
+      <div class="field-row">
+        <label style="font-size: 12px; color: var(--text-3);">主题</label>
+        <select class="input" style="flex: 1;" :value="themeMode" @change="setTheme($event.target.value)">
+          <option value="system">跟随系统</option>
+          <option value="light">亮色</option>
+          <option value="dark">暗色</option>
+        </select>
+      </div>
+    </div>
+
     <!-- 维护 -->
     <div class="maint" v-if="state">
       <label class="checkbox-row">
@@ -175,6 +191,12 @@ function fmtTs(sec) {
   border-radius: 7px; font-size: 13px; font-family: inherit; outline: none;
 }
 .field-row input:focus { border-color: var(--accent); }
+.field-row select {
+  flex: 1; padding: 8px 12px; border: 1px solid var(--border);
+  border-radius: 7px; font-size: 13px; font-family: inherit; outline: none;
+  background: var(--panel-bg); color: var(--text); cursor: pointer;
+}
+.field-row select:focus { border-color: var(--accent); }
 .checkbox-row {
   display: flex; align-items: center; gap: 8px;
   font-size: 12px; color: var(--text-3); margin: 4px 0 14px; cursor: pointer;

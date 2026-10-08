@@ -34,3 +34,10 @@ state/
 
 # AI 助手项目说明（本地辅助文件）
 .cuckoo/
+
+# 临时脚本 / 截图（开发过程产物，不进仓库）
+.ci-poll*.ps1
+.ci-poll*.log
+.wsl-*.sh
+.wsl-*.ps1
+docs/screenshots/theme/
