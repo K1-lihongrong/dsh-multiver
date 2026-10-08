@@ -1,6 +1,7 @@
-## DSH 版本管理器 v0.2.4-rc.1（预发布）
+## DSH 版本管理器 v0.2.4-rc.2（预发布）
 
 > ⚠️ **这是预发布版本（RC）**，主要用于**验证 Linux 支持**。
+> 相较 rc.1：新增 GAP-011（改 root 后清残留）、GAP-012（Node 下限判断修正）两个修复。
 > 请 Linux 用户协助测试 [征求协助](https://github.com/K1-lihongrong/dsh-multiver/blob/main/docs/征求协助.md) 中列出的项，
 > 尤其是**内嵌窗口能否正常连接**。验证通过后将发布正式版 v0.2.4。
 
