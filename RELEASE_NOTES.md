@@ -1,4 +1,8 @@
-## DSH 版本管理器 v0.2.4
+## DSH 版本管理器 v0.2.4-rc.1（预发布）
+
+> ⚠️ **这是预发布版本（RC）**，主要用于**验证 Linux 支持**。
+> 请 Linux 用户协助测试 [征求协助](https://github.com/K1-lihongrong/dsh-multiver/blob/main/docs/征求协助.md) 中列出的项，
+> 尤其是**内嵌窗口能否正常连接**。验证通过后将发布正式版 v0.2.4。
 
 ### 🐛 重要修复：Linux 下内嵌窗口「重新连接中」
 
