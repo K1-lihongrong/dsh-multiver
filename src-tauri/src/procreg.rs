@@ -313,13 +313,15 @@ mod tests {
     #[test]
     fn cleanup_skips_when_target_identity_mismatch() {
         let root = tmp("mismatch");
-        // 登记一个"组"= 自己的 pid，但 dsh_ident 填一个假的、必然不匹配的值
-        let me = std::process::id() as i32;
-        let mut list = vec![Entry {
-            pgid: me,
+        // 用一个**独立假 pgid**（不指向本进程组），避免身份判定若回归时
+        // killpg(自己) 连带干掉整个 cargo test 进程组。
+        // 取一个几乎不可能存在的 pid 作为 pgid。
+        let fake_pgid = 2147483000i32;
+        let list = vec![Entry {
+            pgid: fake_pgid,
             version: "fake".into(),
             at: 0,
-            owner_pid: 999999,      // 不存在的 owner → owner_alive=false
+            owner_pid: 2147483000,          // 不存在的 owner → owner_alive=false
             owner_ident: "nonexistent".into(),
             dsh_ident: "definitely-not-my-ident".into(), // 与真实身份不符
         }];
@@ -328,10 +330,13 @@ mod tests {
         // 身份不符 → 不发 kill；且条目被清掉
         assert_eq!(killed, 0, "身份不符时不应杀任何进程");
         assert!(load(&root).is_empty());
-        let _ = &mut list;
     }
 
     /// #1 回归：写入者（本进程）存活 → 其条目必须被保留，不被清理。
+    ///
+    /// 平台门控：非 Linux 上 `proc_ident` 返回 None → `owner_ident` 为空 →
+    /// `owner_alive` 恒 false → 该断言在 macOS 上必失败。仅 Linux 有意义。
+    #[cfg(target_os = "linux")]
     #[test]
     fn cleanup_keeps_entries_of_live_owner() {
         let root = tmp("live-owner");
@@ -344,16 +349,28 @@ mod tests {
         assert_eq!(list[0].pgid, 4242);
     }
 
-    /// #3 回归：连续 register 两个不同 pgid → 两条都在（无丢更新）。
+    /// #3 回归：**并发** register 多个不同 pgid → 全部保留（无丢更新）。
+    ///
+    /// 用真并发（多线程同时写）验证 flock 的互斥；若去掉锁，读-改-写交错会丢条目。
     #[test]
-    fn register_multiple_pgids_no_lost_update() {
-        let root = tmp("no-lost");
-        register(&root, 111, "v1");
-        register(&root, 222, "v2");
+    fn register_concurrent_no_lost_update() {
+        let root = tmp("no-lost-concurrent");
+        let mut handles = Vec::new();
+        for i in 0..8 {
+            let r = root.clone();
+            handles.push(std::thread::spawn(move || {
+                register(&r, 1000 + i, &format!("v{}", i));
+            }));
+        }
+        for h in handles {
+            h.join().unwrap();
+        }
         let list = load(&root);
-        assert_eq!(list.len(), 2);
+        assert_eq!(list.len(), 8, "并发 register 不应丢任何条目");
         let pgids: Vec<i32> = list.iter().map(|e| e.pgid).collect();
-        assert!(pgids.contains(&111) && pgids.contains(&222));
+        for i in 0..8 {
+            assert!(pgids.contains(&(1000 + i)), "缺少 pgid {}", 1000 + i);
+        }
     }
 }
 
