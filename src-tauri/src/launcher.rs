@@ -52,7 +52,7 @@ pub fn spawn_web_hidden(
         cmd.creation_flags(CREATE_NO_WINDOW);
     }
 
-    // spawn 前：平台相关配置（Unix 下设为新进程组 + PDEATHSIG；Windows 无操作）
+    // spawn 前：平台相关配置（Unix 下设为新进程组；Windows 无操作）
     crate::jobobj::configure_command(&mut cmd);
 
     let mut child = cmd.spawn().map_err(|e| format!("启动 dsh web 失败: {}", e))?;
@@ -648,7 +648,7 @@ pub fn spawn_web_console(
         cmd.creation_flags(CREATE_NEW_CONSOLE);
     }
 
-    // Unix：脱离父会话/终端，避免随管理器退出被 SIGHUP（配合新进程组 + PDEATHSIG 由 configure 设定）
+    // Unix：脱离父会话/终端，避免随管理器退出被 SIGHUP（配合新进程组，由 configure 设定）
     #[cfg(unix)]
     {
         cmd.stdin(std::process::Stdio::null())
@@ -656,7 +656,7 @@ pub fn spawn_web_console(
             .stderr(std::process::Stdio::null());
     }
 
-    // spawn 前：平台相关配置（Unix 下设为新进程组 + PDEATHSIG；Windows 无操作）
+    // spawn 前：平台相关配置（Unix 下设为新进程组；Windows 无操作）
     crate::jobobj::configure_command(&mut cmd);
 
     match cmd.spawn() {

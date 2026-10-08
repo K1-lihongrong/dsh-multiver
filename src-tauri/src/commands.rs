@@ -347,11 +347,18 @@ pub(crate) async fn launch_window(
         e
     })?;
 
+    // Unix：登记该 dsh 的进程组，供"管理器被强杀后下次启动清理"兜底（GAP-010）。
+    // Windows 无此需要（Job Object 是 OS 级保障）。
+    #[cfg(unix)]
+    crate::procreg::register(&dirs.root, child.id() as i32, &version);
+
     // 回到主线程建窗。
     // 先结束该版本的旧窗口/旧进程（若有）。
     let old = lock_procs(&procs).remove(&version);
     if let Some((old_label, _old_gen, mut old_child, _old_job)) = old {
         // 结束旧进程及其子进程树（kill 不 wait，避免阻塞）
+        #[cfg(unix)]
+        crate::procreg::unregister(&dirs.root, old_child.id() as i32);
         launcher::kill_tree(&mut old_child);
         // 关闭旧窗口（destroy 异步投递；因下面用新唯一 label，不受其影响）
         if let Some(existing) = app.get_webview_window(&old_label) {
@@ -418,6 +425,10 @@ pub(crate) async fn launch_window(
 
     lock_procs(&procs).insert(version.clone(), (label.clone(), generation, child, job));
 
+    // 关窗回调里要注销进程登记，故提前把 root 算好（闭包不能捕获 app —— 它随后还要用）
+    #[cfg(unix)]
+    let root_for_unregister = dirs.root.clone();
+
     let procs2 = procs.clone();
     let version2 = version.clone();
     window.on_window_event(move |event| {
@@ -427,6 +438,9 @@ pub(crate) async fn launch_window(
             let should_kill = matches!(map.get(&version2), Some((_, g, _, _)) if *g == generation);
             if should_kill {
                 if let Some((_, _, mut child, _job)) = map.remove(&version2) {
+                    // Unix：正常关窗能跑到这里，注销登记（避免下次启动误清）
+                    #[cfg(unix)]
+                    crate::procreg::unregister(&root_for_unregister, child.id() as i32);
                     // 结束整棵进程树；不 wait，避免阻塞事件线程导致关窗卡顿
                     launcher::kill_tree(&mut child);
                 }

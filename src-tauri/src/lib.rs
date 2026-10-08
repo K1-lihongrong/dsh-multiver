@@ -7,6 +7,8 @@ mod jobobj;
 mod launcher;
 mod logging;
 mod maintenance;
+#[cfg(unix)]
+mod procreg;
 mod versions;
 mod window;
 
@@ -158,6 +160,25 @@ pub fn run() {
                 });
             }
 
+            // Unix：启动时清理上次被强杀/崩溃残留的 dsh 进程组（GAP-010 兜底）。
+            // 正常退出/关窗会注销登记，故这里通常无事可做；只有强杀场景才有残留。
+            #[cfg(unix)]
+            {
+                let app_handle = app.handle().clone();
+                std::thread::spawn(move || {
+                    let mdir = manager_dir(&app_handle);
+                    let root = Config::load(&mdir).resolve_root(&mdir);
+                    let n = procreg::cleanup_stale(&root);
+                    if n > 0 {
+                        logging::write_line(
+                            &root.join("logs"),
+                            "maintenance.log",
+                            &format!("启动清理残留 dsh 进程组：{} 个", n),
+                        );
+                    }
+                });
+            }
+
             // 后台维护（不阻塞界面）：
             //  1) 立即清理孤立 webview 目录（毫秒级）
             //  2) 延迟 + 7 天节流跑 pnpm store prune（重 IO，独立线程 + 低优先级）
@@ -220,6 +241,13 @@ pub fn run() {
                 // 退出时兜底清理所有 dsh 子进程，避免残留
                 let mut map = lock_procs(&procs);
                 for (_, (_, _, child, _job)) in map.iter_mut() {
+                    // Unix：正常退出能跑到这里，注销登记（避免下次启动误清）
+                    #[cfg(unix)]
+                    {
+                        let mdir = manager_dir(_app);
+                        let root = Config::load(&mdir).resolve_root(&mdir);
+                        crate::procreg::unregister(&root, child.id() as i32);
+                    }
                     launcher::kill_tree(child);
                 }
                 map.clear();
