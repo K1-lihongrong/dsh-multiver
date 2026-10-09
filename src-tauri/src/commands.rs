@@ -737,6 +737,20 @@ pub(crate) fn set_isolated(app: tauri::AppHandle, version: String, isolated: boo
     }
 }
 
+/// 检查是否有新版本（更新提醒，C1）。网络请求放后台线程，绝不阻塞 UI。
+#[tauri::command]
+pub(crate) async fn check_update() -> crate::updater::UpdateInfo {
+    tauri::async_runtime::spawn_blocking(crate::updater::check)
+        .await
+        .unwrap_or_else(|_| crate::updater::UpdateInfo {
+            has_update: false,
+            current: cli::VERSION.to_string(),
+            latest: None,
+            release_url: None,
+            download_url: None,
+        })
+}
+
 /// 设置「复用官方 dsh 配置目录（~/.dsh）」开关。
 ///
 /// 开启后，非隔离版本的 DSH_HOME 指向官方默认目录，用户已有的会话/凭据/插件立即可用；
