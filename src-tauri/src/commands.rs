@@ -288,6 +288,11 @@ pub(crate) fn regenerate_forward_script(mdir: &PathBuf, cfg: &Config) {
 /// - Windows：优先 `%APPDATA%\npm`（npm 全局 bin），否则管理器目录
 /// - Unix：优先 `~/.local/bin`（XDG，多数发行版已在 PATH），其次 `~/.local/share/pnpm`、
 ///   `~/.npm-global/bin`；都不存在则创建 `~/.local/bin`。最后回退管理器目录。
+/// 转发脚本所在目录（供 CLI 检测冲突复用）。
+pub(crate) fn forward_script_dir(manager: &PathBuf) -> PathBuf {
+    path_bin_dir(manager)
+}
+
 #[cfg(windows)]
 fn path_bin_dir(manager: &PathBuf) -> PathBuf {
     if let Ok(appdata) = std::env::var("APPDATA") {
