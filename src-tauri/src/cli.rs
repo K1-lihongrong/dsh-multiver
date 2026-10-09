@@ -59,6 +59,8 @@ pub enum CliCommand {
     },
     /// 清理：孤立 webview 缓存 + 回收站（等价 maintenance --cleanup + trash）
     Clean,
+    /// 一键诊断：聚合检查（目录 / broken / 残留登记 / 环境 / 日志）
+    Doctor,
     Help,
     Version,
 }
@@ -84,6 +86,7 @@ fn is_cli_flag(a: &str) -> bool {
             | "--env"
             | "--isolate"
             | "--clean"
+            | "--doctor"
             | "--help"
             | "-h"
             | "--version"
@@ -159,6 +162,7 @@ pub fn parse(args: &[String]) -> Result<Option<CliCommand>, String> {
                 return Ok(Some(CliCommand::Isolate { version, on }));
             }
             "--clean" => return Ok(Some(CliCommand::Clean)),
+            "--doctor" => return Ok(Some(CliCommand::Doctor)),
             "--maintenance" => {
                 let kind = if args.iter().any(|x| x == "--cleanup") {
                     "cleanup"
@@ -326,6 +330,7 @@ pub fn run(cmd: CliCommand, dry_run: bool, json: bool) -> i32 {
         CliCommand::Env => cmd_env(json),
         CliCommand::Isolate { version, on } => cmd_isolate(&version, on, dry_run, json),
         CliCommand::Clean => cmd_clean(dry_run, json),
+        CliCommand::Doctor => cmd_doctor(json),
     }
 }
 
@@ -654,6 +659,79 @@ fn cmd_maintenance(kind: &str, dry_run: bool, json: bool) -> i32 {
     0
 }
 
+/// `--doctor`：一键诊断。聚合检查项，每项 ✓/✗ + 说明；有致命项失败 → 退出码 1。
+fn cmd_doctor(json: bool) -> i32 {
+    let ctx = load_ctx();
+    let mut items: Vec<serde_json::Value> = Vec::new();
+    let mut fatal = false;
+
+    // 1) 数据根目录存在 / 可写
+    let root = &ctx.dirs.root;
+    let root_exists = root.exists();
+    let root_writable = std::fs::metadata(root).map(|m| !m.permissions().readonly()).unwrap_or(false);
+    let root_ok = root_exists && root_writable;
+    if !root_ok { fatal = true; }
+    items.push(serde_json::json!({
+        "name": "数据根目录", "ok": root_ok, "critical": true,
+        "detail": if !root_exists { format!("不存在：{}", root.to_string_lossy()) }
+                  else if !root_writable { format!("不可写：{}", root.to_string_lossy()) }
+                  else { root.to_string_lossy().to_string() },
+    }));
+
+    // 2) 各子目录存在
+    for (label, path) in [
+        ("versions", &ctx.dirs.versions),
+        ("store", &ctx.dirs.store),
+        ("home", &ctx.dirs.home),
+    ] {
+        let ok = path.exists();
+        items.push(serde_json::json!({
+            "name": format!("目录 {}", label), "ok": ok, "critical": false,
+            "detail": path.to_string_lossy(),
+        }));
+    }
+
+    // 3) broken 版本
+    let broken = &ctx.cfg.broken_versions;
+    items.push(serde_json::json!({
+        "name": "失败版本标记", "ok": broken.is_empty(), "critical": false,
+        "detail": if broken.is_empty() { "无".to_string() }
+                  else { format!("{} 个：{}", broken.len(), broken.join(", ")) },
+    }));
+
+    // 4) 已安装版本数
+    let installed = versions::list(&ctx.dirs.versions, ctx.cfg.default_version.as_deref(), &ctx.cfg.isolated_versions);
+    items.push(serde_json::json!({
+        "name": "已安装版本", "ok": !installed.is_empty(), "critical": false,
+        "detail": if installed.is_empty() { "无".to_string() }
+                  else { format!("{} 个", installed.len()) },
+    }));
+
+    // 5) 环境检查（Node / pnpm / 磁盘 / npm 源等）
+    let env_items = crate::envcheck::run_all(&ctx.dirs.root);
+    for it in &env_items {
+        if it.critical && !it.ok { fatal = true; }
+        items.push(serde_json::json!({
+            "name": it.name, "ok": it.ok, "critical": it.critical, "detail": it.detail,
+        }));
+    }
+
+    let _ = root;
+
+    if json {
+        println!("{}", json_str(&serde_json::json!({ "ok": !fatal, "items": items })));
+    } else {
+        for it in &items {
+            let ok = it["ok"].as_bool().unwrap_or(false);
+            let name = it["name"].as_str().unwrap_or("");
+            let detail = it["detail"].as_str().unwrap_or("");
+            let crit = if it["critical"].as_bool().unwrap_or(false) { "" } else { "（非致命）" };
+            println!("[{}] {}{}  {}", if ok { "✓" } else { "✗" }, name, crit, detail);
+        }
+    }
+    if fatal { 1 } else { 0 }
+}
+
 /// `--isolate <版本> [--off]`：开关数据隔离（默认开启；--off 关闭）。
 /// 与 GUI 的 set_isolated 行为一致：改配置 + 预创建隔离目录 + 重生成转发脚本。
 fn cmd_isolate(version: &str, on: bool, dry_run: bool, json: bool) -> i32 {
@@ -869,6 +947,7 @@ fn print_help() {
   dsh-multiver --env [--json]
   dsh-multiver --isolate <版本> [--off]
   dsh-multiver --clean
+  dsh-multiver --doctor [--json]
   dsh-multiver --maintenance [--cleanup | --prune]
   dsh-multiver --help
   dsh-multiver --version [--json]
@@ -881,6 +960,7 @@ fn print_help() {
   --env          环境检查（有致命项失败时退出码 1）
   --isolate      开启某版本的数据隔离（加 --off 则关闭）
   --clean        清理孤立缓存 + 回收站（maintenance --cleanup 的超集）
+  --doctor       一键诊断（目录 / 失败标记 / 已安装 / 环境）；有致命项失败时退出码 1
   --install      安装指定版本；--registry 可指定 npm 源（默认官方源）
   --uninstall    卸载指定版本
   --set-default  设为默认版本，并重生成终端 dsh 命令
@@ -982,6 +1062,12 @@ mod tests {
         }
         // 缺参数值 → 报错
         assert!(parse(&args(&["--info"])).is_err());
+    }
+
+    #[test]
+    fn doctor_command() {
+        assert!(matches!(parse(&args(&["--doctor"])), Ok(Some(CliCommand::Doctor))));
+        assert!(matches!(parse(&args(&["--doctor", "--json"])), Ok(Some(CliCommand::Doctor))));
     }
 
     #[test]
