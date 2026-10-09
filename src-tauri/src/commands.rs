@@ -731,6 +731,34 @@ pub(crate) fn set_isolated(app: tauri::AppHandle, version: String, isolated: boo
     }
 }
 
+/// 设置「复用官方 dsh 配置目录（~/.dsh）」开关。
+///
+/// 开启后，非隔离版本的 DSH_HOME 指向官方默认目录，用户已有的会话/凭据/插件立即可用；
+/// 隔离版本不受影响。切换后重生成转发脚本，保证 GUI 与终端行为一致。
+#[tauri::command]
+pub(crate) fn set_use_official_home(app: tauri::AppHandle, enabled: bool) -> Result<String, String> {
+    let mdir = manager_dir(&app);
+    let mut cfg = Config::load(&mdir);
+    cfg.use_official_dsh_home = enabled;
+    cfg.save(&mdir).map_err(|e| format!("保存配置失败: {}", e))?;
+    // 非隔离版本的 home 来源变了：重生成转发脚本
+    regenerate_forward_script(&mdir, &cfg);
+    if enabled {
+        let path = official_dsh_home()
+            .map(|p| p.to_string_lossy().to_string())
+            .unwrap_or_else(|| "~/.dsh".to_string());
+        Ok(format!("已复用官方配置目录：{}", path))
+    } else {
+        Ok("已恢复为管理器共享配置目录".to_string())
+    }
+}
+
+/// 查询官方 dsh 配置目录路径（供前端展示/判断是否存在）。
+#[tauri::command]
+pub(crate) fn get_official_home() -> Option<String> {
+    official_dsh_home().map(|p| p.to_string_lossy().to_string())
+}
+
 /// 扫描整个版本目录的占用（含依赖 + 隔离 home），返回总量 + 共享/独占详情。
 #[tauri::command]
 pub(crate) async fn scan_version_size(app: tauri::AppHandle, version: String) -> Result<versions::SizeInfo, String> {

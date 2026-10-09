@@ -107,6 +107,8 @@ pub fn run() {
             commands::open_url,
             commands::check_env,
             commands::set_isolated,
+            commands::set_use_official_home,
+            commands::get_official_home,
             commands::scan_version_size,
             commands::run_maintenance,
             commands::set_auto_maintenance,
