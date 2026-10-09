@@ -10,6 +10,8 @@
 ## [Unreleased]
 
 ### 新增
+- **CLI `--doctor`**：一键诊断，聚合检查数据根目录 / 各子目录 / 失败版本标记 /
+  已安装版本 / 环境（Node / pnpm / 磁盘 / npm 源）；有致命项失败时**退出码 1**；支持 `--json`。
 - **CLI `--isolate <版本> [--off]`**：无头开关数据隔离（默认开启，`--off` 关闭），
   与 GUI 行为一致（改配置 + 重生成转发脚本）；支持 `--dry-run` / `--json`。
 - **CLI `--clean`**：清理孤立 webview 缓存 **+ 清空卸载回收站**（`--maintenance --cleanup` 的超集）；
