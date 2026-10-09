@@ -22,6 +22,9 @@ const MESSAGES = {
     "app.rootDir": "根目录",
     "app.toastHint": "点击查看完整内容",
     "app.openLinkFailed": "打开链接失败",
+    "update.available": "发现新版本 {latest}（当前 {current}）",
+    "update.download": "下载更新",
+    "update.viewRelease": "查看更新说明",
     "app.launchCrashed": "版本 {v} 启动后立即退出，请查看日志。",
     "env.checkFailed": "环境检查失败",
 
@@ -182,6 +185,9 @@ const MESSAGES = {
     "app.rootDir": "Root",
     "app.toastHint": "Click to view full content",
     "app.openLinkFailed": "Failed to open link",
+    "update.available": "New version {latest} available (current {current})",
+    "update.download": "Download",
+    "update.viewRelease": "Release notes",
     "app.launchCrashed": "Version {v} exited right after launch; check the logs.",
     "env.checkFailed": "Environment check failed",
 
@@ -342,6 +348,9 @@ const MESSAGES = {
     "app.rootDir": "ルート",
     "app.toastHint": "クリックで全文を表示",
     "app.openLinkFailed": "リンクを開けませんでした",
+    "update.available": "新しいバージョン {latest} があります（現在 {current}）",
+    "update.download": "ダウンロード",
+    "update.viewRelease": "リリースノート",
     "app.launchCrashed": "バージョン {v} が起動直後に終了しました。ログを確認してください。",
     "env.checkFailed": "環境チェックに失敗",
 
@@ -502,6 +511,9 @@ const MESSAGES = {
     "app.rootDir": "根目錄",
     "app.toastHint": "點擊查看完整內容",
     "app.openLinkFailed": "開啟連結失敗",
+    "update.available": "發現新版本 {latest}（目前 {current}）",
+    "update.download": "下載更新",
+    "update.viewRelease": "查看更新說明",
     "app.launchCrashed": "版本 {v} 啟動後立即結束，請查看日誌。",
     "env.checkFailed": "環境檢查失敗",
 

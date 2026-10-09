@@ -11,6 +11,9 @@ import RemoteList from "./components/RemoteList.vue";
 
 const state = ref(null);
 const installed = ref([]);
+// 更新提醒（C1）：查到有新版则显示横幅；可关闭（本次会话内不再提示）
+const updateInfo = ref(null);
+const updateDismissed = ref(false);
 // toast（通知）由 useToast 提供（模块级单例，与拆出的组件共享）
 const { toast, toastExpanded, notify, dismissToast, toggleToast } = useToast();
 const envCheckRef = ref(null);  // <EnvCheck> 组件引用（安装前调 run()）
@@ -36,6 +39,14 @@ async function clearDefault() {
 async function openUrl(url) {
   try { await invoke("open_url", { url }); }
   catch (e) { notify(t("app.openLinkFailed") + "：" + e); }
+}
+
+/// 更新检查（后台，静默失败）
+async function checkUpdate() {
+  try {
+    const info = await invoke("check_update");
+    if (info && info.has_update) updateInfo.value = info;
+  } catch (_) { /* 静默：更新检查不该打扰用户 */ }
 }
 
 async function openDir(which) {
@@ -65,6 +76,8 @@ onMounted(async () => {
     notify(p.message || t("app.launchCrashed", { v: p.version }));
   });
   await runEnvCheck();
+  // 更新检查放最后，且不 await 阻塞（网络慢时不影响界面可用）
+  checkUpdate();
 });
 
 onUnmounted(() => {
@@ -89,6 +102,21 @@ onUnmounted(() => {
   </header>
 
   <main class="content">
+    <div class="update-banner" v-if="updateInfo && !updateDismissed">
+      <span class="update-text">
+        {{ t("update.available", { latest: updateInfo.latest, current: updateInfo.current }) }}
+      </span>
+      <span class="update-actions">
+        <button class="btn small primary" @click="openUrl(updateInfo.download_url || updateInfo.release_url)">
+          {{ updateInfo.download_url ? t("update.download") : t("update.viewRelease") }}
+        </button>
+        <button class="btn small" v-if="updateInfo.release_url && updateInfo.download_url" @click="openUrl(updateInfo.release_url)">
+          {{ t("update.viewRelease") }}
+        </button>
+        <button class="btn small" @click="updateDismissed = true">×</button>
+      </span>
+    </div>
+
     <EnvCheck ref="envCheckRef" @open-url="openUrl" @error="notify" />
 
     <InstalledList
@@ -165,6 +193,15 @@ onUnmounted(() => {
   flex: 1; overflow-y: auto; padding: 18px 22px 28px;
   display: flex; flex-direction: column; gap: 16px;
 }
+
+.update-banner {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  padding: 10px 14px; border-radius: 9px;
+  background: var(--accent-weak); border: 1px solid var(--accent-border);
+  font-size: 13px; flex-wrap: wrap;
+}
+.update-text { color: var(--text); }
+.update-actions { display: flex; gap: 8px; align-items: center; }
 
 .toast {
   position: fixed; bottom: 22px; left: 50%; transform: translateX(-50%);
