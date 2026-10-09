@@ -140,6 +140,18 @@ mod tests {
         assert!(!is_newer("0.2.5-rc.1", "0.2.5"));
     }
 
+    /// 真实网络测试（默认忽略；手动 --ignored 跑）。验证 check() 链路。
+    #[test]
+    #[ignore]
+    fn live_check_returns_info() {
+        let info = check();
+        eprintln!("LIVE: has_update={} current={} latest={:?} url={:?} dl={:?}",
+            info.has_update, info.current, info.latest, info.release_url, info.download_url);
+        // 当前本地 0.2.6 > 线上 0.2.5 → 不应提示更新
+        assert!(info.latest.is_some(), "应能解析出线上版本");
+        assert!(!info.has_update, "本地更新时不应提示");
+    }
+
     #[test]
     fn garbage_is_not_newer() {
         assert!(!is_newer("abc", "0.2.5"));
