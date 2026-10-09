@@ -62,6 +62,37 @@ pub fn list_remote(store_dir: &Path, cache_dir: &Path, state_dir: &Path) -> (boo
     (true, versions, String::new())
 }
 
+/// 管理器生成的转发脚本的标记（用于识别"这是管理器写的，不是官方 dsh"）。
+/// 卸载/覆盖时据此判断，避免误删官方 `npm i -g` 装的 dsh。
+pub const FORWARD_SCRIPT_MARKER: &str = "dsh-multiver-generated";
+
+/// 判断某脚本内容是否是管理器生成的（含标记）。
+pub fn is_forward_script(content: &str) -> bool {
+    content.contains(FORWARD_SCRIPT_MARKER)
+}
+
+/// 检查给定路径是否已存在**非管理器生成**的 dsh 命令（可能是官方装的）。
+/// 返回 Some(路径) 表示存在且非本管理器所有 → 调用方应提示用户。
+pub fn existing_foreign_dsh(dir: &Path) -> Option<std::path::PathBuf> {
+    #[cfg(windows)]
+    let p = dir.join("dsh.cmd");
+    #[cfg(not(windows))]
+    let p = dir.join("dsh");
+    if !p.exists() {
+        return None;
+    }
+    match std::fs::read_to_string(&p) {
+        Ok(content) => {
+            if is_forward_script(&content) {
+                None // 是本管理器生成的，可安全覆盖
+            } else {
+                Some(p) // 别人家的
+            }
+        }
+        Err(_) => Some(p), // 读不了，保守视为"别人家的"
+    }
+}
+
 /// 生成 dsh.cmd 转发脚本内容。
 ///
 /// - version: 默认版本号
@@ -86,6 +117,8 @@ pub fn build_forward_script(version: &str, root_dir: &str, dsh_home: &str) -> St
     let home = dsh_home.replace('/', "\\");
     let mut s = String::new();
     s.push_str("@echo off\r\n");
+    // 标记：管理器生成的转发脚本（供识别，避免误删官方 dsh）
+    s.push_str(&format!("rem {}\r\n", FORWARD_SCRIPT_MARKER));
     s.push_str("setlocal\r\n");
     // Node 能力守卫：dsh 依赖 import.meta.main（Node 22.19+ / 24+）；缺失时 dsh 会静默
     // 退出（零输出、exit 0），用户会以为"命令没反应"。这里提前拦下并说明。
@@ -123,6 +156,7 @@ pub fn build_forward_script(version: &str, root_dir: &str, dsh_home: &str) -> St
     let home = dsh_home;
     format!(
         "#!/bin/sh\n\
+         # {marker}\n\
          # dsh-multiver 转发脚本（自动生成，请勿手改）\n\
          # Node 能力守卫：dsh 依赖 import.meta.main（Node 22.19+ / 24+）；缺失时\n\
          # dsh 会静默退出（零输出、exit 0），用户会以为\"命令没反应\"。这里提前拦下并说明。\n\
@@ -147,7 +181,8 @@ pub fn build_forward_script(version: &str, root_dir: &str, dsh_home: &str) -> St
          exec \"$BIN\" \"$@\"\n",
         version = version,
         root = root,
-        home = home
+        home = home,
+        marker = FORWARD_SCRIPT_MARKER
     )
 }
 

@@ -92,7 +92,26 @@ async function openInBrowser(v) {
 }
 
 async function setDefault(v) {
-  try { notify(await invoke("set_default", { version: v })); emit("refresh"); }
+  try {
+    notify(await invoke("set_default", { version: v }));
+    emit("refresh");
+  } catch (e) {
+    const msg = String(e);
+    // GAP-014：目标位置已有"非本管理器"的 dsh 命令 → 确认是否覆盖
+    const prefix = "DSH_CONFLICT:";
+    if (msg.startsWith(prefix)) {
+      const path = msg.slice(prefix.length);
+      const ok = await ask(t("installed.dshConflict", { path }), { title: t("installed.dshConflictTitle"), kind: "warning" });
+      if (ok) {
+        try {
+          notify(await invoke("set_default", { version: v, force: true }));
+          emit("refresh");
+        } catch (e2) { notify("" + e2); }
+      }
+    } else {
+      notify(msg);
+    }
+  }
   catch (e) { notify("" + e); }
 }
 

@@ -212,8 +212,12 @@ pub(crate) async fn uninstall_version(app: tauri::AppHandle, version: String) ->
     if ok { Ok(msg) } else { Err(msg) }
 }
 
+/// set_default 检测到"非管理器生成的同名 dsh 命令"时，返回此前缀的错误，
+/// 前端据此弹出确认框，用户确认后再以 force=true 重调。
+pub(crate) const CONFLICT_PREFIX: &str = "DSH_CONFLICT:";
+
 #[tauri::command]
-pub(crate) fn set_default(app: tauri::AppHandle, version: Option<String>) -> Result<String, String> {
+pub(crate) fn set_default(app: tauri::AppHandle, version: Option<String>, force: Option<bool>) -> Result<String, String> {
     let mdir = manager_dir(&app);
     let mut cfg = Config::load(&mdir);
     let dirs = Dirs::new(cfg.resolve_root(&mdir));
@@ -222,6 +226,20 @@ pub(crate) fn set_default(app: tauri::AppHandle, version: Option<String>) -> Res
             return Err(format!("版本 {} 未安装", v));
         }
     }
+
+    // GAP-014：设为默认（会写转发脚本）前，检测目标位置是否已有"非本管理器"的 dsh 命令。
+    // 有且用户未确认（force != Some(true)）→ 返回带前缀的提示，让前端确认。
+    if version.is_some() && force != Some(true) {
+        let target = path_bin_dir(&mdir);
+        if let Some(p) = actions::existing_foreign_dsh(&target) {
+            return Err(format!(
+                "{}{}",
+                CONFLICT_PREFIX,
+                p.to_string_lossy()
+            ));
+        }
+    }
+
     cfg.default_version = version.clone();
     cfg.save(&mdir).map_err(|e| e.to_string())?;
 
@@ -251,10 +269,16 @@ pub(crate) fn regenerate_forward_script(mdir: &PathBuf, cfg: &Config) {
             let _ = actions::write_forward_script(&target, &script);
         }
         None => {
+            // GAP-014：只删"本管理器生成的"转发脚本，避免误删官方 npm i -g 装的 dsh。
             #[cfg(windows)]
-            let _ = std::fs::remove_file(target.join("dsh.cmd"));
+            let p = target.join("dsh.cmd");
             #[cfg(unix)]
-            let _ = std::fs::remove_file(target.join("dsh"));
+            let p = target.join("dsh");
+            if let Ok(content) = std::fs::read_to_string(&p) {
+                if actions::is_forward_script(&content) {
+                    let _ = std::fs::remove_file(&p);
+                }
+            }
         }
     }
 }
