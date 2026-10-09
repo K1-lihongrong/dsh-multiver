@@ -57,7 +57,7 @@ defineExpose({ run });
           <span class="env-critical" v-if="!c.ok && !c.critical">{{ t("env.nonCritical") }}</span>
         </div>
         <div class="env-guide" v-if="!c.ok && c.install_hint">
-          <span class="env-guide-text">{{ c.install_hint }}</span>
+          <span class="env-guide-text">{{ c.hint_key ? t(c.hint_key) : c.install_hint }}</span>
           <button
             v-if="c.install_url"
             class="btn small primary"
