@@ -39,6 +39,10 @@ pub(crate) struct AppState {
     manager_dir: String,
     broken_versions: Vec<String>,
     maintenance: config::MaintenanceConfig,
+    /// 是否复用官方 dsh 配置目录（~/.dsh）
+    use_official_dsh_home: bool,
+    /// 官方 dsh 配置目录路径（用于界面展示）；无法确定主目录时为 None
+    official_home_dir: Option<String>,
 }
 
 #[tauri::command]
@@ -83,6 +87,8 @@ pub(crate) fn get_state(app: tauri::AppHandle) -> AppState {
         manager_dir: mdir.to_string_lossy().to_string(),
         broken_versions: cfg.broken_versions.clone(),
         maintenance: cfg.maintenance.clone(),
+        use_official_dsh_home: cfg.use_official_dsh_home,
+        official_home_dir: official_dsh_home().map(|p| p.to_string_lossy().to_string()),
     }
 }
 
