@@ -66,7 +66,8 @@ pub fn list_remote(store_dir: &Path, cache_dir: &Path, state_dir: &Path) -> (boo
 ///
 /// - version: 默认版本号
 /// - root_dir: 数据根目录（绝对路径）
-/// - isolated: 该默认版本是否开启隔离（决定 DSH_HOME 指向共享 home 还是独立 home）
+/// - dsh_home: 该版本的 DSH_HOME（由 `commands::resolve_home` 算好传入，
+///   已含隔离 / 复用官方 ~/.dsh / 管理器共享 三种情况的最终路径）
 ///
 /// 版本号、根目录、DSH_HOME 都**直接写死在脚本里**（由 Rust 在生成时算好），
 /// 避免批处理解析 config.json 的脆弱性。
