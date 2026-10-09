@@ -737,7 +737,15 @@ fn cmd_doctor(json: bool) -> i32 {
                   else { format!("{} 个", installed.len()) },
     }));
 
-    // 5) 环境检查（Node / pnpm / 磁盘 / npm 源等）
+    // 5) 孤立 webview 目录（版本已卸载但 webview 残留）——只报告，不自动删
+    let orphans = crate::maintenance::list_orphan_webviews(&ctx.dirs.versions, &ctx.dirs.webview);
+    items.push(serde_json::json!({
+        "name": "孤立 webview 缓存", "ok": orphans.is_empty(), "critical": false,
+        "detail": if orphans.is_empty() { "无".to_string() }
+                  else { format!("{} 个：{}（可跑 --clean 清理）", orphans.len(), orphans.join(", ")) },
+    }));
+
+    // 6) 环境检查（Node / pnpm / 磁盘 / npm 源等）
     let env_items = crate::envcheck::run_all(&ctx.dirs.root);
     for it in &env_items {
         if it.critical && !it.ok { fatal = true; }

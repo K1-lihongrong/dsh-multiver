@@ -44,6 +44,32 @@ pub fn cleanup_orphan_webviews(versions_dir: &Path, webview_dir: &Path) -> Vec<S
     removed
 }
 
+/// 列出孤立的 webview 目录（版本已不存在），**只列不删**（供 `--doctor` 报告）。
+pub fn list_orphan_webviews(versions_dir: &Path, webview_dir: &Path) -> Vec<String> {
+    let mut alive: std::collections::HashSet<String> = std::collections::HashSet::new();
+    if let Ok(rd) = std::fs::read_dir(versions_dir) {
+        for e in rd.flatten() {
+            if e.path().is_dir() {
+                alive.insert(e.file_name().to_string_lossy().to_string());
+            }
+        }
+    }
+    let mut orphans = Vec::new();
+    if let Ok(rd) = std::fs::read_dir(webview_dir) {
+        for e in rd.flatten() {
+            if !e.path().is_dir() {
+                continue;
+            }
+            let name = e.file_name().to_string_lossy().to_string();
+            if !alive.contains(&name) {
+                orphans.push(name);
+            }
+        }
+    }
+    orphans.sort();
+    orphans
+}
+
 /// 清理「回收站」里残留的目录（卸载时 rename 进来的，后台删除可能被中断）。
 ///
 /// 启动时调用一次，把 `trash/` 下所有条目删掉。返回删除的条目数。
@@ -110,6 +136,22 @@ mod tests {
         let _ = std::fs::remove_dir_all(&p);
         std::fs::create_dir_all(&p).unwrap();
         p
+    }
+
+    #[test]
+    fn list_orphan_webviews_reports_without_deleting() {
+        let base = tmp("list-orphan");
+        let versions = base.join("versions");
+        let webview = base.join("webview");
+        std::fs::create_dir_all(versions.join("0.1.7")).unwrap();
+        std::fs::create_dir_all(webview.join("0.1.7")).unwrap();       // 存活
+        std::fs::create_dir_all(webview.join("0.1.6")).unwrap();       // 孤儿
+        let orphans = list_orphan_webviews(&versions, &webview);
+        assert_eq!(orphans, vec!["0.1.6".to_string()]);
+        // 只列不删
+        assert!(webview.join("0.1.6").exists(), "不应删除");
+        assert!(webview.join("0.1.7").exists());
+        let _ = std::fs::remove_dir_all(&base);
     }
 
     #[test]
