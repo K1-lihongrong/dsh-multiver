@@ -1,7 +1,7 @@
 <script setup>
 import { ref, watch } from "vue";
 import { invoke } from "@tauri-apps/api/core";
-import { save } from "@tauri-apps/plugin-dialog";
+import { save, open, ask } from "@tauri-apps/plugin-dialog";
 import { useToast } from "../composables/useToast.js";
 import { useSharedHomeWarn } from "../composables/useSharedHomeWarn.js";
 import { themeMode, setTheme } from "../composables/useTheme.js";
@@ -107,6 +107,37 @@ async function exportBackup() {
   }
 }
 
+/// 导入配置（换机迁移）
+async function importBackup() {
+  try {
+    const file = await open({
+      title: t("paths.importBackup"),
+      multiple: false,
+      filters: [{ name: "JSON", extensions: ["json"] }],
+    });
+    if (!file) return; // 用户取消
+    const filePath = typeof file === "string" ? file : file.path;
+    // 先预览
+    const preview = await invoke("preview_import", { file: filePath });
+    const lines = [];
+    lines.push(t("paths.importPreviewChanges"));
+    lines.push(preview.changes.length ? preview.changes.map((c) => "· " + c).join("\n") : t("paths.importNoChanges"));
+    if (preview.missing_versions.length) {
+      lines.push("");
+      lines.push(t("paths.importMissing", { list: preview.missing_versions.join(", ") }));
+    }
+    lines.push("");
+    lines.push(t("paths.importConfirm"));
+    const ok = await ask(lines.join("\n"), { title: t("paths.importBackup"), kind: "warning" });
+    if (!ok) return;
+    const applied = await invoke("apply_import", { file: filePath });
+    notify(applied.length ? t("paths.importDone", { list: applied.join("、") }) : t("paths.importNoChanges"));
+    emit("refresh");
+  } catch (e) {
+    notify("" + e);
+  }
+}
+
 /// unix 秒 -> 可读时间
 function fmtTs(sec) {
   if (!sec) return t("paths.never");
@@ -135,6 +166,7 @@ function fmtTs(sec) {
 
     <div class="field-row" style="margin-bottom: 14px;">
       <button class="btn small" @click="exportBackup">{{ t("paths.exportBackup") }}</button>
+      <button class="btn small" @click="importBackup">{{ t("paths.importBackup") }}</button>
       <span class="hint" style="font-size: 12px;">{{ t("paths.exportBackupHint") }}</span>
     </div>
 
