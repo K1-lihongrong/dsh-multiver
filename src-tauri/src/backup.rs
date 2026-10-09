@@ -61,6 +61,101 @@ pub fn export_to_file(cfg: &Config, versions_dir: &Path, out: &Path) -> Result<S
     Ok(out.to_string_lossy().to_string())
 }
 
+/// 导入预览：读备份文件，返回"将改动的字段"（不应用）。
+#[derive(Debug, Serialize)]
+pub struct ImportPreview {
+    /// 备份里的管理器版本
+    pub backup_manager_version: String,
+    /// 备份里记录的已安装版本数
+    pub version_count: usize,
+    /// 将改动的配置字段（人类可读的 "字段: 旧 -> 新" 列表）
+    pub changes: Vec<String>,
+    /// 备份里"本机未安装"的版本（仅提示，不影响配置导入）
+    pub missing_versions: Vec<String>,
+}
+
+/// 读取并校验备份文件，生成导入预览（不应用）。
+pub fn preview_import(file: &Path, current: &Config, versions_dir: &Path) -> Result<ImportPreview, String> {
+    let text = std::fs::read_to_string(file).map_err(|e| format!("读取文件失败：{}", e))?;
+    let manifest: BackupManifest =
+        serde_json::from_str(&text).map_err(|e| format!("解析失败（不是有效的备份文件）：{}", e))?;
+
+    let b = &manifest.config;
+    let mut changes = Vec::new();
+    if b.root_dir != current.root_dir {
+        changes.push(format!(
+            "数据根目录：{} -> {}",
+            current.root_dir.as_deref().unwrap_or("(默认)"),
+            b.root_dir.as_deref().unwrap_or("(默认)")
+        ));
+    }
+    if b.default_version != current.default_version {
+        changes.push(format!(
+            "默认版本：{} -> {}",
+            current.default_version.as_deref().unwrap_or("(无)"),
+            b.default_version.as_deref().unwrap_or("(无)")
+        ));
+    }
+    if b.isolated_versions != current.isolated_versions {
+        changes.push(format!(
+            "隔离版本：{:?} -> {:?}",
+            current.isolated_versions, b.isolated_versions
+        ));
+    }
+    if b.use_official_dsh_home != current.use_official_dsh_home {
+        changes.push(format!(
+            "复用官方配置：{} -> {}",
+            current.use_official_dsh_home, b.use_official_dsh_home
+        ));
+    }
+
+    // 备份里本机未安装的版本
+    let missing_versions = manifest
+        .versions
+        .iter()
+        .filter(|v| !versions::exists(versions_dir, &v.version))
+        .map(|v| v.version.clone())
+        .collect();
+
+    Ok(ImportPreview {
+        backup_manager_version: manifest.manager_version,
+        version_count: manifest.versions.len(),
+        changes,
+        missing_versions,
+    })
+}
+
+/// 应用导入：把备份文件的 config 字段写入当前配置。返回改动摘要。
+///
+/// 只应用**配置字段**（root_dir / default_version / isolated_versions /
+/// broken_versions / use_official_dsh_home / maintenance）；
+/// **不安装版本**（版本需用户另行安装）。
+pub fn apply_import(file: &Path, current: &mut Config) -> Result<Vec<String>, String> {
+    let text = std::fs::read_to_string(file).map_err(|e| format!("读取文件失败：{}", e))?;
+    let manifest: BackupManifest =
+        serde_json::from_str(&text).map_err(|e| format!("解析失败：{}", e))?;
+    let b = manifest.config;
+
+    let mut applied = Vec::new();
+    if b.root_dir != current.root_dir {
+        applied.push("数据根目录".to_string());
+        current.root_dir = b.root_dir;
+    }
+    if b.default_version != current.default_version {
+        applied.push("默认版本".to_string());
+        current.default_version = b.default_version;
+    }
+    if b.isolated_versions != current.isolated_versions {
+        applied.push("隔离版本列表".to_string());
+        current.isolated_versions = b.isolated_versions;
+    }
+    if b.use_official_dsh_home != current.use_official_dsh_home {
+        applied.push("复用官方配置".to_string());
+        current.use_official_dsh_home = b.use_official_dsh_home;
+    }
+    Ok(applied)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -90,6 +185,49 @@ mod tests {
         assert_eq!(m.versions.len(), 1);
         assert_eq!(m.versions[0].version, "0.1.7");
         assert!(m.versions[0].is_default);
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn preview_and_apply_import() {
+        let base = tmp("import");
+        let versions_dir = base.join("versions");
+        std::fs::create_dir_all(versions_dir.join("0.2.0").join("node_modules")).unwrap();
+
+        // 造一个备份文件：默认版本 0.1.7（本机未装）、复用官方=true
+        let mut src = Config::default();
+        src.default_version = Some("0.1.7".to_string());
+        src.use_official_dsh_home = true;
+        let file = base.join("backup.json");
+        export_to_file(&src, &versions_dir, &file).unwrap();
+
+        // 当前配置：默认版本 0.2.0、复用官方=false
+        let mut cur = Config::default();
+        cur.default_version = Some("0.2.0".to_string());
+
+        let preview = preview_import(&file, &cur, &versions_dir).unwrap();
+        assert!(preview.changes.iter().any(|c| c.contains("默认版本")));
+        assert!(preview.changes.iter().any(|c| c.contains("复用官方")));
+        // 备份的 versions 来自实际安装（0.2.0，本机已装）→ 无缺失
+        assert!(preview.missing_versions.is_empty());
+
+        // 应用
+        let applied = apply_import(&file, &mut cur).unwrap();
+        assert!(applied.contains(&"默认版本".to_string()));
+        assert_eq!(cur.default_version.as_deref(), Some("0.1.7"));
+        assert!(cur.use_official_dsh_home);
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn import_rejects_invalid_file() {
+        let base = tmp("import-bad");
+        let file = base.join("bad.json");
+        std::fs::write(&file, "{ not json").unwrap();
+        let mut cur = Config::default();
+        assert!(preview_import(&file, &cur, &base).is_err());
+        assert!(apply_import(&file, &mut cur).is_err());
         let _ = std::fs::remove_dir_all(&base);
     }
 

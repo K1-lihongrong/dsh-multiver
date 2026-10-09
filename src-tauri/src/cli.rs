@@ -81,6 +81,10 @@ pub enum CliCommand {
     Run {
         version: String,
     },
+    /// 导入配置（从 `--export` 生成的备份文件）
+    Import {
+        file: String,
+    },
     Help,
     Version,
 }
@@ -112,6 +116,7 @@ fn is_cli_flag(a: &str) -> bool {
             | "--clear-isolated"
             | "--export"
             | "--run"
+            | "--import"
             | "--help"
             | "-h"
             | "--version"
@@ -208,6 +213,10 @@ pub fn parse(args: &[String]) -> Result<Option<CliCommand>, String> {
             "--run" => {
                 let version = next_value(args, i, "--run")?;
                 return Ok(Some(CliCommand::Run { version }));
+            }
+            "--import" => {
+                let file = next_value(args, i, "--import")?;
+                return Ok(Some(CliCommand::Import { file }));
             }
             "--maintenance" => {
                 let kind = if args.iter().any(|x| x == "--cleanup") {
@@ -382,6 +391,7 @@ pub fn run(cmd: CliCommand, dry_run: bool, json: bool) -> i32 {
         CliCommand::ClearIsolated { version } => cmd_clear_isolated(&version, dry_run, json),
         CliCommand::Export { file } => cmd_export(file.as_deref(), json),
         CliCommand::Run { version } => cmd_run(&version, json),
+        CliCommand::Import { file } => cmd_import(&file, dry_run, json),
     }
 }
 
@@ -627,6 +637,17 @@ fn cmd_set_default(version: &str, dry_run: bool, json: bool) -> i32 {
         out_result(json, false, &format!("版本 {} 未安装", version));
         return 1;
     }
+    // GAP-014：目标位置已有"非本管理器"的 dsh 命令 → 拒绝（除非显式 --force）
+    if !has_force() {
+        let target = crate::commands::forward_script_dir(&ctx.mdir);
+        if let Some(p) = crate::actions::existing_foreign_dsh(&target) {
+            out_result(json, false, &format!(
+                "目标位置已存在非本管理器的 dsh 命令：{}\n继续将覆盖它（可能是 npm i -g 装的官方 dsh）。如确认，加 --force 重试。",
+                p.to_string_lossy()
+            ));
+            return 1;
+        }
+    }
     ctx.cfg.default_version = Some(version.to_string());
     if let Err(e) = ctx.cfg.save(&ctx.mdir) {
         out_result(json, false, &format!("保存配置失败：{}", e));
@@ -635,6 +656,11 @@ fn cmd_set_default(version: &str, dry_run: bool, json: bool) -> i32 {
     crate::commands::regenerate_forward_script(&ctx.mdir, &ctx.cfg);
     out_result(json, true, &format!("默认版本已设为 {}，dsh 命令已就绪", version));
     0
+}
+
+/// 是否带 --force（修饰符）。直接从进程参数读——CLI 场景安全，避免改动 run() 签名。
+pub(crate) fn has_force() -> bool {
+    std::env::args().any(|a| a == "--force")
 }
 
 /// `--maintenance [--cleanup|--prune]`
@@ -789,6 +815,57 @@ fn cmd_doctor(json: bool) -> i32 {
         }
     }
     if fatal { 1 } else { 0 }
+}
+
+/// `--import <文件>`：导入备份文件（`--export` 生成的）里的配置。
+/// `--dry-run` 只预览将改动的字段，不应用。
+fn cmd_import(file: &str, dry_run: bool, json: bool) -> i32 {
+    let mut ctx = load_ctx();
+    let path = std::path::Path::new(file);
+
+    // 预览
+    let preview = match crate::backup::preview_import(path, &ctx.cfg, &ctx.dirs.versions) {
+        Ok(p) => p,
+        Err(e) => { out_result(json, false, &e); return 1; }
+    };
+
+    if dry_run {
+        if json {
+            println!("{}", json_str(&preview));
+        } else {
+            println!("[dry-run] 将应用以下改动：");
+            if preview.changes.is_empty() {
+                println!("  （无需改动）");
+            } else {
+                for c in &preview.changes { println!("  · {}", c); }
+            }
+            if !preview.missing_versions.is_empty() {
+                println!("[dry-run] 注意：以下版本本机未安装（仅恢复配置，需另行安装）：");
+                for v in &preview.missing_versions { println!("  · {}", v); }
+            }
+            println!("[dry-run] 未执行任何操作");
+        }
+        return 0;
+    }
+
+    // 应用
+    match crate::backup::apply_import(path, &mut ctx.cfg) {
+        Ok(applied) => {
+            if let Err(e) = ctx.cfg.save(&ctx.mdir) {
+                out_result(json, false, &format!("保存配置失败：{}", e));
+                return 1;
+            }
+            crate::commands::regenerate_forward_script(&ctx.mdir, &ctx.cfg);
+            let msg = if applied.is_empty() {
+                "配置无变化".to_string()
+            } else {
+                format!("已应用：{}", applied.join("、"))
+            };
+            out_result(json, true, &msg);
+            0
+        }
+        Err(e) => { out_result(json, false, &e); 1 }
+    }
 }
 
 /// `--run <版本>`：启动 dsh web（新控制台窗口 + 自动打开系统浏览器）。
@@ -1154,6 +1231,7 @@ fn print_help() {
   dsh-multiver --clear-isolated <版本>
   dsh-multiver --export [<文件>]
   dsh-multiver --run <版本>
+  dsh-multiver --import <文件>
   dsh-multiver --maintenance [--cleanup | --prune]
   dsh-multiver --help
   dsh-multiver --version [--json]
@@ -1172,6 +1250,7 @@ fn print_help() {
   --clear-isolated 清空某隔离版本的独立 home（保留版本本身）
   --export       导出配置 + 版本清单（JSON）到指定文件（默认写到数据根目录）
   --run          启动 dsh web（新控制台 + 自动打开系统浏览器；关窗口即停止）
+  --import       导入配置（从 --export 生成的备份文件）；--dry-run 只预览
   --install      安装指定版本；--registry 可指定 npm 源（默认官方源）
   --uninstall    卸载指定版本
   --set-default  设为默认版本，并重生成终端 dsh 命令
@@ -1273,6 +1352,15 @@ mod tests {
         }
         // 缺参数值 → 报错
         assert!(parse(&args(&["--info"])).is_err());
+    }
+
+    #[test]
+    fn import_command() {
+        match parse(&args(&["--import", "b.json"])) {
+            Ok(Some(CliCommand::Import { file })) => assert_eq!(file, "b.json"),
+            other => panic!("unexpected: {:?}", other),
+        }
+        assert!(parse(&args(&["--import"])).is_err());
     }
 
     #[test]

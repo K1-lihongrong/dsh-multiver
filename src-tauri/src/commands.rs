@@ -212,8 +212,12 @@ pub(crate) async fn uninstall_version(app: tauri::AppHandle, version: String) ->
     if ok { Ok(msg) } else { Err(msg) }
 }
 
+/// set_default 检测到"非管理器生成的同名 dsh 命令"时，返回此前缀的错误，
+/// 前端据此弹出确认框，用户确认后再以 force=true 重调。
+pub(crate) const CONFLICT_PREFIX: &str = "DSH_CONFLICT:";
+
 #[tauri::command]
-pub(crate) fn set_default(app: tauri::AppHandle, version: Option<String>) -> Result<String, String> {
+pub(crate) fn set_default(app: tauri::AppHandle, version: Option<String>, force: Option<bool>) -> Result<String, String> {
     let mdir = manager_dir(&app);
     let mut cfg = Config::load(&mdir);
     let dirs = Dirs::new(cfg.resolve_root(&mdir));
@@ -222,6 +226,20 @@ pub(crate) fn set_default(app: tauri::AppHandle, version: Option<String>) -> Res
             return Err(format!("版本 {} 未安装", v));
         }
     }
+
+    // GAP-014：设为默认（会写转发脚本）前，检测目标位置是否已有"非本管理器"的 dsh 命令。
+    // 有且用户未确认（force != Some(true)）→ 返回带前缀的提示，让前端确认。
+    if version.is_some() && force != Some(true) {
+        let target = path_bin_dir(&mdir);
+        if let Some(p) = actions::existing_foreign_dsh(&target) {
+            return Err(format!(
+                "{}{}",
+                CONFLICT_PREFIX,
+                p.to_string_lossy()
+            ));
+        }
+    }
+
     cfg.default_version = version.clone();
     cfg.save(&mdir).map_err(|e| e.to_string())?;
 
@@ -251,10 +269,16 @@ pub(crate) fn regenerate_forward_script(mdir: &PathBuf, cfg: &Config) {
             let _ = actions::write_forward_script(&target, &script);
         }
         None => {
+            // GAP-014：只删"本管理器生成的"转发脚本，避免误删官方 npm i -g 装的 dsh。
             #[cfg(windows)]
-            let _ = std::fs::remove_file(target.join("dsh.cmd"));
+            let p = target.join("dsh.cmd");
             #[cfg(unix)]
-            let _ = std::fs::remove_file(target.join("dsh"));
+            let p = target.join("dsh");
+            if let Ok(content) = std::fs::read_to_string(&p) {
+                if actions::is_forward_script(&content) {
+                    let _ = std::fs::remove_file(&p);
+                }
+            }
         }
     }
 }
@@ -264,6 +288,11 @@ pub(crate) fn regenerate_forward_script(mdir: &PathBuf, cfg: &Config) {
 /// - Windows：优先 `%APPDATA%\npm`（npm 全局 bin），否则管理器目录
 /// - Unix：优先 `~/.local/bin`（XDG，多数发行版已在 PATH），其次 `~/.local/share/pnpm`、
 ///   `~/.npm-global/bin`；都不存在则创建 `~/.local/bin`。最后回退管理器目录。
+/// 转发脚本所在目录（供 CLI 检测冲突复用）。
+pub(crate) fn forward_script_dir(manager: &PathBuf) -> PathBuf {
+    path_bin_dir(manager)
+}
+
 #[cfg(windows)]
 fn path_bin_dir(manager: &PathBuf) -> PathBuf {
     if let Ok(appdata) = std::env::var("APPDATA") {
@@ -735,6 +764,27 @@ pub(crate) fn set_isolated(app: tauri::AppHandle, version: String, isolated: boo
     } else {
         Ok(format!("{} 已关闭数据隔离", version))
     }
+}
+
+/// 导入预览：读备份文件，返回将改动的字段（不应用）。
+#[tauri::command]
+pub(crate) fn preview_import(app: tauri::AppHandle, file: String) -> Result<crate::backup::ImportPreview, String> {
+    let mdir = manager_dir(&app);
+    let cfg = Config::load(&mdir);
+    let dirs = Dirs::new(cfg.resolve_root(&mdir));
+    crate::backup::preview_import(std::path::Path::new(&file), &cfg, &dirs.versions)
+}
+
+/// 应用导入：把备份文件的配置字段写入当前配置。
+#[tauri::command]
+pub(crate) fn apply_import(app: tauri::AppHandle, file: String) -> Result<Vec<String>, String> {
+    let mdir = manager_dir(&app);
+    let mut cfg = Config::load(&mdir);
+    let applied = crate::backup::apply_import(std::path::Path::new(&file), &mut cfg)?;
+    cfg.save(&mdir).map_err(|e| format!("保存配置失败：{}", e))?;
+    // 配置变了（默认版本/根目录/隔离可能变）→ 重生成转发脚本
+    regenerate_forward_script(&mdir, &cfg);
+    Ok(applied)
 }
 
 /// 导出配置 + 版本清单到指定文件。返回写入路径。

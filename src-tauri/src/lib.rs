@@ -121,6 +121,8 @@ pub fn run() {
             commands::log_frontend,
             commands::check_update,
             commands::export_backup,
+            commands::preview_import,
+            commands::apply_import,
         ])
         .setup(move |app| {
             use tauri::Manager;
