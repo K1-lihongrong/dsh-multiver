@@ -61,6 +61,18 @@ pub enum CliCommand {
     Clean,
     /// 一键诊断：聚合检查（目录 / broken / 残留登记 / 环境 / 日志）
     Doctor,
+    /// 为某版本创建桌面快捷方式（Windows .lnk / Unix .desktop）
+    Shortcut {
+        version: String,
+    },
+    /// 把共享 home 数据复制到某隔离版本的独立 home
+    CopyShared {
+        version: String,
+    },
+    /// 清空某隔离版本的独立 home（保留版本本身）
+    ClearIsolated {
+        version: String,
+    },
     Help,
     Version,
 }
@@ -87,6 +99,9 @@ fn is_cli_flag(a: &str) -> bool {
             | "--isolate"
             | "--clean"
             | "--doctor"
+            | "--shortcut"
+            | "--copy-shared"
+            | "--clear-isolated"
             | "--help"
             | "-h"
             | "--version"
@@ -163,6 +178,18 @@ pub fn parse(args: &[String]) -> Result<Option<CliCommand>, String> {
             }
             "--clean" => return Ok(Some(CliCommand::Clean)),
             "--doctor" => return Ok(Some(CliCommand::Doctor)),
+            "--shortcut" => {
+                let version = next_value(args, i, "--shortcut")?;
+                return Ok(Some(CliCommand::Shortcut { version }));
+            }
+            "--copy-shared" => {
+                let version = next_value(args, i, "--copy-shared")?;
+                return Ok(Some(CliCommand::CopyShared { version }));
+            }
+            "--clear-isolated" => {
+                let version = next_value(args, i, "--clear-isolated")?;
+                return Ok(Some(CliCommand::ClearIsolated { version }));
+            }
             "--maintenance" => {
                 let kind = if args.iter().any(|x| x == "--cleanup") {
                     "cleanup"
@@ -331,6 +358,9 @@ pub fn run(cmd: CliCommand, dry_run: bool, json: bool) -> i32 {
         CliCommand::Isolate { version, on } => cmd_isolate(&version, on, dry_run, json),
         CliCommand::Clean => cmd_clean(dry_run, json),
         CliCommand::Doctor => cmd_doctor(json),
+        CliCommand::Shortcut { version } => cmd_shortcut(&version, dry_run, json),
+        CliCommand::CopyShared { version } => cmd_copy_shared(&version, dry_run, json),
+        CliCommand::ClearIsolated { version } => cmd_clear_isolated(&version, dry_run, json),
     }
 }
 
@@ -732,6 +762,90 @@ fn cmd_doctor(json: bool) -> i32 {
     if fatal { 1 } else { 0 }
 }
 
+/// `--shortcut <版本>`：为某版本创建桌面快捷方式。
+fn cmd_shortcut(version: &str, dry_run: bool, json: bool) -> i32 {
+    let ctx = load_ctx();
+    if !versions::exists(&ctx.dirs.versions, version) {
+        return info_fail(json, &format!("版本 {} 未安装", version));
+    }
+    let exe = crate::manager_dir_plain().join(if cfg!(windows) {
+        "dsh-multiver.exe"
+    } else {
+        "dsh-multiver"
+    });
+    if dry_run {
+        if json {
+            println!("{}", json_str(&serde_json::json!({
+                "dry_run": true, "action": "shortcut", "version": version,
+            })));
+        } else {
+            println!("[dry-run] 将为版本 {} 创建桌面快捷方式", version);
+            println!("[dry-run] 未执行任何操作");
+        }
+        return 0;
+    }
+    match crate::launcher::create_desktop_shortcut(&exe, version) {
+        Ok(path) => {
+            out_result(json, true, &format!("已创建桌面快捷方式：{}", path));
+            0
+        }
+        Err(e) => {
+            out_result(json, false, &e);
+            1
+        }
+    }
+}
+
+/// `--copy-shared <版本>`：把共享 home 数据复制到该隔离版本的独立 home。
+/// 该版本必须已开启隔离。
+fn cmd_copy_shared(version: &str, dry_run: bool, json: bool) -> i32 {
+    let ctx = load_ctx();
+    if !ctx.cfg.isolated_versions.iter().any(|v| v == version) {
+        return info_fail(json, &format!("{} 未开启隔离（先用 --isolate {} 开启）", version, version));
+    }
+    let shared = ctx.dirs.home.clone();
+    let isolated = versions::isolated_home(&ctx.dirs.versions, version);
+    if dry_run {
+        if json {
+            println!("{}", json_str(&serde_json::json!({
+                "dry_run": true, "action": "copy-shared", "version": version,
+                "from": shared.to_string_lossy(), "to": isolated.to_string_lossy(),
+            })));
+        } else {
+            println!("[dry-run] 将把 {} 复制到 {}", shared.to_string_lossy(), isolated.to_string_lossy());
+            println!("[dry-run] 未执行任何操作");
+        }
+        return 0;
+    }
+    let (ok, msg, _) = versions::copy_shared_to_isolated(&shared, &isolated);
+    out_result(json, ok, &msg);
+    if ok { 0 } else { 1 }
+}
+
+/// `--clear-isolated <版本>`：清空该隔离版本的独立 home（保留版本本身）。
+fn cmd_clear_isolated(version: &str, dry_run: bool, json: bool) -> i32 {
+    let ctx = load_ctx();
+    if !versions::exists(&ctx.dirs.versions, version) {
+        return info_fail(json, &format!("版本 {} 未安装", version));
+    }
+    if dry_run {
+        let home = versions::isolated_home(&ctx.dirs.versions, version);
+        if json {
+            println!("{}", json_str(&serde_json::json!({
+                "dry_run": true, "action": "clear-isolated", "version": version,
+                "home": home.to_string_lossy(),
+            })));
+        } else {
+            println!("[dry-run] 将清空隔离数据：{}", home.to_string_lossy());
+            println!("[dry-run] 未执行任何操作");
+        }
+        return 0;
+    }
+    let (ok, msg) = versions::clear_isolated(&ctx.dirs.versions, version);
+    out_result(json, ok, &msg);
+    if ok { 0 } else { 1 }
+}
+
 /// `--isolate <版本> [--off]`：开关数据隔离（默认开启；--off 关闭）。
 /// 与 GUI 的 set_isolated 行为一致：改配置 + 预创建隔离目录 + 重生成转发脚本。
 fn cmd_isolate(version: &str, on: bool, dry_run: bool, json: bool) -> i32 {
@@ -948,6 +1062,9 @@ fn print_help() {
   dsh-multiver --isolate <版本> [--off]
   dsh-multiver --clean
   dsh-multiver --doctor [--json]
+  dsh-multiver --shortcut <版本>
+  dsh-multiver --copy-shared <版本>
+  dsh-multiver --clear-isolated <版本>
   dsh-multiver --maintenance [--cleanup | --prune]
   dsh-multiver --help
   dsh-multiver --version [--json]
@@ -961,6 +1078,9 @@ fn print_help() {
   --isolate      开启某版本的数据隔离（加 --off 则关闭）
   --clean        清理孤立缓存 + 回收站（maintenance --cleanup 的超集）
   --doctor       一键诊断（目录 / 失败标记 / 已安装 / 环境）；有致命项失败时退出码 1
+  --shortcut     为某版本创建桌面快捷方式
+  --copy-shared  把共享 home 数据复制到某隔离版本的独立 home（需先开隔离）
+  --clear-isolated 清空某隔离版本的独立 home（保留版本本身）
   --install      安装指定版本；--registry 可指定 npm 源（默认官方源）
   --uninstall    卸载指定版本
   --set-default  设为默认版本，并重生成终端 dsh 命令
@@ -1062,6 +1182,26 @@ mod tests {
         }
         // 缺参数值 → 报错
         assert!(parse(&args(&["--info"])).is_err());
+    }
+
+    #[test]
+    fn shortcut_copy_clear_commands() {
+        match parse(&args(&["--shortcut", "0.1.7"])) {
+            Ok(Some(CliCommand::Shortcut { version })) => assert_eq!(version, "0.1.7"),
+            other => panic!("unexpected: {:?}", other),
+        }
+        match parse(&args(&["--copy-shared", "0.1.7"])) {
+            Ok(Some(CliCommand::CopyShared { version })) => assert_eq!(version, "0.1.7"),
+            other => panic!("unexpected: {:?}", other),
+        }
+        match parse(&args(&["--clear-isolated", "0.1.7"])) {
+            Ok(Some(CliCommand::ClearIsolated { version })) => assert_eq!(version, "0.1.7"),
+            other => panic!("unexpected: {:?}", other),
+        }
+        // 缺参数值 → 报错
+        assert!(parse(&args(&["--shortcut"])).is_err());
+        assert!(parse(&args(&["--copy-shared"])).is_err());
+        assert!(parse(&args(&["--clear-isolated"])).is_err());
     }
 
     #[test]
