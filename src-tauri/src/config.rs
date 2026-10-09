@@ -19,6 +19,12 @@ pub struct Config {
     /// 维护相关配置与状态。
     #[serde(default)]
     pub maintenance: MaintenanceConfig,
+    /// 是否复用官方 dsh 配置目录（~/.dsh / %USERPROFILE%\.dsh）。
+    /// 默认 false：非隔离版本使用管理器共享 home（<根>/home），保持既有行为。
+    /// true 时：非隔离版本的 DSH_HOME 指向官方默认目录，用户已有的会话/凭据/插件立即可用。
+    /// 隔离版本不受此开关影响（永远使用 <根>/versions/<版本>/home）。
+    #[serde(default)]
+    pub use_official_dsh_home: bool,
 }
 
 /// 维护相关配置与状态。
@@ -56,6 +62,7 @@ impl Default for Config {
             isolated_versions: Vec::new(),
             broken_versions: Vec::new(),
             maintenance: MaintenanceConfig::default(),
+            use_official_dsh_home: false,
         }
     }
 }
@@ -262,6 +269,7 @@ mod tests {
                 last_cleanup_at: Some(456),
                 last_cleanup_count: 3,
             },
+            use_official_dsh_home: true,
         };
         cfg.save(&dir).unwrap();
         let back = Config::load(&dir);
@@ -271,6 +279,7 @@ mod tests {
         assert!(!back.maintenance.auto_enabled);
         assert_eq!(back.maintenance.last_prune_at, Some(123));
         assert_eq!(back.maintenance.last_cleanup_count, 3);
+        assert!(back.use_official_dsh_home);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
