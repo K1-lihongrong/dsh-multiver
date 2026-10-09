@@ -29,8 +29,14 @@ pub struct CheckItem {
     pub name_key: String,
     /// 是否通过
     pub ok: bool,
-    /// 详细信息（版本号或错误原因）
+    /// 详细信息（版本号或错误原因，中文，作为无 i18n 时的回退）
     pub detail: String,
+    /// detail 的 i18n key（前端优先用 t(detail_key, detail_args)；空则用 detail）
+    #[serde(default)]
+    pub detail_key: String,
+    /// detail 插值参数（对象；供 t(key, args) 使用）
+    #[serde(default)]
+    pub detail_args: serde_json::Value,
     /// 是否致命（不通过则无法安装）
     pub critical: bool,
     /// 安装引导：检查未通过时给出的说明（中文，作为无 i18n 时的回退）
@@ -42,6 +48,15 @@ pub struct CheckItem {
     /// 安装引导：官方下载页 URL（可能为空）
     #[serde(default)]
     pub install_url: String,
+}
+
+impl CheckItem {
+    /// 链式设置 detail 的 i18n key 与插值参数。
+    fn i18n_detail(mut self, key: &str, args: serde_json::Value) -> Self {
+        self.detail_key = key.to_string();
+        self.detail_args = args;
+        self
+    }
 }
 
 /// 检查项中文名 -> i18n key。前端用 `t(key)` 渲染，支持 4 语言。
@@ -63,6 +78,8 @@ fn ok_item(name: &str, detail: String, critical: bool) -> CheckItem {
         name_key: name_to_key(name).to_string(),
         ok: true,
         detail,
+        detail_key: String::new(),
+        detail_args: serde_json::Value::Null,
         critical,
         install_hint: String::new(),
         hint_key: String::new(),
@@ -85,6 +102,8 @@ fn fail_item(
         name_key: name_to_key(name).to_string(),
         ok: false,
         detail,
+        detail_key: String::new(),
+        detail_args: serde_json::Value::Null,
         critical,
         install_hint: hint.to_string(),
         hint_key: hint_key.to_string(),
@@ -167,7 +186,8 @@ pub fn check_node() -> CheckItem {
                     "dsh 需要 Node.js 22.19 或更高（或 24+）。旧版 22.x 缺少 dsh 依赖的 \"import.meta.main\" 特性，会导致内嵌窗口连不上。请到官网下载 LTS 版（22.19+ / 24+）安装后重新检查。",
                     "env.node.hint_version",
                     "https://nodejs.org/zh-cn/download",
-                );
+                )
+                .i18n_detail("env.node.detail_old", serde_json::json!({ "v": v }));
             }
             // 版本号通过 → 特性探测兜底
             match probe_import_meta_main() {
@@ -178,8 +198,10 @@ pub fn check_node() -> CheckItem {
                     "当前 Node 虽满足版本号要求，但实测不支持 dsh 依赖的 \"import.meta.main\"（可能是定制构建或异常版本）。建议改用 Node.js 官网的 LTS 版（22.19+ / 24+）。",
                     "env.node.hint_feature",
                     "https://nodejs.org/zh-cn/download",
-                ),
-                _ => ok_item("Node.js", format!("{}（满足 22.19+ / 24+）", v), true),
+                )
+                .i18n_detail("env.node.detail_feature", serde_json::json!({ "v": v })),
+                _ => ok_item("Node.js", format!("{}（满足 22.19+ / 24+）", v), true)
+                    .i18n_detail("env.node.detail_ok", serde_json::json!({ "v": v })),
             }
         }
         None => fail_item(
@@ -189,7 +211,8 @@ pub fn check_node() -> CheckItem {
             "请到 Node.js 官网下载 LTS 版（22.19 或更高，或 24+）安装。安装时勾选「Add to PATH」，装完重开本工具。",
             "env.node.hint_missing",
             "https://nodejs.org/zh-cn/download",
-        ),
+        )
+        .i18n_detail("env.node.detail_missing", serde_json::Value::Null),
     }
 }
 
@@ -204,7 +227,8 @@ pub fn check_pnpm() -> CheckItem {
             "Node 装好后，在终端运行：npm install -g pnpm（也可参考 pnpm 官网）。",
             "env.pnpm.hint_missing",
             "https://pnpm.io/zh/installation",
-        ),
+        )
+        .i18n_detail("env.pnpm.detail_missing", serde_json::Value::Null),
     }
 }
 
@@ -221,6 +245,10 @@ pub fn check_writable(root: &Path) -> CheckItem {
             "请把「数据根目录」改到一个有写权限的位置（如 D:\\dsh-data），或检查该目录是否被占用/只读。",
             "env.writable.hint",
             "",
+        )
+        .i18n_detail(
+            "env.writable.detail_fail",
+            serde_json::json!({ "path": root.to_string_lossy(), "err": e.to_string() }),
         ),
     }
 }
@@ -234,11 +262,16 @@ pub fn check_disk(root: &Path) -> CheckItem {
             "磁盘空间",
             format!("可用 {}", human_bytes(bytes)),
             false,
-        ),
+        )
+        .i18n_detail("env.disk.detail_ok", serde_json::json!({ "size": human_bytes(bytes) })),
         None => ok_item(
             "磁盘空间",
             format!("无法获取（目标 {}）", root.to_string_lossy()),
             false,
+        )
+        .i18n_detail(
+            "env.disk.detail_unknown",
+            serde_json::json!({ "path": root.to_string_lossy() }),
         ),
     }
 }
@@ -309,7 +342,12 @@ pub fn check_registry() -> CheckItem {
             } else {
                 format!("可达（最新 {}）", ver)
             };
-            ok_item("npm 源连通", detail, false)
+            let item = ok_item("npm 源连通", detail, false);
+            if ver.is_empty() {
+                item.i18n_detail("env.registry.detail_ok", serde_json::Value::Null)
+            } else {
+                item.i18n_detail("env.registry.detail_latest", serde_json::json!({ "v": ver }))
+            }
         }
         Ok(out) => {
             let e = String::from_utf8_lossy(&out.stderr).trim().to_string();
@@ -321,6 +359,7 @@ pub fn check_registry() -> CheckItem {
                 "env.registry.hint",
                 "",
             )
+            .i18n_detail("env.registry.detail_fail", serde_json::json!({ "err": e }))
         }
         Err(e) => fail_item(
             "npm 源连通",
@@ -329,7 +368,8 @@ pub fn check_registry() -> CheckItem {
             "可能是网络或代理问题。安装时若失败，可在弹窗里换一个 npm 源重试。",
             "env.registry.hint",
             "",
-        ),
+        )
+        .i18n_detail("env.registry.detail_err", serde_json::json!({ "err": e.to_string() })),
     }
 }
 
