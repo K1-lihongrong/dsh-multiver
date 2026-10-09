@@ -28,6 +28,8 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 #[derive(Debug)]
 pub enum CliCommand {
     List,
+    /// 输出默认版本 dsh 入口的绝对路径（无默认版本 → 失败）
+    Which,
     Install {
         version: String,
         registry: Option<String>,
@@ -57,6 +59,7 @@ fn is_cli_flag(a: &str) -> bool {
     matches!(
         a,
         "--list"
+            | "--which"
             | "--install"
             | "--uninstall"
             | "--set-default"
@@ -69,8 +72,13 @@ fn is_cli_flag(a: &str) -> bool {
 }
 
 /// 是否含 `--dry-run`（只预览不执行）。仅对破坏性命令有意义。
-fn has_dry_run(args: &[String]) -> bool {
+pub(crate) fn has_dry_run(args: &[String]) -> bool {
     args.iter().any(|a| a == "--dry-run")
+}
+
+/// 是否含 `--json`（结构化输出）。只影响输出格式，不改行为。
+pub(crate) fn has_json(args: &[String]) -> bool {
+    args.iter().any(|a| a == "--json")
 }
 
 /// 解析命令行参数。
@@ -79,12 +87,14 @@ fn has_dry_run(args: &[String]) -> bool {
 /// - `Ok(Some(cmd))`：执行该 CLI 命令
 /// - `Err(msg)`：CLI 参数有误（调用方打印 msg + 用法后退出 1）
 pub fn parse(args: &[String]) -> Result<Option<CliCommand>, String> {
-    // `--dry-run` 是修饰符，必须搭配一个命令。单独出现（或无其它 CLI 参数）→ 报错，
-    // 避免误启动 GUI。
-    let dry_only = has_dry_run(args);
+    // `--dry-run` / `--json` 是**修饰符**，必须搭配一个命令。单独出现（或无其它 CLI 参数）
+    // → 报错，避免误启动 GUI。
     if !args.iter().any(|a| is_cli_flag(a)) {
-        if dry_only {
+        if has_dry_run(args) {
             return Err("--dry-run 需要搭配一个命令（如 --install X --dry-run）".to_string());
+        }
+        if has_json(args) {
+            return Err("--json 需要搭配一个命令（如 --list --json）".to_string());
         }
         // 没有 CLI 参数：GUI 只认 --launch-version（精简启动）和 --debug-progress（开发者用），
         // 其余 -- 开头的参数大概率是打错字 —— 直接报错，别默默弹个 GUI 窗口。
@@ -102,6 +112,7 @@ pub fn parse(args: &[String]) -> Result<Option<CliCommand>, String> {
             "--help" | "-h" => return Ok(Some(CliCommand::Help)),
             "--version" | "-V" => return Ok(Some(CliCommand::Version)),
             "--list" => return Ok(Some(CliCommand::List)),
+            "--which" => return Ok(Some(CliCommand::Which)),
             "--install" => {
                 let version = next_value(args, i, "--install")?;
                 let registry = find_opt(args, "--registry");
@@ -254,57 +265,131 @@ fn load_ctx() -> Ctx {
 
 /// 执行 CLI 命令，返回进程退出码（成功 0 / 失败 1）。
 ///
-/// `dry_run` 为 true 时，破坏性命令只**打印将要做的事**，不实际执行（见各 cmd_*）。
-pub fn run(cmd: CliCommand, dry_run: bool) -> i32 {
+/// - `dry_run`：破坏性命令只**打印将要做的事**，不实际执行
+/// - `json`：输出 JSON（机读）；只影响格式，不改行为。`--json` 时 stdout 只有 JSON
+pub fn run(cmd: CliCommand, dry_run: bool, json: bool) -> i32 {
     match cmd {
         CliCommand::Help => {
             print_help();
             0
         }
         CliCommand::Version => {
-            println!("dsh-multiver {}", VERSION);
+            if json {
+                println!("{}", json_str(&serde_json::json!({ "version": VERSION })));
+            } else {
+                println!("dsh-multiver {}", VERSION);
+            }
             0
         }
-        // --list 是只读命令，dry-run 对它无意义（照常执行）
-        CliCommand::List => cmd_list(),
-        CliCommand::Install { version, registry } => cmd_install(&version, registry.as_deref(), dry_run),
-        CliCommand::Uninstall { version } => cmd_uninstall(&version, dry_run),
-        CliCommand::SetDefault { version } => cmd_set_default(&version, dry_run),
-        CliCommand::Maintenance { kind } => cmd_maintenance(&kind, dry_run),
+        // --list / --which 是只读命令，dry-run 对它们无意义（照常执行）
+        CliCommand::List => cmd_list(json),
+        CliCommand::Which => cmd_which(json),
+        CliCommand::Install { version, registry } => cmd_install(&version, registry.as_deref(), dry_run, json),
+        CliCommand::Uninstall { version } => cmd_uninstall(&version, dry_run, json),
+        CliCommand::SetDefault { version } => cmd_set_default(&version, dry_run, json),
+        CliCommand::Maintenance { kind } => cmd_maintenance(&kind, dry_run, json),
     }
 }
 
-/// `--list`：一行一个版本号；默认版本加 `* ` 前缀。
-fn cmd_list() -> i32 {
+/// 序列化为单行 JSON（失败时退化为空对象，不 panic）。
+fn json_str<T: serde::Serialize>(v: &T) -> String {
+    serde_json::to_string(v).unwrap_or_else(|_| "null".to_string())
+}
+
+/// 统一的"操作结果"输出：JSON 模式输出 {"ok":bool,"message":...}，否则按原样打印。
+/// 用于破坏性命令的成功/失败提示。
+fn out_result(json: bool, ok: bool, message: &str) {
+    if json {
+        println!("{}", json_str(&serde_json::json!({ "ok": ok, "message": message })));
+    } else if ok {
+        println!("{}", message);
+    } else {
+        eprintln!("{}", message);
+    }
+}
+
+/// `--list`：默认输出一行一个版本号（默认版本加 `* ` 前缀）；
+/// `--json` 输出对象数组（含 is_default / isolated / installed_at 等）。
+fn cmd_list(json: bool) -> i32 {
     let ctx = load_ctx();
     let list = versions::list(
         &ctx.dirs.versions,
         ctx.cfg.default_version.as_deref(),
         &ctx.cfg.isolated_versions,
     );
-    for v in &list {
-        if v.is_default {
-            println!("* {}", v.version);
-        } else {
-            println!("{}", v.version);
+    if json {
+        println!("{}", json_str(&list));
+    } else {
+        for v in &list {
+            if v.is_default {
+                println!("* {}", v.version);
+            } else {
+                println!("{}", v.version);
+            }
         }
     }
     0
 }
 
+/// `--which`：输出默认版本 dsh 入口的绝对路径。
+/// 无默认版本 / 入口不存在 → 失败（退出码 1）。
+fn cmd_which(json: bool) -> i32 {
+    let ctx = load_ctx();
+    let Some(def) = ctx.cfg.default_version.as_deref() else {
+        return which_fail(json, "未设置默认版本（先用 --set-default <版本>）");
+    };
+    let bin = ctx
+        .dirs
+        .versions
+        .join(def)
+        .join("node_modules")
+        .join(".bin")
+        .join(if cfg!(windows) { "dsh.cmd" } else { "dsh" });
+    if !bin.exists() {
+        return which_fail(json, &format!("默认版本 {} 的入口不存在：{}", def, bin.to_string_lossy()));
+    }
+    if json {
+        println!("{}", json_str(&serde_json::json!({
+            "version": def,
+            "path": bin.to_string_lossy(),
+        })));
+    } else {
+        println!("{}", bin.to_string_lossy());
+    }
+    0
+}
+
+fn which_fail(json: bool, msg: &str) -> i32 {
+    if json {
+        println!("{}", json_str(&serde_json::json!({ "ok": false, "error": msg })));
+    } else {
+        eprintln!("{}", msg);
+    }
+    1
+}
+
 /// `--install <版本> [--registry <url>]`
-fn cmd_install(version: &str, registry: Option<&str>, dry_run: bool) -> i32 {
+fn cmd_install(version: &str, registry: Option<&str>, dry_run: bool, json: bool) -> i32 {
     let mut ctx = load_ctx();
     if dry_run {
-        println!("[dry-run] 将安装版本 {} 到 {}", version, ctx.dirs.versions.join(version).to_string_lossy());
-        if let Some(r) = registry {
-            println!("[dry-run] 使用 npm 源：{}", r);
+        if json {
+            println!("{}", json_str(&serde_json::json!({
+                "dry_run": true,
+                "action": "install",
+                "version": version,
+                "registry": registry,
+            })));
+        } else {
+            println!("[dry-run] 将安装版本 {} 到 {}", version, ctx.dirs.versions.join(version).to_string_lossy());
+            if let Some(r) = registry {
+                println!("[dry-run] 使用 npm 源：{}", r);
+            }
+            println!("[dry-run] 未执行任何操作");
         }
-        println!("[dry-run] 未执行任何操作");
         return 0;
     }
     if let Err(e) = ctx.dirs.ensure() {
-        eprintln!("创建数据目录失败：{}", e);
+        out_result(json, false, &format!("创建数据目录失败：{}", e));
         return 1;
     }
 
@@ -341,7 +426,7 @@ fn cmd_install(version: &str, registry: Option<&str>, dry_run: bool) -> i32 {
             ctx.cfg.broken_versions.retain(|v| v != version);
             let _ = ctx.cfg.save(&ctx.mdir);
         }
-        println!("{}", msg);
+        out_result(json, true, &msg);
         0
     } else {
         let kind = versions::classify_error(&msg);
@@ -351,15 +436,22 @@ fn cmd_install(version: &str, registry: Option<&str>, dry_run: bool) -> i32 {
                 let _ = ctx.cfg.save(&ctx.mdir);
             }
         }
-        eprintln!("{}", msg);
+        out_result(json, false, &msg);
         1
     }
 }
 
 /// `--uninstall <版本>`（与 GUI 的 uninstall_version 行为一致）
-fn cmd_uninstall(version: &str, dry_run: bool) -> i32 {
+fn cmd_uninstall(version: &str, dry_run: bool, json: bool) -> i32 {
     let mut ctx = load_ctx();
     if dry_run {
+        if json {
+            println!("{}", json_str(&serde_json::json!({
+                "dry_run": true, "action": "uninstall", "version": version,
+                "installed": versions::exists(&ctx.dirs.versions, version),
+            })));
+            return 0;
+        }
         let installed = versions::exists(&ctx.dirs.versions, version);
         println!("[dry-run] 将卸载版本 {}", version);
         if installed {
@@ -406,18 +498,25 @@ fn cmd_uninstall(version: &str, dry_run: bool) -> i32 {
         }
         // 不在这里同步清空回收站：CLI 也要保持"秒退"。
         // trash 残留由下次启动的维护任务（cleanup_trash）或 --maintenance 清理。
-        println!("{}", msg);
+        out_result(json, true, &msg);
         0
     } else {
-        eprintln!("{}", msg);
+        out_result(json, false, &msg);
         1
     }
 }
 
 /// `--set-default <版本>`
-fn cmd_set_default(version: &str, dry_run: bool) -> i32 {
+fn cmd_set_default(version: &str, dry_run: bool, json: bool) -> i32 {
     let mut ctx = load_ctx();
     if dry_run {
+        if json {
+            println!("{}", json_str(&serde_json::json!({
+                "dry_run": true, "action": "set-default", "version": version,
+                "installed": versions::exists(&ctx.dirs.versions, version),
+            })));
+            return 0;
+        }
         let installed = versions::exists(&ctx.dirs.versions, version);
         println!("[dry-run] 将把默认版本设为 {}", version);
         if installed {
@@ -431,23 +530,29 @@ fn cmd_set_default(version: &str, dry_run: bool) -> i32 {
         return 0;
     }
     if !versions::exists(&ctx.dirs.versions, version) {
-        eprintln!("版本 {} 未安装", version);
+        out_result(json, false, &format!("版本 {} 未安装", version));
         return 1;
     }
     ctx.cfg.default_version = Some(version.to_string());
     if let Err(e) = ctx.cfg.save(&ctx.mdir) {
-        eprintln!("保存配置失败：{}", e);
+        out_result(json, false, &format!("保存配置失败：{}", e));
         return 1;
     }
     crate::commands::regenerate_forward_script(&ctx.mdir, &ctx.cfg);
-    println!("默认版本已设为 {}，dsh 命令已就绪", version);
+    out_result(json, true, &format!("默认版本已设为 {}，dsh 命令已就绪", version));
     0
 }
 
 /// `--maintenance [--cleanup|--prune]`
-fn cmd_maintenance(kind: &str, dry_run: bool) -> i32 {
+fn cmd_maintenance(kind: &str, dry_run: bool, json: bool) -> i32 {
     let mut ctx = load_ctx();
     if dry_run {
+        if json {
+            println!("{}", json_str(&serde_json::json!({
+                "dry_run": true, "action": "maintenance", "kind": kind,
+            })));
+            return 0;
+        }
         if kind == "cleanup" || kind == "all" {
             println!("[dry-run] 将清理孤立 webview 缓存（{}）", ctx.dirs.webview.to_string_lossy());
         }
@@ -462,30 +567,51 @@ fn cmd_maintenance(kind: &str, dry_run: bool) -> i32 {
         return 1;
     }
 
+    let mut cleaned: Option<usize> = None;
+    let mut pruned = false;
     if kind == "cleanup" || kind == "all" {
         let removed = maintenance::cleanup_orphan_webviews(&ctx.dirs.versions, &ctx.dirs.webview);
         ctx.cfg.maintenance.last_cleanup_at = Some(maintenance::now_secs());
         ctx.cfg.maintenance.last_cleanup_count = removed.len() as u64;
-        println!("已清理孤立缓存 {} 项", removed.len());
+        cleaned = Some(removed.len());
+        if !json {
+            println!("已清理孤立缓存 {} 项", removed.len());
+        }
     }
 
     if kind == "prune" || kind == "all" {
         match maintenance::run_store_prune(&ctx.dirs.store, &ctx.dirs.cache, &ctx.dirs.state) {
             Ok(()) => {
                 ctx.cfg.maintenance.last_prune_at = Some(maintenance::now_secs());
-                println!("已回收依赖仓库");
+                pruned = true;
+                if !json {
+                    println!("已回收依赖仓库");
+                }
             }
             Err(e) => {
                 let _ = ctx.cfg.save(&ctx.mdir);
-                eprintln!("回收依赖仓库失败：{}", e);
+                if json {
+                    println!("{}", json_str(&serde_json::json!({ "ok": false, "error": format!("回收依赖仓库失败：{}", e) })));
+                } else {
+                    eprintln!("回收依赖仓库失败：{}", e);
+                }
                 return 1;
             }
         }
     }
 
     if let Err(e) = ctx.cfg.save(&ctx.mdir) {
-        eprintln!("保存配置失败：{}", e);
+        if json {
+            println!("{}", json_str(&serde_json::json!({ "ok": false, "error": format!("保存配置失败：{}", e) })));
+        } else {
+            eprintln!("保存配置失败：{}", e);
+        }
         return 1;
+    }
+    if json {
+        println!("{}", json_str(&serde_json::json!({
+            "ok": true, "kind": kind, "cleaned": cleaned, "pruned": pruned,
+        })));
     }
     0
 }
@@ -503,21 +629,24 @@ fn print_help() {
         "dsh-multiver {} —— DSH 多版本管理器（无头 CLI）
 
 用法：
-  dsh-multiver --list
+  dsh-multiver --list [--json]
+  dsh-multiver --which [--json]
   dsh-multiver --install <版本> [--registry <url>]
   dsh-multiver --uninstall <版本>
   dsh-multiver --set-default <版本>
   dsh-multiver --maintenance [--cleanup | --prune]
   dsh-multiver --help
-  dsh-multiver --version
+  dsh-multiver --version [--json]
 
 说明：
   --list         列出已安装版本（一行一个；默认版本以 \"* \" 前缀标记）
+  --which        输出默认版本 dsh 入口的绝对路径（无默认版本则失败）
   --install      安装指定版本；--registry 可指定 npm 源（默认官方源）
   --uninstall    卸载指定版本
   --set-default  设为默认版本，并重生成终端 dsh 命令
   --maintenance  磁盘维护：--cleanup 清孤立缓存 / --prune 回收依赖仓库 / 不带则两者都做
   --dry-run      只预览不执行（可搭配 --install / --uninstall / --set-default / --maintenance）
+  --json         结构化输出（机读）；只影响格式，不改行为
 
   不带上述任一参数时，启动图形界面。
   退出码：成功 0 / 失败 1。",
@@ -598,6 +727,22 @@ mod tests {
             Ok(Some(CliCommand::SetDefault { version })) => assert_eq!(version, "0.1.6"),
             other => panic!("unexpected: {:?}", other),
         }
+    }
+
+    #[test]
+    fn which_command() {
+        assert!(matches!(parse(&args(&["--which"])), Ok(Some(CliCommand::Which))));
+    }
+
+    #[test]
+    fn json_parses_as_modifier() {
+        assert!(has_json(&args(&["--list", "--json"])));
+        assert!(!has_json(&args(&["--list"])));
+        // 只 --json（无命令）→ 报错（不启动 GUI）
+        assert!(parse(&args(&["--json"])).is_err());
+        // 命令仍正确解析
+        assert!(matches!(parse(&args(&["--list", "--json"])), Ok(Some(CliCommand::List))));
+        assert!(matches!(parse(&args(&["--which", "--json"])), Ok(Some(CliCommand::Which))));
     }
 
     #[test]
