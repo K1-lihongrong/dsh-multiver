@@ -1,6 +1,7 @@
 <script setup>
 import { ref, watch } from "vue";
 import { invoke } from "@tauri-apps/api/core";
+import { save } from "@tauri-apps/plugin-dialog";
 import { useToast } from "../composables/useToast.js";
 import { useSharedHomeWarn } from "../composables/useSharedHomeWarn.js";
 import { themeMode, setTheme } from "../composables/useTheme.js";
@@ -86,6 +87,21 @@ async function toggleAutoMaint(on) {
   try {
     await invoke("set_auto_maintenance", { enabled: on });
     emit("refresh");
+  } catch (e) {
+    notify("" + e);
+  }
+}
+
+/// 导出配置 + 版本清单（换机迁移用）
+async function exportBackup() {
+  try {
+    const file = await save({
+      title: t("paths.exportBackup"),
+      defaultPath: "dsh-multiver-backup.json",
+      filters: [{ name: "JSON", extensions: ["json"] }],
+    });
+    if (!file) return; // 用户取消
+    notify(await invoke("export_backup", { file }));
   } catch (e) {
     notify("" + e);
   }
@@ -225,6 +241,7 @@ function fmtTs(sec) {
         <button class="btn small" @click="doMaintenance('cleanup')" :disabled="!!maintBusy">{{ maintBusy === 'cleanup' ? t("paths.cleaning") : t("paths.cleanup") }}</button>
         <button class="btn small" @click="doMaintenance('prune')" :disabled="!!maintBusy">{{ maintBusy === 'prune' ? t("paths.pruning") : t("paths.prune") }}</button>
         <button class="btn small" @click="openDir('logs')">{{ t("paths.openLogs") }}</button>
+        <button class="btn small" @click="exportBackup">{{ t("paths.exportBackup") }}</button>
       </div>
     </div>
   </section>

@@ -27,6 +27,11 @@ const MESSAGES = {
     "update.viewRelease": "查看更新说明",
     "app.launchCrashed": "版本 {v} 启动后立即退出，请查看日志。",
     "env.checkFailed": "环境检查失败",
+    "env.node.name": "Node.js",
+    "env.pnpm.name": "pnpm",
+    "env.writable.name": "根目录可写",
+    "env.disk.name": "磁盘空间",
+    "env.registry.name": "npm 源连通",
 
     "env.title": "环境检查",
     "env.recheck": "重新检查",
@@ -170,6 +175,7 @@ const MESSAGES = {
     "paths.prune": "回收依赖仓库",
     "paths.pruning": "回收中...",
     "paths.openLogs": "打开日志目录",
+    "paths.exportBackup": "导出配置",
     "paths.never": "从未",
 
     "notes.viewNotes": "查看更新说明",
@@ -190,6 +196,11 @@ const MESSAGES = {
     "update.viewRelease": "Release notes",
     "app.launchCrashed": "Version {v} exited right after launch; check the logs.",
     "env.checkFailed": "Environment check failed",
+    "env.node.name": "Node.js",
+    "env.pnpm.name": "pnpm",
+    "env.writable.name": "Root writable",
+    "env.disk.name": "Disk space",
+    "env.registry.name": "npm registry",
 
     "env.title": "Environment Check",
     "env.recheck": "Re-check",
@@ -333,6 +344,7 @@ const MESSAGES = {
     "paths.prune": "Prune store",
     "paths.pruning": "Pruning...",
     "paths.openLogs": "Open log directory",
+    "paths.exportBackup": "Export config",
     "paths.never": "Never",
 
     "notes.viewNotes": "View release notes",
@@ -353,6 +365,11 @@ const MESSAGES = {
     "update.viewRelease": "リリースノート",
     "app.launchCrashed": "バージョン {v} が起動直後に終了しました。ログを確認してください。",
     "env.checkFailed": "環境チェックに失敗",
+    "env.node.name": "Node.js",
+    "env.pnpm.name": "pnpm",
+    "env.writable.name": "ルート書込可",
+    "env.disk.name": "ディスク容量",
+    "env.registry.name": "npm レジストリ",
 
     "env.title": "環境チェック",
     "env.recheck": "再チェック",
@@ -496,6 +513,7 @@ const MESSAGES = {
     "paths.prune": "ストアを整理",
     "paths.pruning": "整理中...",
     "paths.openLogs": "ログディレクトリを開く",
+    "paths.exportBackup": "設定をエクスポート",
     "paths.never": "なし",
 
     "notes.viewNotes": "リリースノートを表示",
@@ -516,6 +534,11 @@ const MESSAGES = {
     "update.viewRelease": "查看更新說明",
     "app.launchCrashed": "版本 {v} 啟動後立即結束，請查看日誌。",
     "env.checkFailed": "環境檢查失敗",
+    "env.node.name": "Node.js",
+    "env.pnpm.name": "pnpm",
+    "env.writable.name": "根目錄可寫",
+    "env.disk.name": "磁碟空間",
+    "env.registry.name": "npm 來源連通",
 
     "env.title": "環境檢查",
     "env.recheck": "重新檢查",
@@ -659,6 +682,7 @@ const MESSAGES = {
     "paths.prune": "回收依賴倉庫",
     "paths.pruning": "回收中...",
     "paths.openLogs": "開啟日誌目錄",
+    "paths.exportBackup": "匯出設定",
     "paths.never": "從未",
 
     "notes.viewNotes": "查看更新說明",

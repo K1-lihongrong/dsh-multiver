@@ -21,8 +21,12 @@ fn cmd_command(program: &str) -> Command {
 /// 单项检查结果
 #[derive(Serialize)]
 pub struct CheckItem {
-    /// 检查项名称
+    /// 检查项名称（中文，作为无 i18n 时的回退）
     pub name: String,
+    /// i18n key（前端优先用 t(name_key) 渲染；空则用 name）。
+    /// 由 `name_to_key` 从 name 反查，避免改动所有调用点。
+    #[serde(default)]
+    pub name_key: String,
     /// 是否通过
     pub ok: bool,
     /// 详细信息（版本号或错误原因）
@@ -37,10 +41,23 @@ pub struct CheckItem {
     pub install_url: String,
 }
 
+/// 检查项中文名 -> i18n key。前端用 `t(key)` 渲染，支持 4 语言。
+fn name_to_key(name: &str) -> &'static str {
+    match name {
+        "Node.js" => "env.node.name",
+        "pnpm" => "env.pnpm.name",
+        "根目录可写" => "env.writable.name",
+        "磁盘空间" => "env.disk.name",
+        "npm 源连通" => "env.registry.name",
+        _ => "",
+    }
+}
+
 /// 构造一个"通过"项（无引导）。
 fn ok_item(name: &str, detail: String, critical: bool) -> CheckItem {
     CheckItem {
         name: name.to_string(),
+        name_key: name_to_key(name).to_string(),
         ok: true,
         detail,
         critical,
@@ -59,6 +76,7 @@ fn fail_item(
 ) -> CheckItem {
     CheckItem {
         name: name.to_string(),
+        name_key: name_to_key(name).to_string(),
         ok: false,
         detail,
         critical,

@@ -1,4 +1,5 @@
 mod actions;
+mod backup;
 mod cli;
 mod commands;
 mod config;
@@ -119,6 +120,7 @@ pub fn run() {
             commands::open_isolated_dir,
             commands::log_frontend,
             commands::check_update,
+            commands::export_backup,
         ])
         .setup(move |app| {
             use tauri::Manager;

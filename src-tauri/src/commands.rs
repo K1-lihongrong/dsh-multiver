@@ -737,6 +737,16 @@ pub(crate) fn set_isolated(app: tauri::AppHandle, version: String, isolated: boo
     }
 }
 
+/// 导出配置 + 版本清单到指定文件。返回写入路径。
+#[tauri::command]
+pub(crate) fn export_backup(app: tauri::AppHandle, file: String) -> Result<String, String> {
+    let mdir = manager_dir(&app);
+    let cfg = Config::load(&mdir);
+    let dirs = Dirs::new(cfg.resolve_root(&mdir));
+    let out = std::path::PathBuf::from(file);
+    crate::backup::export_to_file(&cfg, &dirs.versions, &out)
+}
+
 /// 检查是否有新版本（更新提醒，C1）。网络请求放后台线程，绝不阻塞 UI。
 #[tauri::command]
 pub(crate) async fn check_update() -> crate::updater::UpdateInfo {
