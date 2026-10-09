@@ -9,6 +9,7 @@ mod logging;
 mod maintenance;
 #[cfg(unix)]
 mod procreg;
+mod updater;
 mod versions;
 mod window;
 
@@ -107,6 +108,8 @@ pub fn run() {
             commands::open_url,
             commands::check_env,
             commands::set_isolated,
+            commands::set_use_official_home,
+            commands::get_official_home,
             commands::scan_version_size,
             commands::run_maintenance,
             commands::set_auto_maintenance,
@@ -115,6 +118,7 @@ pub fn run() {
             commands::clear_isolated_data,
             commands::open_isolated_dir,
             commands::log_frontend,
+            commands::check_update,
         ])
         .setup(move |app| {
             use tauri::Manager;

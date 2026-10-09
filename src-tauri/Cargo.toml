@@ -1,6 +1,6 @@
 [package]
 name = "dsh-multiver"
-version = "0.2.5"
+version = "0.2.6"
 description = "Lightweight portable version manager for DeepSeek Harness"
 authors = ["K1-lihongrong"]
 edition = "2021"
@@ -23,6 +23,9 @@ tauri-plugin-opener = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tauri-plugin-dialog = "2"
+# 更新提醒：查询 GitHub Releases 最新版本（见 updater.rs）
+# 只用到阻塞式 client + json，关闭默认 features 减小体积（不用 TLS 后端之外的特性）
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
 
 # 用于设置进程 AppUserModelID，稳定 Windows 任务栏图标分组（见 lib.rs）
 # 以及用 Job Object 绑定 dsh 子进程，根除孤儿进程（见 jobobj.rs）

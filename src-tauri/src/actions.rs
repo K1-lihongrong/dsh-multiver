@@ -66,7 +66,8 @@ pub fn list_remote(store_dir: &Path, cache_dir: &Path, state_dir: &Path) -> (boo
 ///
 /// - version: 默认版本号
 /// - root_dir: 数据根目录（绝对路径）
-/// - isolated: 该默认版本是否开启隔离（决定 DSH_HOME 指向共享 home 还是独立 home）
+/// - dsh_home: 该版本的 DSH_HOME（由 `commands::resolve_home` 算好传入，
+///   已含隔离 / 复用官方 ~/.dsh / 管理器共享 三种情况的最终路径）
 ///
 /// 版本号、根目录、DSH_HOME 都**直接写死在脚本里**（由 Rust 在生成时算好），
 /// 避免批处理解析 config.json 的脆弱性。
@@ -74,19 +75,15 @@ pub fn list_remote(store_dir: &Path, cache_dir: &Path, state_dir: &Path) -> (boo
 ///
 /// 平台分派：Windows 生成 .cmd 批处理，Unix 生成 POSIX sh 脚本。
 #[cfg(windows)]
-pub fn build_forward_script(version: &str, root_dir: &str, isolated: bool) -> String {
+pub fn build_forward_script(version: &str, root_dir: &str, dsh_home: &str) -> String {
     // 确保 root 以反斜杠结尾，方便拼接
     let mut root = root_dir.replace('/', "\\");
     if !root.ends_with('\\') {
         root.push('\\');
     }
-    // DSH_HOME：隔离版本 -> <根>versions\<版本>\home；非隔离 -> <根>home
-    // 注意：root 已以 \ 结尾，这里不要再加前导 \
-    let home = if isolated {
-        format!("{}versions\\{}\\home", root, version)
-    } else {
-        format!("{}home", root)
-    };
+    // DSH_HOME 由调用方（regenerate_forward_script）通过 resolve_home 算好传入，
+    // 这里统一转成反斜杠形式（Windows 批处理友好）。
+    let home = dsh_home.replace('/', "\\");
     let mut s = String::new();
     s.push_str("@echo off\r\n");
     s.push_str("setlocal\r\n");
@@ -121,13 +118,9 @@ pub fn build_forward_script(version: &str, root_dir: &str, isolated: bool) -> St
 ///
 /// 注意：本分支在 Windows 上不参与编译，尚未经真机验证（见 docs/开发缺口.md GAP-005）。
 #[cfg(unix)]
-pub fn build_forward_script(version: &str, root_dir: &str, isolated: bool) -> String {
+pub fn build_forward_script(version: &str, root_dir: &str, dsh_home: &str) -> String {
     let root = root_dir.trim_end_matches('/');
-    let home = if isolated {
-        format!("{}/versions/{}/home", root, version)
-    } else {
-        format!("{}/home", root)
-    };
+    let home = dsh_home;
     format!(
         "#!/bin/sh\n\
          # dsh-multiver 转发脚本（自动生成，请勿手改）\n\
@@ -219,7 +212,7 @@ mod unix_tests {
     fn unix_forward_script_has_node_guard() {
         // Unix 转发脚本也必须在调 dsh 前做 Node 能力守卫
         // （否则 22.16 下 dsh 静默退出，纯 CLI 用户会遇到"命令没反应"）
-        let s = build_forward_script("0.2.0-rc.2", "/home/u/dsh", false);
+        let s = build_forward_script("0.2.0-rc.2", "/home/u/dsh", "/home/u/dsh/home");
         assert!(s.contains("import.meta.main"), "应含 Node 特性探测");
         assert!(s.contains("22.19"), "应提示所需版本");
         assert!(s.contains("exit 1"), "应有失败退出");
@@ -231,7 +224,7 @@ mod unix_tests {
 
     #[test]
     fn unix_forward_script_sets_home_and_bin() {
-        let s = build_forward_script("0.2.0-rc.2", "/home/u/dsh", true);
+        let s = build_forward_script("0.2.0-rc.2", "/home/u/dsh", "/home/u/dsh/versions/0.2.0-rc.2/home");
         assert!(s.contains("VER='0.2.0-rc.2'"));
         assert!(s.contains("ROOT='/home/u/dsh'"));
         // 隔离版本 → home 指向版本目录
@@ -248,7 +241,7 @@ mod tests {
 
     #[test]
     fn forward_script_shared_home() {
-        let s = build_forward_script("0.1.7", "D:\\DSH", false);
+        let s = build_forward_script("0.1.7", "D:\\DSH", "D:\\DSH\\home");
         // 非隔离：DSH_HOME 指向 <根>\home
         assert!(s.contains("set \"VER=0.1.7\""));
         assert!(s.contains("set \"ROOT=D:\\DSH\""));
@@ -263,7 +256,7 @@ mod tests {
 
     #[test]
     fn forward_script_isolated_home() {
-        let s = build_forward_script("0.2.0", "D:\\DSH", true);
+        let s = build_forward_script("0.2.0", "D:\\DSH", "D:\\DSH\\versions\\0.2.0\\home");
         // 隔离：DSH_HOME 指向 <根>\versions\<版本>\home
         assert!(s.contains("set \"DSH_HOME_CANDIDATE=D:\\DSH\\versions\\0.2.0\\home\""));
     }
@@ -271,14 +264,14 @@ mod tests {
     #[test]
     fn forward_script_normalizes_slashes_and_trailing_backslash() {
         // root 用正斜杠、且不以反斜杠结尾 → 应归一化为反斜杠并补尾
-        let s = build_forward_script("1.0.0", "D:/data/root", false);
+        let s = build_forward_script("1.0.0", "D:/data/root", "D:/data/root/home");
         assert!(s.contains("set \"DSH_HOME_CANDIDATE=D:\\data\\root\\home\""));
     }
 
     #[test]
     fn forward_script_has_node_guard() {
         // 转发脚本必须在调 dsh 前做 Node 能力守卫（否则 22.16 下 dsh 静默退出）
-        let s = build_forward_script("0.1.7", "D:\\DSH", false);
+        let s = build_forward_script("0.1.7", "D:\\DSH", "D:\\DSH\\home");
         assert!(s.contains("import.meta.main"), "应含 Node 特性探测");
         assert!(s.contains("22.19"), "应提示所需版本");
         assert!(s.contains("errorlevel 1"), "应有失败分支");
@@ -287,7 +280,7 @@ mod tests {
     #[test]
     fn forward_script_root_already_trailing_backslash() {
         // root 已以反斜杠结尾 → 不应出现双反斜杠
-        let s = build_forward_script("1.0.0", "D:\\data\\", false);
+        let s = build_forward_script("1.0.0", "D:\\data\\", "D:\\data\\home");
         assert!(s.contains("set \"DSH_HOME_CANDIDATE=D:\\data\\home\""));
         assert!(!s.contains("D:\\data\\\\home"));
     }

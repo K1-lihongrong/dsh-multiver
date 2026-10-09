@@ -44,6 +44,23 @@ pub enum CliCommand {
     Maintenance {
         kind: String,
     },
+    /// 查看单个版本详情（版本号 / 路径 / 默认 / 隔离 / 安装日期 / 占用）
+    Info {
+        version: String,
+    },
+    /// 列出远端可用版本（从 npm 查询，最新在前）
+    Versions,
+    /// 环境检查（Node / pnpm / 根目录可写 / 磁盘 / npm 源连通）
+    Env,
+    /// 开关某版本的数据隔离（on=true 开启，false 关闭）
+    Isolate {
+        version: String,
+        on: bool,
+    },
+    /// 清理：孤立 webview 缓存 + 回收站（等价 maintenance --cleanup + trash）
+    Clean,
+    /// 一键诊断：聚合检查（目录 / broken / 残留登记 / 环境 / 日志）
+    Doctor,
     Help,
     Version,
 }
@@ -64,6 +81,12 @@ fn is_cli_flag(a: &str) -> bool {
             | "--uninstall"
             | "--set-default"
             | "--maintenance"
+            | "--info"
+            | "--versions"
+            | "--env"
+            | "--isolate"
+            | "--clean"
+            | "--doctor"
             | "--help"
             | "-h"
             | "--version"
@@ -126,6 +149,20 @@ pub fn parse(args: &[String]) -> Result<Option<CliCommand>, String> {
                 let version = next_value(args, i, "--set-default")?;
                 return Ok(Some(CliCommand::SetDefault { version }));
             }
+            "--info" => {
+                let version = next_value(args, i, "--info")?;
+                return Ok(Some(CliCommand::Info { version }));
+            }
+            "--versions" => return Ok(Some(CliCommand::Versions)),
+            "--env" => return Ok(Some(CliCommand::Env)),
+            "--isolate" => {
+                let version = next_value(args, i, "--isolate")?;
+                // 默认开启；显式 --off 则关闭
+                let on = !args.iter().any(|x| x == "--off");
+                return Ok(Some(CliCommand::Isolate { version, on }));
+            }
+            "--clean" => return Ok(Some(CliCommand::Clean)),
+            "--doctor" => return Ok(Some(CliCommand::Doctor)),
             "--maintenance" => {
                 let kind = if args.iter().any(|x| x == "--cleanup") {
                     "cleanup"
@@ -288,6 +325,12 @@ pub fn run(cmd: CliCommand, dry_run: bool, json: bool) -> i32 {
         CliCommand::Uninstall { version } => cmd_uninstall(&version, dry_run, json),
         CliCommand::SetDefault { version } => cmd_set_default(&version, dry_run, json),
         CliCommand::Maintenance { kind } => cmd_maintenance(&kind, dry_run, json),
+        CliCommand::Info { version } => cmd_info(&version, json),
+        CliCommand::Versions => cmd_versions(json),
+        CliCommand::Env => cmd_env(json),
+        CliCommand::Isolate { version, on } => cmd_isolate(&version, on, dry_run, json),
+        CliCommand::Clean => cmd_clean(dry_run, json),
+        CliCommand::Doctor => cmd_doctor(json),
     }
 }
 
@@ -616,6 +659,271 @@ fn cmd_maintenance(kind: &str, dry_run: bool, json: bool) -> i32 {
     0
 }
 
+/// `--doctor`：一键诊断。聚合检查项，每项 ✓/✗ + 说明；有致命项失败 → 退出码 1。
+fn cmd_doctor(json: bool) -> i32 {
+    let ctx = load_ctx();
+    let mut items: Vec<serde_json::Value> = Vec::new();
+    let mut fatal = false;
+
+    // 1) 数据根目录存在 / 可写
+    let root = &ctx.dirs.root;
+    let root_exists = root.exists();
+    let root_writable = std::fs::metadata(root).map(|m| !m.permissions().readonly()).unwrap_or(false);
+    let root_ok = root_exists && root_writable;
+    if !root_ok { fatal = true; }
+    items.push(serde_json::json!({
+        "name": "数据根目录", "ok": root_ok, "critical": true,
+        "detail": if !root_exists { format!("不存在：{}", root.to_string_lossy()) }
+                  else if !root_writable { format!("不可写：{}", root.to_string_lossy()) }
+                  else { root.to_string_lossy().to_string() },
+    }));
+
+    // 2) 各子目录存在
+    for (label, path) in [
+        ("versions", &ctx.dirs.versions),
+        ("store", &ctx.dirs.store),
+        ("home", &ctx.dirs.home),
+    ] {
+        let ok = path.exists();
+        items.push(serde_json::json!({
+            "name": format!("目录 {}", label), "ok": ok, "critical": false,
+            "detail": path.to_string_lossy(),
+        }));
+    }
+
+    // 3) broken 版本
+    let broken = &ctx.cfg.broken_versions;
+    items.push(serde_json::json!({
+        "name": "失败版本标记", "ok": broken.is_empty(), "critical": false,
+        "detail": if broken.is_empty() { "无".to_string() }
+                  else { format!("{} 个：{}", broken.len(), broken.join(", ")) },
+    }));
+
+    // 4) 已安装版本数
+    let installed = versions::list(&ctx.dirs.versions, ctx.cfg.default_version.as_deref(), &ctx.cfg.isolated_versions);
+    items.push(serde_json::json!({
+        "name": "已安装版本", "ok": !installed.is_empty(), "critical": false,
+        "detail": if installed.is_empty() { "无".to_string() }
+                  else { format!("{} 个", installed.len()) },
+    }));
+
+    // 5) 环境检查（Node / pnpm / 磁盘 / npm 源等）
+    let env_items = crate::envcheck::run_all(&ctx.dirs.root);
+    for it in &env_items {
+        if it.critical && !it.ok { fatal = true; }
+        items.push(serde_json::json!({
+            "name": it.name, "ok": it.ok, "critical": it.critical, "detail": it.detail,
+        }));
+    }
+
+    let _ = root;
+
+    if json {
+        println!("{}", json_str(&serde_json::json!({ "ok": !fatal, "items": items })));
+    } else {
+        for it in &items {
+            let ok = it["ok"].as_bool().unwrap_or(false);
+            let name = it["name"].as_str().unwrap_or("");
+            let detail = it["detail"].as_str().unwrap_or("");
+            let crit = if it["critical"].as_bool().unwrap_or(false) { "" } else { "（非致命）" };
+            println!("[{}] {}{}  {}", if ok { "✓" } else { "✗" }, name, crit, detail);
+        }
+    }
+    if fatal { 1 } else { 0 }
+}
+
+/// `--isolate <版本> [--off]`：开关数据隔离（默认开启；--off 关闭）。
+/// 与 GUI 的 set_isolated 行为一致：改配置 + 预创建隔离目录 + 重生成转发脚本。
+fn cmd_isolate(version: &str, on: bool, dry_run: bool, json: bool) -> i32 {
+    let mut ctx = load_ctx();
+    if dry_run {
+        let installed = versions::exists(&ctx.dirs.versions, version);
+        if json {
+            println!("{}", json_str(&serde_json::json!({
+                "dry_run": true, "action": "isolate", "version": version,
+                "isolated": on, "installed": installed,
+            })));
+        } else {
+            println!(
+                "[dry-run] 将{}版本 {} 的数据隔离",
+                if on { "开启" } else { "关闭" },
+                version
+            );
+            if !installed {
+                println!("[dry-run] 警告：该版本未安装（实际执行会失败）");
+            }
+            println!("[dry-run] 会重生成终端转发脚本 dsh（若该版本是默认版本）");
+            println!("[dry-run] 未执行任何操作");
+        }
+        return 0;
+    }
+    if !versions::exists(&ctx.dirs.versions, version) {
+        return info_fail(json, &format!("版本 {} 未安装", version));
+    }
+    ctx.cfg.isolated_versions.retain(|v| v != version);
+    if on {
+        ctx.cfg.isolated_versions.push(version.to_string());
+        let _ = std::fs::create_dir_all(ctx.dirs.versions.join(version).join("home"));
+    }
+    if let Err(e) = ctx.cfg.save(&ctx.mdir) {
+        return info_fail(json, &format!("保存配置失败：{}", e));
+    }
+    crate::commands::regenerate_forward_script(&ctx.mdir, &ctx.cfg);
+    let msg = if on {
+        format!("{} 已开启数据隔离", version)
+    } else {
+        format!("{} 已关闭数据隔离", version)
+    };
+    out_result(json, true, &msg);
+    0
+}
+
+/// `--clean`：清理孤立 webview 缓存 + 回收站（maintenance --cleanup 的超集）。
+fn cmd_clean(dry_run: bool, json: bool) -> i32 {
+    let ctx = load_ctx();
+    if dry_run {
+        if json {
+            println!("{}", json_str(&serde_json::json!({
+                "dry_run": true, "action": "clean",
+            })));
+        } else {
+            println!("[dry-run] 将清理孤立 webview 缓存（{}）", ctx.dirs.webview.to_string_lossy());
+            println!("[dry-run] 将清空卸载回收站（{}）", ctx.dirs.trash.to_string_lossy());
+            println!("[dry-run] 未执行任何操作");
+        }
+        return 0;
+    }
+    if let Err(e) = ctx.dirs.ensure() {
+        return info_fail(json, &format!("创建数据目录失败：{}", e));
+    }
+    let removed = maintenance::cleanup_orphan_webviews(&ctx.dirs.versions, &ctx.dirs.webview);
+    let trashed = maintenance::cleanup_trash(&ctx.dirs.trash);
+    if json {
+        println!("{}", json_str(&serde_json::json!({
+            "ok": true, "webviews": removed.len(), "trash": trashed,
+        })));
+    } else {
+        println!("已清理孤立缓存 {} 项", removed.len());
+        println!("已清空回收站 {} 项", trashed);
+    }
+    0
+}
+
+/// `--info <版本>`：查看单个版本详情（人读多行 / JSON 对象）。
+fn cmd_info(version: &str, json: bool) -> i32 {
+    let ctx = load_ctx();
+    if !versions::exists(&ctx.dirs.versions, version) {
+        return info_fail(json, &format!("版本 {} 未安装", version));
+    }
+    let list = versions::list(
+        &ctx.dirs.versions,
+        ctx.cfg.default_version.as_deref(),
+        &ctx.cfg.isolated_versions,
+    );
+    let Some(info) = list.iter().find(|v| v.version == version) else {
+        return info_fail(json, &format!("版本 {} 未安装", version));
+    };
+    let size = versions::version_size_detail(&ctx.dirs.versions, version);
+    // 非隔离时 DSH_HOME 可能是共享 home 或官方 ~/.dsh，界面/脚本都需要看到实际值
+    let home = crate::commands::resolve_home(&ctx.cfg, &ctx.dirs, version);
+
+    if json {
+        println!("{}", json_str(&serde_json::json!({
+            "version": info.version,
+            "path": info.path,
+            "is_default": info.is_default,
+            "isolated": info.isolated,
+            "shared_home": info.shared_home,
+            "installed_at": info.installed_at,
+            "home": home.to_string_lossy(),
+            "size": size,
+        })));
+    } else {
+        println!("版本:     {}", info.version);
+        println!("路径:     {}", info.path);
+        println!("默认:     {}", if info.is_default { "是" } else { "否" });
+        if info.isolated {
+            println!("隔离:     是（独立 home）");
+        } else if ctx.cfg.use_official_dsh_home {
+            println!("隔离:     否（官方配置目录）");
+        } else {
+            println!("隔离:     否（共享 home）");
+        }
+        println!("配置目录: {}", home.to_string_lossy());
+        if !info.installed_at.is_empty() {
+            println!("安装于:   {}", info.installed_at);
+        }
+        println!(
+            "占用:     {}（复用 {} / 独占 {}）",
+            fmt_bytes(size.total),
+            fmt_bytes(size.shared_size),
+            fmt_bytes(size.exclusive_size)
+        );
+    }
+    0
+}
+
+fn info_fail(json: bool, msg: &str) -> i32 {
+    if json {
+        println!("{}", json_str(&serde_json::json!({ "ok": false, "error": msg })));
+    } else {
+        eprintln!("{}", msg);
+    }
+    1
+}
+
+/// `--versions`：列出远端可用版本（从 npm 查询，最新在前）。
+fn cmd_versions(json: bool) -> i32 {
+    let ctx = load_ctx();
+    let (ok, list, err) =
+        crate::actions::list_remote(&ctx.dirs.store, &ctx.dirs.cache, &ctx.dirs.state);
+    if !ok {
+        return info_fail(json, &format!("获取可用版本失败：{}", err));
+    }
+    if json {
+        println!("{}", json_str(&list));
+    } else {
+        for v in &list {
+            println!("{}", v);
+        }
+    }
+    0
+}
+
+/// `--env`：环境检查。有致命项失败 → 退出码 1（便于脚本 if 判断）。
+fn cmd_env(json: bool) -> i32 {
+    let ctx = load_ctx();
+    let items = crate::envcheck::run_all(&ctx.dirs.root);
+    let fatal_fail = items.iter().any(|i| i.critical && !i.ok);
+    if json {
+        println!("{}", json_str(&items));
+    } else {
+        for it in &items {
+            let mark = if it.ok { "✓" } else { "✗" };
+            let crit = if it.critical { "" } else { "（非致命）" };
+            println!("[{}] {}{}  {}", mark, it.name, crit, it.detail);
+        }
+    }
+    if fatal_fail { 1 } else { 0 }
+}
+
+/// 人类可读的字节数（B / KB / MB / GB，保留两位）。
+fn fmt_bytes(n: u64) -> String {
+    const KB: f64 = 1024.0;
+    const MB: f64 = KB * 1024.0;
+    const GB: f64 = MB * 1024.0;
+    let f = n as f64;
+    if f >= GB {
+        format!("{:.2} GB", f / GB)
+    } else if f >= MB {
+        format!("{:.2} MB", f / MB)
+    } else if f >= KB {
+        format!("{:.2} KB", f / KB)
+    } else {
+        format!("{} B", n)
+    }
+}
+
 /// 由 ProgressEvent 估算总进度百分比（0-100）。
 /// 简化版加权：每个阶段等权，阶段内按 fraction 推进。
 fn pct_of(ev: &versions::ProgressEvent) -> u32 {
@@ -634,6 +942,12 @@ fn print_help() {
   dsh-multiver --install <版本> [--registry <url>]
   dsh-multiver --uninstall <版本>
   dsh-multiver --set-default <版本>
+  dsh-multiver --info <版本> [--json]
+  dsh-multiver --versions [--json]
+  dsh-multiver --env [--json]
+  dsh-multiver --isolate <版本> [--off]
+  dsh-multiver --clean
+  dsh-multiver --doctor [--json]
   dsh-multiver --maintenance [--cleanup | --prune]
   dsh-multiver --help
   dsh-multiver --version [--json]
@@ -641,6 +955,12 @@ fn print_help() {
 说明：
   --list         列出已安装版本（一行一个；默认版本以 \"* \" 前缀标记）
   --which        输出默认版本 dsh 入口的绝对路径（无默认版本则失败）
+  --info         查看单个版本详情（路径 / 默认 / 隔离 / 配置目录 / 占用）
+  --versions     列出远端可用版本（从 npm 查询，最新在前）
+  --env          环境检查（有致命项失败时退出码 1）
+  --isolate      开启某版本的数据隔离（加 --off 则关闭）
+  --clean        清理孤立缓存 + 回收站（maintenance --cleanup 的超集）
+  --doctor       一键诊断（目录 / 失败标记 / 已安装 / 环境）；有致命项失败时退出码 1
   --install      安装指定版本；--registry 可指定 npm 源（默认官方源）
   --uninstall    卸载指定版本
   --set-default  设为默认版本，并重生成终端 dsh 命令
@@ -732,6 +1052,51 @@ mod tests {
     #[test]
     fn which_command() {
         assert!(matches!(parse(&args(&["--which"])), Ok(Some(CliCommand::Which))));
+    }
+
+    #[test]
+    fn info_command() {
+        match parse(&args(&["--info", "0.1.7"])) {
+            Ok(Some(CliCommand::Info { version })) => assert_eq!(version, "0.1.7"),
+            other => panic!("unexpected: {:?}", other),
+        }
+        // 缺参数值 → 报错
+        assert!(parse(&args(&["--info"])).is_err());
+    }
+
+    #[test]
+    fn doctor_command() {
+        assert!(matches!(parse(&args(&["--doctor"])), Ok(Some(CliCommand::Doctor))));
+        assert!(matches!(parse(&args(&["--doctor", "--json"])), Ok(Some(CliCommand::Doctor))));
+    }
+
+    #[test]
+    fn isolate_and_clean_commands() {
+        match parse(&args(&["--isolate", "0.1.7"])) {
+            Ok(Some(CliCommand::Isolate { version, on })) => {
+                assert_eq!(version, "0.1.7");
+                assert!(on, "默认应为开启");
+            }
+            other => panic!("unexpected: {:?}", other),
+        }
+        match parse(&args(&["--isolate", "0.1.7", "--off"])) {
+            Ok(Some(CliCommand::Isolate { version, on })) => {
+                assert_eq!(version, "0.1.7");
+                assert!(!on, "--off 应为关闭");
+            }
+            other => panic!("unexpected: {:?}", other),
+        }
+        assert!(parse(&args(&["--isolate"])).is_err());
+        assert!(matches!(parse(&args(&["--clean"])), Ok(Some(CliCommand::Clean))));
+    }
+
+    #[test]
+    fn versions_and_env_commands() {
+        assert!(matches!(parse(&args(&["--versions"])), Ok(Some(CliCommand::Versions))));
+        assert!(matches!(parse(&args(&["--env"])), Ok(Some(CliCommand::Env))));
+        // 修饰符可搭配
+        assert!(matches!(parse(&args(&["--versions", "--json"])), Ok(Some(CliCommand::Versions))));
+        assert!(matches!(parse(&args(&["--env", "--json"])), Ok(Some(CliCommand::Env))));
     }
 
     #[test]

@@ -40,6 +40,30 @@ async function resetRoot() {
   await applyRoot();
 }
 
+/// 切换「复用官方配置目录（~/.dsh）」
+async function toggleOfficialHome(on) {
+  if (on) {
+    // 防呆：首次开启时明确告知"不删数据、可恢复"
+    const path = (props.state && props.state.official_home_dir) || "~/.dsh";
+    const msg = t("paths.officialHomeConfirm", { path });
+    if (!window.confirm(msg)) return;
+    try {
+      notify(await invoke("set_use_official_home", { enabled: true }));
+      // 目录不存在时不静默：dsh 会自动创建，这里明确提示路径
+      emit("refresh");
+    } catch (e) {
+      notify("" + e);
+    }
+  } else {
+    try {
+      notify(await invoke("set_use_official_home", { enabled: false }));
+      emit("refresh");
+    } catch (e) {
+      notify("" + e);
+    }
+  }
+}
+
 function openDir(which) {
   emit("open-dir", which);
 }
@@ -101,6 +125,19 @@ function fmtTs(sec) {
       />
       <span>{{ t("paths.warnSharedHome") }}</span>
     </label>
+
+    <label class="checkbox-row">
+      <input
+        type="checkbox"
+        :checked="state && state.use_official_dsh_home"
+        @change="toggleOfficialHome($event.target.checked)"
+        :disabled="!state"
+      />
+      <span>{{ t("paths.useOfficialHome") }}</span>
+    </label>
+    <div class="maint-rules" style="margin-top: -8px; margin-bottom: 14px;" v-if="state && state.use_official_dsh_home">
+      <div>{{ t("paths.officialHomePath") }}：{{ state.official_home_dir || "~/.dsh" }}</div>
+    </div>
 
     <div class="paths" v-if="state">
       <div class="path-item" @click="openDir('versions')">

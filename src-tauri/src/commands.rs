@@ -39,6 +39,10 @@ pub(crate) struct AppState {
     manager_dir: String,
     broken_versions: Vec<String>,
     maintenance: config::MaintenanceConfig,
+    /// 是否复用官方 dsh 配置目录（~/.dsh）
+    use_official_dsh_home: bool,
+    /// 官方 dsh 配置目录路径（用于界面展示）；无法确定主目录时为 None
+    official_home_dir: Option<String>,
 }
 
 #[tauri::command]
@@ -83,6 +87,8 @@ pub(crate) fn get_state(app: tauri::AppHandle) -> AppState {
         manager_dir: mdir.to_string_lossy().to_string(),
         broken_versions: cfg.broken_versions.clone(),
         maintenance: cfg.maintenance.clone(),
+        use_official_dsh_home: cfg.use_official_dsh_home,
+        official_home_dir: official_dsh_home().map(|p| p.to_string_lossy().to_string()),
     }
 }
 
@@ -236,9 +242,12 @@ pub(crate) fn regenerate_forward_script(mdir: &PathBuf, cfg: &Config) {
     let target = path_bin_dir(mdir);
     match &cfg.default_version {
         Some(v) => {
-            let isolated = cfg.isolated_versions.iter().any(|x| x == v);
             let root = cfg.resolve_root(mdir);
-            let script = actions::build_forward_script(v, &root.to_string_lossy(), isolated);
+            let dirs = Dirs::new(root.clone());
+            // DSH_HOME 由 resolve_home 统一决定（隔离 / 复用官方 / 管理器共享），
+            // 与 GUI 启动路径使用同一逻辑，保证"GUI 能用的配置，终端也能用"。
+            let home = resolve_home(cfg, &dirs, v);
+            let script = actions::build_forward_script(v, &root.to_string_lossy(), &home.to_string_lossy());
             let _ = actions::write_forward_script(&target, &script);
         }
         None => {
@@ -295,16 +304,45 @@ fn path_bin_dir(manager: &PathBuf) -> PathBuf {
     manager.clone()
 }
 
-/// 计算某版本实际使用的 DSH_HOME（隔离版本用独立目录，否则用共享 home）
-fn resolve_home(cfg: &Config, dirs: &Dirs, version: &str) -> PathBuf {
-    let vdir = dirs.versions.join(version);
-    if cfg.isolated_versions.iter().any(|v| v == version) {
-        let isolated_home = vdir.join("home");
-        let _ = std::fs::create_dir_all(&isolated_home);
-        isolated_home
-    } else {
-        dirs.home.clone()
+/// 官方 dsh 默认配置目录（~/.dsh 或 %USERPROFILE% 下的 .dsh）。
+///
+/// 返回 None 表示无法确定用户主目录（极少见）；调用方应回退到共享 home。
+pub(crate) fn official_dsh_home() -> Option<PathBuf> {
+    #[cfg(windows)]
+    {
+        std::env::var("USERPROFILE")
+            .ok()
+            .filter(|p| !p.trim().is_empty())
+            .map(|p| PathBuf::from(p).join(".dsh"))
     }
+    #[cfg(not(windows))]
+    {
+        std::env::var("HOME")
+            .ok()
+            .filter(|p| !p.trim().is_empty())
+            .map(|p| PathBuf::from(p).join(".dsh"))
+    }
+}
+
+/// 计算某版本实际使用的 DSH_HOME。
+///
+/// 优先级（高到低）：
+/// 1. 隔离版本 → <根>/versions/<版本>/home（永远优先，不受全局开关影响）
+/// 2. 复用官方 → ~/.dsh（use_official_dsh_home = true 时）
+/// 3. 管理器共享 → <根>/home（默认）
+pub(crate) fn resolve_home(cfg: &Config, dirs: &Dirs, version: &str) -> PathBuf {
+    if cfg.isolated_versions.iter().any(|v| v == version) {
+        let isolated_home = dirs.versions.join(version).join("home");
+        let _ = std::fs::create_dir_all(&isolated_home);
+        return isolated_home;
+    }
+    if cfg.use_official_dsh_home {
+        if let Some(oh) = official_dsh_home() {
+            let _ = std::fs::create_dir_all(&oh);
+            return oh;
+        }
+    }
+    dirs.home.clone()
 }
 
 /// 启动 dsh web（阻塞部分放到 spawn_blocking）并创建内嵌窗口。
@@ -699,6 +737,48 @@ pub(crate) fn set_isolated(app: tauri::AppHandle, version: String, isolated: boo
     }
 }
 
+/// 检查是否有新版本（更新提醒，C1）。网络请求放后台线程，绝不阻塞 UI。
+#[tauri::command]
+pub(crate) async fn check_update() -> crate::updater::UpdateInfo {
+    tauri::async_runtime::spawn_blocking(crate::updater::check)
+        .await
+        .unwrap_or_else(|_| crate::updater::UpdateInfo {
+            has_update: false,
+            current: cli::VERSION.to_string(),
+            latest: None,
+            release_url: None,
+            download_url: None,
+        })
+}
+
+/// 设置「复用官方 dsh 配置目录（~/.dsh）」开关。
+///
+/// 开启后，非隔离版本的 DSH_HOME 指向官方默认目录，用户已有的会话/凭据/插件立即可用；
+/// 隔离版本不受影响。切换后重生成转发脚本，保证 GUI 与终端行为一致。
+#[tauri::command]
+pub(crate) fn set_use_official_home(app: tauri::AppHandle, enabled: bool) -> Result<String, String> {
+    let mdir = manager_dir(&app);
+    let mut cfg = Config::load(&mdir);
+    cfg.use_official_dsh_home = enabled;
+    cfg.save(&mdir).map_err(|e| format!("保存配置失败: {}", e))?;
+    // 非隔离版本的 home 来源变了：重生成转发脚本
+    regenerate_forward_script(&mdir, &cfg);
+    if enabled {
+        let path = official_dsh_home()
+            .map(|p| p.to_string_lossy().to_string())
+            .unwrap_or_else(|| "~/.dsh".to_string());
+        Ok(format!("已复用官方配置目录：{}", path))
+    } else {
+        Ok("已恢复为管理器共享配置目录".to_string())
+    }
+}
+
+/// 查询官方 dsh 配置目录路径（供前端展示/判断是否存在）。
+#[tauri::command]
+pub(crate) fn get_official_home() -> Option<String> {
+    official_dsh_home().map(|p| p.to_string_lossy().to_string())
+}
+
 /// 扫描整个版本目录的占用（含依赖 + 隔离 home），返回总量 + 共享/独占详情。
 #[tauri::command]
 pub(crate) async fn scan_version_size(app: tauri::AppHandle, version: String) -> Result<versions::SizeInfo, String> {
@@ -961,5 +1041,31 @@ mod tests {
         // 未列入隔离的版本 → 共享 home
         let h = resolve_home(&cfg, &dirs, "0.2.0");
         assert_eq!(h, dirs.home);
+    }
+
+    #[test]
+    fn resolve_home_official_when_flag_on() {
+        // 开启 use_official_dsh_home → 非隔离版本解析到官方 ~/.dsh
+        let mut cfg = Config::default();
+        cfg.use_official_dsh_home = true;
+        let dirs = Dirs::new(std::env::temp_dir().join("dsh-rh-official"));
+        let h = resolve_home(&cfg, &dirs, "0.1.0");
+        let expected = official_dsh_home().expect("应能解析出用户主目录");
+        assert_eq!(h, expected);
+        assert_ne!(h, dirs.home, "不应再指向管理器共享 home");
+    }
+
+    #[test]
+    fn resolve_home_isolated_beats_official_flag() {
+        // 隔离优先级高于"复用官方"：即使全局开了复用，隔离版本仍用版本目录
+        let mut cfg = Config::default();
+        cfg.use_official_dsh_home = true;
+        cfg.isolated_versions = vec!["0.1.0".to_string()];
+        let base = std::env::temp_dir().join(format!("dsh-rh-prio-{}", crate::logging::now_secs()));
+        let _ = std::fs::remove_dir_all(&base);
+        let dirs = Dirs::new(base.clone());
+        let h = resolve_home(&cfg, &dirs, "0.1.0");
+        assert_eq!(h, dirs.versions.join("0.1.0").join("home"));
+        let _ = std::fs::remove_dir_all(&base);
     }
 }
