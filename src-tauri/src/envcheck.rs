@@ -195,11 +195,74 @@ pub fn check_writable(root: &Path) -> CheckItem {
     }
 }
 
-/// 检查磁盘剩余空间（返回 MB）
+/// 检查数据根所在磁盘的剩余空间。
+///
+/// 返回可用空间（人类可读）。查不到时降级为"未知"（非致命，不误报失败）。
 pub fn check_disk(root: &Path) -> CheckItem {
-    // 用 fs2 或简单方案：创建大文件不现实，这里改用读取盘符信息
-    // 简化：用一个临时文件估算不可行，直接报 OK 并附路径，实际空间由 pnpm 自行报错
-    ok_item("磁盘空间", format!("目标：{}", root.to_string_lossy()), false)
+    match free_space(root) {
+        Some(bytes) => ok_item(
+            "磁盘空间",
+            format!("可用 {}", human_bytes(bytes)),
+            false,
+        ),
+        None => ok_item(
+            "磁盘空间",
+            format!("无法获取（目标 {}）", root.to_string_lossy()),
+            false,
+        ),
+    }
+}
+
+/// 查询指定路径所在卷的可用字节数（Windows / Unix）。
+#[cfg(windows)]
+fn free_space(path: &Path) -> Option<u64> {
+    use windows_sys::Win32::Storage::FileSystem::GetDiskFreeSpaceExW;
+    let wide: Vec<u16> = path
+        .to_string_lossy()
+        .encode_utf16()
+        .chain(std::iter::once(0))
+        .collect();
+    let mut free: u64 = 0;
+    let ok = unsafe {
+        GetDiskFreeSpaceExW(
+            wide.as_ptr(),
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            &mut free as *mut u64,
+        )
+    };
+    if ok != 0 { Some(free) } else { None }
+}
+
+#[cfg(unix)]
+fn free_space(path: &Path) -> Option<u64> {
+    use std::ffi::CString;
+    use std::os::unix::ffi::OsStrExt;
+    let c = CString::new(path.as_os_str().as_bytes()).ok()?;
+    let mut st: libc::statvfs = unsafe { std::mem::zeroed() };
+    let rc = unsafe { libc::statvfs(c.as_ptr(), &mut st) };
+    if rc == 0 {
+        Some(st.f_bavail as u64 * st.f_frsize as u64)
+    } else {
+        None
+    }
+}
+
+#[cfg(not(any(windows, unix)))]
+fn free_space(_path: &Path) -> Option<u64> {
+    None
+}
+
+/// 字节数 -> 人类可读（GB / MB，保留一位小数）。
+fn human_bytes(n: u64) -> String {
+    const MB: f64 = 1024.0 * 1024.0;
+    const GB: f64 = MB * 1024.0;
+    let f = n as f64;
+    if f >= GB {
+        format!("{:.1} GB", f / GB)
+    } else {
+        format!("{:.0} MB", f / MB)
+    }
 }
 
 /// 检查 npm registry 是否可达
@@ -208,11 +271,16 @@ pub fn check_registry() -> CheckItem {
     let mut cmd = cmd_command("pnpm");
     cmd.arg("view").arg("@deepseek-ai/dsh").arg("version");
     match cmd.output() {
-        Ok(out) if out.status.success() => ok_item(
-            "npm 源连通",
-            String::from_utf8_lossy(&out.stdout).trim().to_string(),
-            false,
-        ),
+        Ok(out) if out.status.success() => {
+            // pnpm view 返回的是最新版本号；包成"可达（最新 X）"让用户明白查到了什么
+            let ver = String::from_utf8_lossy(&out.stdout).trim().to_string();
+            let detail = if ver.is_empty() {
+                "可达".to_string()
+            } else {
+                format!("可达（最新 {}）", ver)
+            };
+            ok_item("npm 源连通", detail, false)
+        }
         Ok(out) => {
             let e = String::from_utf8_lossy(&out.stderr).trim().to_string();
             fail_item(
@@ -247,6 +315,13 @@ pub fn run_all(root: &Path) -> Vec<CheckItem> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn human_bytes_formats_gb_and_mb() {
+        assert_eq!(human_bytes(512 * 1024 * 1024), "512 MB");
+        assert_eq!(human_bytes(2 * 1024 * 1024 * 1024), "2.0 GB");
+        assert_eq!(human_bytes(128u64 * 1024 * 1024 * 1024), "128.0 GB");
+    }
 
     #[test]
     fn parse_semver_basic() {
