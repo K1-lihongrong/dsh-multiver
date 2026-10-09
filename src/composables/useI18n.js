@@ -175,6 +175,7 @@ const MESSAGES = {
     "paths.prune": "回收依赖仓库",
     "paths.pruning": "回收中...",
     "paths.openLogs": "打开日志目录",
+    "paths.exportBackup": "导出配置",
     "paths.never": "从未",
 
     "notes.viewNotes": "查看更新说明",
@@ -343,6 +344,7 @@ const MESSAGES = {
     "paths.prune": "Prune store",
     "paths.pruning": "Pruning...",
     "paths.openLogs": "Open log directory",
+    "paths.exportBackup": "Export config",
     "paths.never": "Never",
 
     "notes.viewNotes": "View release notes",
@@ -511,6 +513,7 @@ const MESSAGES = {
     "paths.prune": "ストアを整理",
     "paths.pruning": "整理中...",
     "paths.openLogs": "ログディレクトリを開く",
+    "paths.exportBackup": "設定をエクスポート",
     "paths.never": "なし",
 
     "notes.viewNotes": "リリースノートを表示",
@@ -679,6 +682,7 @@ const MESSAGES = {
     "paths.prune": "回收依賴倉庫",
     "paths.pruning": "回收中...",
     "paths.openLogs": "開啟日誌目錄",
+    "paths.exportBackup": "匯出設定",
     "paths.never": "從未",
 
     "notes.viewNotes": "查看更新說明",
