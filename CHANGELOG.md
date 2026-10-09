@@ -10,6 +10,11 @@
 ## [Unreleased]
 
 ### 新增
+- **CLI `--info <版本>`**：查看单个版本详情（路径 / 默认 / 隔离 / 配置目录 / 占用），
+  支持 `--json` 输出完整对象（含共享/独占大小）。
+- **CLI `--versions`**：列出远端可用版本（从 npm 查询，最新在前），支持 `--json`。
+- **CLI `--env`**：无头环境检查（Node / pnpm / 根目录可写 / 磁盘 / npm 源连通），
+  有致命项失败时**退出码 1**（便于脚本 `if dsh-multiver --env; then ...`）；支持 `--json`。
 - **复用官方 dsh 配置目录（~/.dsh）**：路径设置新增开关，开启后非隔离版本的 `DSH_HOME` 指向
   官方默认目录（Windows `%USERPROFILE%\.dsh`，macOS/Linux `~/.dsh`），
   用户从"裸装 dsh"迁移过来时，已有的会话 / 凭据 / 插件**立即可用**。
