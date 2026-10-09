@@ -52,6 +52,13 @@ pub enum CliCommand {
     Versions,
     /// 环境检查（Node / pnpm / 根目录可写 / 磁盘 / npm 源连通）
     Env,
+    /// 开关某版本的数据隔离（on=true 开启，false 关闭）
+    Isolate {
+        version: String,
+        on: bool,
+    },
+    /// 清理：孤立 webview 缓存 + 回收站（等价 maintenance --cleanup + trash）
+    Clean,
     Help,
     Version,
 }
@@ -75,6 +82,8 @@ fn is_cli_flag(a: &str) -> bool {
             | "--info"
             | "--versions"
             | "--env"
+            | "--isolate"
+            | "--clean"
             | "--help"
             | "-h"
             | "--version"
@@ -143,6 +152,13 @@ pub fn parse(args: &[String]) -> Result<Option<CliCommand>, String> {
             }
             "--versions" => return Ok(Some(CliCommand::Versions)),
             "--env" => return Ok(Some(CliCommand::Env)),
+            "--isolate" => {
+                let version = next_value(args, i, "--isolate")?;
+                // 默认开启；显式 --off 则关闭
+                let on = !args.iter().any(|x| x == "--off");
+                return Ok(Some(CliCommand::Isolate { version, on }));
+            }
+            "--clean" => return Ok(Some(CliCommand::Clean)),
             "--maintenance" => {
                 let kind = if args.iter().any(|x| x == "--cleanup") {
                     "cleanup"
@@ -308,6 +324,8 @@ pub fn run(cmd: CliCommand, dry_run: bool, json: bool) -> i32 {
         CliCommand::Info { version } => cmd_info(&version, json),
         CliCommand::Versions => cmd_versions(json),
         CliCommand::Env => cmd_env(json),
+        CliCommand::Isolate { version, on } => cmd_isolate(&version, on, dry_run, json),
+        CliCommand::Clean => cmd_clean(dry_run, json),
     }
 }
 
@@ -636,6 +654,83 @@ fn cmd_maintenance(kind: &str, dry_run: bool, json: bool) -> i32 {
     0
 }
 
+/// `--isolate <版本> [--off]`：开关数据隔离（默认开启；--off 关闭）。
+/// 与 GUI 的 set_isolated 行为一致：改配置 + 预创建隔离目录 + 重生成转发脚本。
+fn cmd_isolate(version: &str, on: bool, dry_run: bool, json: bool) -> i32 {
+    let mut ctx = load_ctx();
+    if dry_run {
+        let installed = versions::exists(&ctx.dirs.versions, version);
+        if json {
+            println!("{}", json_str(&serde_json::json!({
+                "dry_run": true, "action": "isolate", "version": version,
+                "isolated": on, "installed": installed,
+            })));
+        } else {
+            println!(
+                "[dry-run] 将{}版本 {} 的数据隔离",
+                if on { "开启" } else { "关闭" },
+                version
+            );
+            if !installed {
+                println!("[dry-run] 警告：该版本未安装（实际执行会失败）");
+            }
+            println!("[dry-run] 会重生成终端转发脚本 dsh（若该版本是默认版本）");
+            println!("[dry-run] 未执行任何操作");
+        }
+        return 0;
+    }
+    if !versions::exists(&ctx.dirs.versions, version) {
+        return info_fail(json, &format!("版本 {} 未安装", version));
+    }
+    ctx.cfg.isolated_versions.retain(|v| v != version);
+    if on {
+        ctx.cfg.isolated_versions.push(version.to_string());
+        let _ = std::fs::create_dir_all(ctx.dirs.versions.join(version).join("home"));
+    }
+    if let Err(e) = ctx.cfg.save(&ctx.mdir) {
+        return info_fail(json, &format!("保存配置失败：{}", e));
+    }
+    crate::commands::regenerate_forward_script(&ctx.mdir, &ctx.cfg);
+    let msg = if on {
+        format!("{} 已开启数据隔离", version)
+    } else {
+        format!("{} 已关闭数据隔离", version)
+    };
+    out_result(json, true, &msg);
+    0
+}
+
+/// `--clean`：清理孤立 webview 缓存 + 回收站（maintenance --cleanup 的超集）。
+fn cmd_clean(dry_run: bool, json: bool) -> i32 {
+    let ctx = load_ctx();
+    if dry_run {
+        if json {
+            println!("{}", json_str(&serde_json::json!({
+                "dry_run": true, "action": "clean",
+            })));
+        } else {
+            println!("[dry-run] 将清理孤立 webview 缓存（{}）", ctx.dirs.webview.to_string_lossy());
+            println!("[dry-run] 将清空卸载回收站（{}）", ctx.dirs.trash.to_string_lossy());
+            println!("[dry-run] 未执行任何操作");
+        }
+        return 0;
+    }
+    if let Err(e) = ctx.dirs.ensure() {
+        return info_fail(json, &format!("创建数据目录失败：{}", e));
+    }
+    let removed = maintenance::cleanup_orphan_webviews(&ctx.dirs.versions, &ctx.dirs.webview);
+    let trashed = maintenance::cleanup_trash(&ctx.dirs.trash);
+    if json {
+        println!("{}", json_str(&serde_json::json!({
+            "ok": true, "webviews": removed.len(), "trash": trashed,
+        })));
+    } else {
+        println!("已清理孤立缓存 {} 项", removed.len());
+        println!("已清空回收站 {} 项", trashed);
+    }
+    0
+}
+
 /// `--info <版本>`：查看单个版本详情（人读多行 / JSON 对象）。
 fn cmd_info(version: &str, json: bool) -> i32 {
     let ctx = load_ctx();
@@ -772,6 +867,8 @@ fn print_help() {
   dsh-multiver --info <版本> [--json]
   dsh-multiver --versions [--json]
   dsh-multiver --env [--json]
+  dsh-multiver --isolate <版本> [--off]
+  dsh-multiver --clean
   dsh-multiver --maintenance [--cleanup | --prune]
   dsh-multiver --help
   dsh-multiver --version [--json]
@@ -782,6 +879,8 @@ fn print_help() {
   --info         查看单个版本详情（路径 / 默认 / 隔离 / 配置目录 / 占用）
   --versions     列出远端可用版本（从 npm 查询，最新在前）
   --env          环境检查（有致命项失败时退出码 1）
+  --isolate      开启某版本的数据隔离（加 --off 则关闭）
+  --clean        清理孤立缓存 + 回收站（maintenance --cleanup 的超集）
   --install      安装指定版本；--registry 可指定 npm 源（默认官方源）
   --uninstall    卸载指定版本
   --set-default  设为默认版本，并重生成终端 dsh 命令
@@ -883,6 +982,26 @@ mod tests {
         }
         // 缺参数值 → 报错
         assert!(parse(&args(&["--info"])).is_err());
+    }
+
+    #[test]
+    fn isolate_and_clean_commands() {
+        match parse(&args(&["--isolate", "0.1.7"])) {
+            Ok(Some(CliCommand::Isolate { version, on })) => {
+                assert_eq!(version, "0.1.7");
+                assert!(on, "默认应为开启");
+            }
+            other => panic!("unexpected: {:?}", other),
+        }
+        match parse(&args(&["--isolate", "0.1.7", "--off"])) {
+            Ok(Some(CliCommand::Isolate { version, on })) => {
+                assert_eq!(version, "0.1.7");
+                assert!(!on, "--off 应为关闭");
+            }
+            other => panic!("unexpected: {:?}", other),
+        }
+        assert!(parse(&args(&["--isolate"])).is_err());
+        assert!(matches!(parse(&args(&["--clean"])), Ok(Some(CliCommand::Clean))));
     }
 
     #[test]
