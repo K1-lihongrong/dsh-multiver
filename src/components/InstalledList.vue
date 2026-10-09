@@ -112,7 +112,6 @@ async function setDefault(v) {
       notify(msg);
     }
   }
-  catch (e) { notify("" + e); }
 }
 
 async function createShortcut(v) {
