@@ -77,6 +77,10 @@ pub enum CliCommand {
     Export {
         file: Option<String>,
     },
+    /// 启动 dsh web（新控制台 + 自动打开系统浏览器）
+    Run {
+        version: String,
+    },
     Help,
     Version,
 }
@@ -107,6 +111,7 @@ fn is_cli_flag(a: &str) -> bool {
             | "--copy-shared"
             | "--clear-isolated"
             | "--export"
+            | "--run"
             | "--help"
             | "-h"
             | "--version"
@@ -199,6 +204,10 @@ pub fn parse(args: &[String]) -> Result<Option<CliCommand>, String> {
                 // 可选跟随一个非 -- 开头的值作为输出文件
                 let file = args.get(i + 1).filter(|v| !v.starts_with("--")).cloned();
                 return Ok(Some(CliCommand::Export { file }));
+            }
+            "--run" => {
+                let version = next_value(args, i, "--run")?;
+                return Ok(Some(CliCommand::Run { version }));
             }
             "--maintenance" => {
                 let kind = if args.iter().any(|x| x == "--cleanup") {
@@ -372,6 +381,7 @@ pub fn run(cmd: CliCommand, dry_run: bool, json: bool) -> i32 {
         CliCommand::CopyShared { version } => cmd_copy_shared(&version, dry_run, json),
         CliCommand::ClearIsolated { version } => cmd_clear_isolated(&version, dry_run, json),
         CliCommand::Export { file } => cmd_export(file.as_deref(), json),
+        CliCommand::Run { version } => cmd_run(&version, json),
     }
 }
 
@@ -781,6 +791,38 @@ fn cmd_doctor(json: bool) -> i32 {
     if fatal { 1 } else { 0 }
 }
 
+/// `--run <版本>`：启动 dsh web（新控制台窗口 + 自动打开系统浏览器）。
+/// 与 GUI 的「浏览器打开」行为一致：关掉控制台窗口即停止服务。
+fn cmd_run(version: &str, json: bool) -> i32 {
+    let ctx = load_ctx();
+    let vdir = ctx.dirs.versions.join(version);
+    if !vdir.join("node_modules").exists() {
+        return info_fail(json, &format!("版本 {} 未安装", version));
+    }
+    let home = crate::commands::resolve_home(&ctx.cfg, &ctx.dirs, version);
+
+    // 端口：固定 3080；被占用则随机（CLI 无交互，直接随机）
+    let port: u16 = if crate::launcher::port_in_use(3080) { 0 } else { 3080 };
+    let (ok, msg) = crate::launcher::spawn_web_console(
+        &vdir, &home, &ctx.dirs.store, &ctx.dirs.cache, &ctx.dirs.state, port,
+    );
+    if ok {
+        if json {
+            println!("{}", json_str(&serde_json::json!({
+                "ok": true, "version": version, "port": port, "home": home.to_string_lossy(),
+            })));
+        } else {
+            println!("{}", msg);
+            println!("数据目录：{}", home.to_string_lossy());
+            println!("（关闭弹出的控制台窗口即可停止服务）");
+        }
+        0
+    } else {
+        out_result(json, false, &msg);
+        1
+    }
+}
+
 /// `--export [<文件>]`：导出配置 + 版本清单（JSON）。默认写到数据根目录。
 fn cmd_export(file: Option<&str>, json: bool) -> i32 {
     let ctx = load_ctx();
@@ -1111,6 +1153,7 @@ fn print_help() {
   dsh-multiver --copy-shared <版本>
   dsh-multiver --clear-isolated <版本>
   dsh-multiver --export [<文件>]
+  dsh-multiver --run <版本>
   dsh-multiver --maintenance [--cleanup | --prune]
   dsh-multiver --help
   dsh-multiver --version [--json]
@@ -1128,6 +1171,7 @@ fn print_help() {
   --copy-shared  把共享 home 数据复制到某隔离版本的独立 home（需先开隔离）
   --clear-isolated 清空某隔离版本的独立 home（保留版本本身）
   --export       导出配置 + 版本清单（JSON）到指定文件（默认写到数据根目录）
+  --run          启动 dsh web（新控制台 + 自动打开系统浏览器；关窗口即停止）
   --install      安装指定版本；--registry 可指定 npm 源（默认官方源）
   --uninstall    卸载指定版本
   --set-default  设为默认版本，并重生成终端 dsh 命令
@@ -1229,6 +1273,15 @@ mod tests {
         }
         // 缺参数值 → 报错
         assert!(parse(&args(&["--info"])).is_err());
+    }
+
+    #[test]
+    fn run_command() {
+        match parse(&args(&["--run", "0.1.7"])) {
+            Ok(Some(CliCommand::Run { version })) => assert_eq!(version, "0.1.7"),
+            other => panic!("unexpected: {:?}", other),
+        }
+        assert!(parse(&args(&["--run"])).is_err());
     }
 
     #[test]
