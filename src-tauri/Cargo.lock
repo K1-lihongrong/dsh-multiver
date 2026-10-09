@@ -854,7 +854,7 @@ dependencies = [
 
 [[package]]
 name = "dsh-multiver"
-version = "0.2.8"
+version = "0.2.8-rc.1"
 dependencies = [
  "libc",
  "reqwest 0.12.28",
