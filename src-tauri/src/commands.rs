@@ -236,9 +236,12 @@ pub(crate) fn regenerate_forward_script(mdir: &PathBuf, cfg: &Config) {
     let target = path_bin_dir(mdir);
     match &cfg.default_version {
         Some(v) => {
-            let isolated = cfg.isolated_versions.iter().any(|x| x == v);
             let root = cfg.resolve_root(mdir);
-            let script = actions::build_forward_script(v, &root.to_string_lossy(), isolated);
+            let dirs = Dirs::new(root.clone());
+            // DSH_HOME 由 resolve_home 统一决定（隔离 / 复用官方 / 管理器共享），
+            // 与 GUI 启动路径使用同一逻辑，保证"GUI 能用的配置，终端也能用"。
+            let home = resolve_home(cfg, &dirs, v);
+            let script = actions::build_forward_script(v, &root.to_string_lossy(), &home.to_string_lossy());
             let _ = actions::write_forward_script(&target, &script);
         }
         None => {
@@ -990,5 +993,31 @@ mod tests {
         // 未列入隔离的版本 → 共享 home
         let h = resolve_home(&cfg, &dirs, "0.2.0");
         assert_eq!(h, dirs.home);
+    }
+
+    #[test]
+    fn resolve_home_official_when_flag_on() {
+        // 开启 use_official_dsh_home → 非隔离版本解析到官方 ~/.dsh
+        let mut cfg = Config::default();
+        cfg.use_official_dsh_home = true;
+        let dirs = Dirs::new(std::env::temp_dir().join("dsh-rh-official"));
+        let h = resolve_home(&cfg, &dirs, "0.1.0");
+        let expected = official_dsh_home().expect("应能解析出用户主目录");
+        assert_eq!(h, expected);
+        assert_ne!(h, dirs.home, "不应再指向管理器共享 home");
+    }
+
+    #[test]
+    fn resolve_home_isolated_beats_official_flag() {
+        // 隔离优先级高于"复用官方"：即使全局开了复用，隔离版本仍用版本目录
+        let mut cfg = Config::default();
+        cfg.use_official_dsh_home = true;
+        cfg.isolated_versions = vec!["0.1.0".to_string()];
+        let base = std::env::temp_dir().join(format!("dsh-rh-prio-{}", crate::logging::now_secs()));
+        let _ = std::fs::remove_dir_all(&base);
+        let dirs = Dirs::new(base.clone());
+        let h = resolve_home(&cfg, &dirs, "0.1.0");
+        assert_eq!(h, dirs.versions.join("0.1.0").join("home"));
+        let _ = std::fs::remove_dir_all(&base);
     }
 }
