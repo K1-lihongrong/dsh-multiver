@@ -133,6 +133,11 @@ function fmtTs(sec) {
       </div>
     </div>
 
+    <div class="field-row" style="margin-bottom: 14px;">
+      <button class="btn small" @click="exportBackup">{{ t("paths.exportBackup") }}</button>
+      <span class="hint" style="font-size: 12px;">{{ t("paths.exportBackupHint") }}</span>
+    </div>
+
     <label class="checkbox-row">
       <input
         type="checkbox"
@@ -241,7 +246,6 @@ function fmtTs(sec) {
         <button class="btn small" @click="doMaintenance('cleanup')" :disabled="!!maintBusy">{{ maintBusy === 'cleanup' ? t("paths.cleaning") : t("paths.cleanup") }}</button>
         <button class="btn small" @click="doMaintenance('prune')" :disabled="!!maintBusy">{{ maintBusy === 'prune' ? t("paths.pruning") : t("paths.prune") }}</button>
         <button class="btn small" @click="openDir('logs')">{{ t("paths.openLogs") }}</button>
-        <button class="btn small" @click="exportBackup">{{ t("paths.exportBackup") }}</button>
       </div>
     </div>
   </section>
