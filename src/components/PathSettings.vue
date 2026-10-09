@@ -162,8 +162,10 @@ function fmtTs(sec) {
         <label style="font-size: 12px; color: var(--text-3); min-width: 52px;">{{ t("paths.language") }}</label>
         <select class="input" style="flex: 1;" :value="langMode" @change="setLang($event.target.value)">
           <option value="system">{{ t("paths.langSystem") }}</option>
-          <option value="zh-CN">中文</option>
+          <option value="zh-CN">简体中文</option>
+          <option value="zh-TW">繁體中文</option>
           <option value="en-US">English</option>
+          <option value="ja-JP">日本語</option>
         </select>
       </div>
     </div>
