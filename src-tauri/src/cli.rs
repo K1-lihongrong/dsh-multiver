@@ -73,6 +73,10 @@ pub enum CliCommand {
     ClearIsolated {
         version: String,
     },
+    /// 导出配置 + 版本清单到指定文件（换机迁移用）
+    Export {
+        file: Option<String>,
+    },
     Help,
     Version,
 }
@@ -102,6 +106,7 @@ fn is_cli_flag(a: &str) -> bool {
             | "--shortcut"
             | "--copy-shared"
             | "--clear-isolated"
+            | "--export"
             | "--help"
             | "-h"
             | "--version"
@@ -189,6 +194,11 @@ pub fn parse(args: &[String]) -> Result<Option<CliCommand>, String> {
             "--clear-isolated" => {
                 let version = next_value(args, i, "--clear-isolated")?;
                 return Ok(Some(CliCommand::ClearIsolated { version }));
+            }
+            "--export" => {
+                // 可选跟随一个非 -- 开头的值作为输出文件
+                let file = args.get(i + 1).filter(|v| !v.starts_with("--")).cloned();
+                return Ok(Some(CliCommand::Export { file }));
             }
             "--maintenance" => {
                 let kind = if args.iter().any(|x| x == "--cleanup") {
@@ -361,6 +371,7 @@ pub fn run(cmd: CliCommand, dry_run: bool, json: bool) -> i32 {
         CliCommand::Shortcut { version } => cmd_shortcut(&version, dry_run, json),
         CliCommand::CopyShared { version } => cmd_copy_shared(&version, dry_run, json),
         CliCommand::ClearIsolated { version } => cmd_clear_isolated(&version, dry_run, json),
+        CliCommand::Export { file } => cmd_export(file.as_deref(), json),
     }
 }
 
@@ -770,6 +781,32 @@ fn cmd_doctor(json: bool) -> i32 {
     if fatal { 1 } else { 0 }
 }
 
+/// `--export [<文件>]`：导出配置 + 版本清单（JSON）。默认写到数据根目录。
+fn cmd_export(file: Option<&str>, json: bool) -> i32 {
+    let ctx = load_ctx();
+    let out = match file {
+        Some(f) => std::path::PathBuf::from(f),
+        None => ctx.dirs.root.join(format!(
+            "dsh-multiver-backup-{}.json",
+            crate::logging::now_secs()
+        )),
+    };
+    match crate::backup::export_to_file(&ctx.cfg, &ctx.dirs.versions, &out) {
+        Ok(path) => {
+            if json {
+                println!("{}", json_str(&serde_json::json!({ "ok": true, "path": path })));
+            } else {
+                println!("已导出：{}", path);
+            }
+            0
+        }
+        Err(e) => {
+            out_result(json, false, &e);
+            1
+        }
+    }
+}
+
 /// `--shortcut <版本>`：为某版本创建桌面快捷方式。
 fn cmd_shortcut(version: &str, dry_run: bool, json: bool) -> i32 {
     let ctx = load_ctx();
@@ -1073,6 +1110,7 @@ fn print_help() {
   dsh-multiver --shortcut <版本>
   dsh-multiver --copy-shared <版本>
   dsh-multiver --clear-isolated <版本>
+  dsh-multiver --export [<文件>]
   dsh-multiver --maintenance [--cleanup | --prune]
   dsh-multiver --help
   dsh-multiver --version [--json]
@@ -1089,6 +1127,7 @@ fn print_help() {
   --shortcut     为某版本创建桌面快捷方式
   --copy-shared  把共享 home 数据复制到某隔离版本的独立 home（需先开隔离）
   --clear-isolated 清空某隔离版本的独立 home（保留版本本身）
+  --export       导出配置 + 版本清单（JSON）到指定文件（默认写到数据根目录）
   --install      安装指定版本；--registry 可指定 npm 源（默认官方源）
   --uninstall    卸载指定版本
   --set-default  设为默认版本，并重生成终端 dsh 命令
@@ -1190,6 +1229,15 @@ mod tests {
         }
         // 缺参数值 → 报错
         assert!(parse(&args(&["--info"])).is_err());
+    }
+
+    #[test]
+    fn export_command() {
+        assert!(matches!(parse(&args(&["--export"])), Ok(Some(CliCommand::Export { file: None }))));
+        match parse(&args(&["--export", "out.json"])) {
+            Ok(Some(CliCommand::Export { file })) => assert_eq!(file.as_deref(), Some("out.json")),
+            other => panic!("unexpected: {:?}", other),
+        }
     }
 
     #[test]
