@@ -295,16 +295,45 @@ fn path_bin_dir(manager: &PathBuf) -> PathBuf {
     manager.clone()
 }
 
-/// 计算某版本实际使用的 DSH_HOME（隔离版本用独立目录，否则用共享 home）
-fn resolve_home(cfg: &Config, dirs: &Dirs, version: &str) -> PathBuf {
-    let vdir = dirs.versions.join(version);
-    if cfg.isolated_versions.iter().any(|v| v == version) {
-        let isolated_home = vdir.join("home");
-        let _ = std::fs::create_dir_all(&isolated_home);
-        isolated_home
-    } else {
-        dirs.home.clone()
+/// 官方 dsh 默认配置目录（~/.dsh 或 %USERPROFILE% 下的 .dsh）。
+///
+/// 返回 None 表示无法确定用户主目录（极少见）；调用方应回退到共享 home。
+pub(crate) fn official_dsh_home() -> Option<PathBuf> {
+    #[cfg(windows)]
+    {
+        std::env::var("USERPROFILE")
+            .ok()
+            .filter(|p| !p.trim().is_empty())
+            .map(|p| PathBuf::from(p).join(".dsh"))
     }
+    #[cfg(not(windows))]
+    {
+        std::env::var("HOME")
+            .ok()
+            .filter(|p| !p.trim().is_empty())
+            .map(|p| PathBuf::from(p).join(".dsh"))
+    }
+}
+
+/// 计算某版本实际使用的 DSH_HOME。
+///
+/// 优先级（高到低）：
+/// 1. 隔离版本 → <根>/versions/<版本>/home（永远优先，不受全局开关影响）
+/// 2. 复用官方 → ~/.dsh（use_official_dsh_home = true 时）
+/// 3. 管理器共享 → <根>/home（默认）
+pub(crate) fn resolve_home(cfg: &Config, dirs: &Dirs, version: &str) -> PathBuf {
+    if cfg.isolated_versions.iter().any(|v| v == version) {
+        let isolated_home = dirs.versions.join(version).join("home");
+        let _ = std::fs::create_dir_all(&isolated_home);
+        return isolated_home;
+    }
+    if cfg.use_official_dsh_home {
+        if let Some(oh) = official_dsh_home() {
+            let _ = std::fs::create_dir_all(&oh);
+            return oh;
+        }
+    }
+    dirs.home.clone()
 }
 
 /// 启动 dsh web（阻塞部分放到 spawn_blocking）并创建内嵌窗口。
