@@ -10,6 +10,10 @@
 ## [Unreleased]
 
 ### 新增
+- **CLI `--isolate <版本> [--off]`**：无头开关数据隔离（默认开启，`--off` 关闭），
+  与 GUI 行为一致（改配置 + 重生成转发脚本）；支持 `--dry-run` / `--json`。
+- **CLI `--clean`**：清理孤立 webview 缓存 **+ 清空卸载回收站**（`--maintenance --cleanup` 的超集）；
+  支持 `--dry-run` / `--json`。
 - **CLI `--info <版本>`**：查看单个版本详情（路径 / 默认 / 隔离 / 配置目录 / 占用），
   支持 `--json` 输出完整对象（含共享/独占大小）。
 - **CLI `--versions`**：列出远端可用版本（从 npm 查询，最新在前），支持 `--json`。

@@ -250,7 +250,7 @@ DSH="$(dsh-multiver --which)"
 | :--- | :--- | :--- | :--- |
 | **第 1 批** | `--json` + `--which` | ~1 天 | 无 |
 | **第 2 批** | `--info` + `--versions` + `--env` | ✅ 已完成（v0.2.6） | 第 1 批（`--json` 复用） |
-| **第 3 批** | `--isolate` + `--clean` | ~1 天 | 无 |
+| **第 3 批** | `--isolate` + `--clean` | ✅ 已完成（v0.2.6） | 无 |
 | **第 4 批** | `--doctor` | ~1 天 | 第 2 批（复用 env） |
 | **可选** | `--shortcut` / `--copy-shared` / `--clear-isolated` | ~半天 | 无 |
 | **暂缓** | `--run` | — | — |
