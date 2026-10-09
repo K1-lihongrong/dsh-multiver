@@ -7,6 +7,17 @@
 
 ---
 
+## [Unreleased]
+
+### 新增
+- **CLI `--shortcut <版本>`**：无头创建桌面快捷方式（Windows `.lnk` / Unix `.desktop`）。
+- **CLI `--copy-shared <版本>`**：把共享 home 数据复制到某隔离版本的独立 home（需先开隔离）。
+- **CLI `--clear-isolated <版本>`**：清空某隔离版本的独立 home（保留版本本身）。
+
+以上命令均支持 `--dry-run` / `--json`。
+
+---
+
 ## [0.2.6] - 2026-10-09
 
 ### 新增
