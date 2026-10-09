@@ -53,11 +53,11 @@ defineExpose({ run });
         <div class="env-row">
           <span class="env-icon" :class="c.ok ? 'ok' : 'err'">{{ c.ok ? "✓" : "✕" }}</span>
           <span class="env-name">{{ c.name_key ? t(c.name_key) : c.name }}</span>
-          <span class="env-detail">{{ c.detail }}</span>
+          <span class="env-detail">{{ c.detail_key ? t(c.detail_key, c.detail_args) : c.detail }}</span>
           <span class="env-critical" v-if="!c.ok && !c.critical">{{ t("env.nonCritical") }}</span>
         </div>
         <div class="env-guide" v-if="!c.ok && c.install_hint">
-          <span class="env-guide-text">{{ c.install_hint }}</span>
+          <span class="env-guide-text">{{ c.hint_key ? t(c.hint_key) : c.install_hint }}</span>
           <button
             v-if="c.install_url"
             class="btn small primary"
