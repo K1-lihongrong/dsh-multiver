@@ -14,6 +14,17 @@ use std::path::{Path, PathBuf};
 /// 便携运行时依赖的 Node 版本（与 envcheck 的下限一致）。
 pub const NODE_VERSION: &str = "22.19.0";
 
+/// 运行时准备进度事件（v0.2.9 进度条）。
+///
+/// stage 是面向用户的阶段文案（如"正在下载 Node"）；done/total 是该阶段的
+/// 已下载字节数与总字节数（total 为 None 表示服务器未给 Content-Length）。
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct RuntimeProgress {
+    pub stage: String,
+    pub done: u64,
+    pub total: Option<u64>,
+}
+
 /// 便携 Node 目录：`<root>/tools/node`
 pub fn node_dir(root: &Path) -> PathBuf {
     root.join("tools").join("node")
@@ -118,7 +129,9 @@ pub fn system_pnpm_ok() -> bool {
 ///
 /// 源顺序：官方 → 淘宝镜像（npmmirror）。任一成功即返回。
 /// 这是「失败换源」在运行时下载里的复用。
-pub fn download_node_zip() -> Result<PathBuf, String> {
+pub fn download_node_zip(
+    on_progress: &(dyn Fn(RuntimeProgress) + Send + Sync),
+) -> Result<PathBuf, String> {
     let file = format!("node-v{}-win-x64.zip", NODE_VERSION);
     let urls = [
         format!("https://nodejs.org/dist/v{}/{}", NODE_VERSION, file),
@@ -136,7 +149,7 @@ pub fn download_node_zip() -> Result<PathBuf, String> {
     ));
     let mut last_err = String::from("未尝试任何下载源");
     for url in &urls {
-        match download_to(url, &tmp) {
+        match download_to(url, &tmp, "正在下载 Node", on_progress) {
             Ok(_) => return Ok(tmp),
             Err(e) => last_err = format!("{} → {}", url, e),
         }
@@ -144,8 +157,18 @@ pub fn download_node_zip() -> Result<PathBuf, String> {
     Err(format!("下载 Node 失败：{}", last_err))
 }
 
-/// 用 reqwest blocking 下载 `url` 到 `dest`。
-fn download_to(url: &str, dest: &Path) -> Result<(), String> {
+/// 用 reqwest blocking 流式下载 `url` 到 `dest`，边下边回调进度。
+///
+/// `stage` 是给用户看的阶段名；`on_progress` 每次收到数据块时调用一次。
+/// 总大小取 Content-Length（可能缺失）。
+fn download_to(
+    url: &str,
+    dest: &Path,
+    stage: &str,
+    on_progress: &(dyn Fn(RuntimeProgress) + Send + Sync),
+) -> Result<(), String> {
+    use std::io::{Read, Write};
+
     let client = reqwest::blocking::Client::builder()
         .timeout(std::time::Duration::from_secs(300))
         .build()
@@ -154,8 +177,20 @@ fn download_to(url: &str, dest: &Path) -> Result<(), String> {
     if !resp.status().is_success() {
         return Err(format!("HTTP {}", resp.status()));
     }
+    let total = resp.content_length();
     let mut file = std::fs::File::create(dest).map_err(|e| e.to_string())?;
-    std::io::copy(&mut resp, &mut file).map_err(|e| e.to_string())?;
+    let mut buf = [0u8; 64 * 1024];
+    let mut done: u64 = 0;
+    on_progress(RuntimeProgress { stage: stage.to_string(), done, total });
+    loop {
+        let n = resp.read(&mut buf).map_err(|e| e.to_string())?;
+        if n == 0 {
+            break;
+        }
+        file.write_all(&buf[..n]).map_err(|e| e.to_string())?;
+        done += n as u64;
+        on_progress(RuntimeProgress { stage: stage.to_string(), done, total });
+    }
     Ok(())
 }
 
@@ -195,8 +230,12 @@ pub fn extract_node_zip(zip_path: &Path, root: &Path) -> Result<(), String> {
 }
 
 /// 完整流程：下载 + 解压便携 Node。返回 node 目录。
-pub fn install_bundled_node(root: &Path) -> Result<PathBuf, String> {
-    let zip = download_node_zip()?;
+pub fn install_bundled_node(
+    root: &Path,
+    on_progress: &(dyn Fn(RuntimeProgress) + Send + Sync),
+) -> Result<PathBuf, String> {
+    let zip = download_node_zip(on_progress)?;
+    on_progress(RuntimeProgress { stage: "正在解压 Node".to_string(), done: 0, total: None });
     let result = extract_node_zip(&zip, root);
     let _ = std::fs::remove_file(&zip);
     result?;
@@ -211,7 +250,9 @@ pub const PNPM_VERSION: &str = "12.11.2";
 /// 下载 pnpm 独立版（@pnpm/exe.win32-x64 的 tgz）到临时文件。
 ///
 /// 源顺序：官方 registry → npmmirror。任一成功即返回。
-pub fn download_pnpm_tgz() -> Result<PathBuf, String> {
+pub fn download_pnpm_tgz(
+    on_progress: &(dyn Fn(RuntimeProgress) + Send + Sync),
+) -> Result<PathBuf, String> {
     let rel = format!("@pnpm/exe.win32-x64/-/exe.win32-x64-{}.tgz", PNPM_VERSION);
     let urls = [
         format!("https://registry.npmjs.org/{}", rel),
@@ -226,7 +267,7 @@ pub fn download_pnpm_tgz() -> Result<PathBuf, String> {
     ));
     let mut last_err = String::from("未尝试任何下载源");
     for url in &urls {
-        match download_to(url, &tmp) {
+        match download_to(url, &tmp, "正在下载 pnpm", on_progress) {
             Ok(_) => return Ok(tmp),
             Err(e) => last_err = format!("{} → {}", url, e),
         }
@@ -266,8 +307,12 @@ pub fn extract_pnpm_tgz(tgz_path: &Path, root: &Path) -> Result<(), String> {
 }
 
 /// 完整流程：下载 + 解压便携 pnpm。返回 pnpm 目录。
-pub fn install_bundled_pnpm(root: &Path) -> Result<PathBuf, String> {
-    let tgz = download_pnpm_tgz()?;
+pub fn install_bundled_pnpm(
+    root: &Path,
+    on_progress: &(dyn Fn(RuntimeProgress) + Send + Sync),
+) -> Result<PathBuf, String> {
+    let tgz = download_pnpm_tgz(on_progress)?;
+    on_progress(RuntimeProgress { stage: "正在解压 pnpm".to_string(), done: 0, total: None });
     let result = extract_pnpm_tgz(&tgz, root);
     let _ = std::fs::remove_file(&tgz);
     result?;
@@ -391,7 +436,7 @@ fn install_webview2_bootstrapper() -> Result<(), String> {
     const URL: &str =
         "https://go.microsoft.com/fwlink/p/?LinkId=2124703";
     let tmp = std::env::temp_dir().join("MicrosoftEdgeWebview2Setup.exe");
-    download_to(URL, &tmp)?;
+    download_to(URL, &tmp, "正在下载 WebView2 安装程序", &|_| {})?;
     // 拉起安装程序（等待用户完成）
     let status = std::process::Command::new(&tmp)
         .status()

@@ -961,7 +961,14 @@ fn cmd_setup_runtime(dry_run: bool, json: bool) -> i32 {
         if !json {
             eprintln!("正在下载便携 Node（约 30MB）…");
         }
-        match crate::runtime::install_bundled_node(root) {
+        let on_prog = |p: crate::runtime::RuntimeProgress| {
+            if json { return; }
+            match p.total {
+                Some(t) if t > 0 => eprint!("\r{}  {:.1} / {:.1} MB ({:.0}%)", p.stage, p.done as f64 / 1e6, t as f64 / 1e6, p.done as f64 * 100.0 / t as f64),
+                _ => eprint!("\r{}", p.stage),
+            }
+        };
+        match crate::runtime::install_bundled_node(root, &on_prog) {
             Ok(dir) => {
                 node_ok = true;
                 node_msg = format!("已安装便携 Node：{}", dir.to_string_lossy());
@@ -985,7 +992,14 @@ fn cmd_setup_runtime(dry_run: bool, json: bool) -> i32 {
         if !json {
             eprintln!("正在下载便携 pnpm（约 22MB）…");
         }
-        match crate::runtime::install_bundled_pnpm(root) {
+        let on_prog = |p: crate::runtime::RuntimeProgress| {
+            if json { return; }
+            match p.total {
+                Some(t) if t > 0 => eprint!("\r{}  {:.1} / {:.1} MB ({:.0}%)", p.stage, p.done as f64 / 1e6, t as f64 / 1e6, p.done as f64 * 100.0 / t as f64),
+                _ => eprint!("\r{}", p.stage),
+            }
+        };
+        match crate::runtime::install_bundled_pnpm(root, &on_prog) {
             Ok(dir) => {
                 pnpm_ok = true;
                 pnpm_msg = format!("已安装便携 pnpm：{}", dir.to_string_lossy());
@@ -996,6 +1010,9 @@ fn cmd_setup_runtime(dry_run: bool, json: bool) -> i32 {
         }
     }
 
+    if !json {
+        eprintln!();
+    }
     let ok = node_ok && pnpm_ok;
     if json {
         println!("{}", json_str(&serde_json::json!({

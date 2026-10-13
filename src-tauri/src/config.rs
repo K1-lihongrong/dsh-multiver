@@ -25,6 +25,10 @@ pub struct Config {
     /// 隔离版本不受此开关影响（永远使用 <根>/versions/<版本>/home）。
     #[serde(default)]
     pub use_official_dsh_home: bool,
+    /// 用户是否已忽略「缺少运行时」的启动提示（v0.2.9）。
+    /// 一旦忽略，不再自动弹横幅；用户仍可从环境检查面板手动准备运行时。
+    #[serde(default)]
+    pub runtime_prompt_dismissed: bool,
 }
 
 /// 维护相关配置与状态。
@@ -63,6 +67,7 @@ impl Default for Config {
             broken_versions: Vec::new(),
             maintenance: MaintenanceConfig::default(),
             use_official_dsh_home: false,
+            runtime_prompt_dismissed: false,
         }
     }
 }
@@ -270,6 +275,7 @@ mod tests {
                 last_cleanup_count: 3,
             },
             use_official_dsh_home: true,
+            runtime_prompt_dismissed: false,
         };
         cfg.save(&dir).unwrap();
         let back = Config::load(&dir);

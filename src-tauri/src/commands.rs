@@ -43,6 +43,8 @@ pub(crate) struct AppState {
     use_official_dsh_home: bool,
     /// 官方 dsh 配置目录路径（用于界面展示）；无法确定主目录时为 None
     official_home_dir: Option<String>,
+    /// 用户是否已忽略「缺少运行时」启动提示（v0.2.9）
+    runtime_prompt_dismissed: bool,
 }
 
 #[tauri::command]
@@ -89,6 +91,7 @@ pub(crate) fn get_state(app: tauri::AppHandle) -> AppState {
         maintenance: cfg.maintenance.clone(),
         use_official_dsh_home: cfg.use_official_dsh_home,
         official_home_dir: official_dsh_home().map(|p| p.to_string_lossy().to_string()),
+        runtime_prompt_dismissed: cfg.runtime_prompt_dismissed,
     }
 }
 
@@ -1045,28 +1048,54 @@ pub(crate) fn runtime_status(app: tauri::AppHandle) -> runtime::RuntimeStatus {
     }
 }
 
-/// 准备便携运行时（下载缺失的 Node/pnpm）。同步命令，前端应显示等待态。
-/// 返回 (是否全部就绪, 结果消息)。
+/// 准备便携运行时（下载缺失的 Node/pnpm）。
+///
+/// 阻塞式下载放在后台线程池，进度经 "runtime-progress" 事件推给前端（GUI 进度条）。
+/// 返回结果消息（成功/已就绪）。
 #[tauri::command]
-pub(crate) fn setup_runtime(app: tauri::AppHandle) -> Result<String, String> {
+pub(crate) async fn setup_runtime(app: tauri::AppHandle) -> Result<String, String> {
+    use tauri::Emitter;
     let mdir = manager_dir(&app);
     let cfg = Config::load(&mdir);
     let root = cfg.resolve_root(&mdir);
-    let mut msgs: Vec<String> = Vec::new();
+    let app2 = app.clone();
 
-    if !runtime::system_node_ok() && !runtime::bundled_node_ok(&root) {
-        runtime::install_bundled_node(&root).map_err(|e| format!("下载便携 Node 失败：{}", e))?;
-        msgs.push("已安装便携 Node".to_string());
-    }
-    if !runtime::system_pnpm_ok() && !runtime::bundled_pnpm_ok(&root) {
-        runtime::install_bundled_pnpm(&root).map_err(|e| format!("下载便携 pnpm 失败：{}", e))?;
-        msgs.push("已安装便携 pnpm".to_string());
-    }
-    if msgs.is_empty() {
+    let result = tauri::async_runtime::spawn_blocking(move || -> Result<Vec<String>, String> {
+        let mut msgs: Vec<String> = Vec::new();
+        let on_prog = move |ev: runtime::RuntimeProgress| {
+            let _ = app2.emit("runtime-progress", ev);
+        };
+        if !runtime::system_node_ok() && !runtime::bundled_node_ok(&root) {
+            runtime::install_bundled_node(&root, &on_prog)
+                .map_err(|e| format!("下载便携 Node 失败：{}", e))?;
+            msgs.push("已安装便携 Node".to_string());
+        }
+        if !runtime::system_pnpm_ok() && !runtime::bundled_pnpm_ok(&root) {
+            runtime::install_bundled_pnpm(&root, &on_prog)
+                .map_err(|e| format!("下载便携 pnpm 失败：{}", e))?;
+            msgs.push("已安装便携 pnpm".to_string());
+        }
+        Ok(msgs)
+    })
+    .await
+    .map_err(|e| format!("运行时准备任务失败：{}", e))??;
+
+    if result.is_empty() {
         Ok("运行时已就绪，无需下载".to_string())
     } else {
-        Ok(msgs.join("；"))
+        Ok(result.join("；"))
     }
+}
+
+/// 用户忽略「缺少运行时」的启动提示（v0.2.9）：记住选择，不再自动弹横幅。
+/// 用户仍可从环境检查面板手动准备运行时。
+#[tauri::command]
+pub(crate) fn dismiss_runtime_prompt(app: tauri::AppHandle) -> Result<String, String> {
+    let mdir = manager_dir(&app);
+    let mut cfg = Config::load(&mdir);
+    cfg.runtime_prompt_dismissed = true;
+    cfg.save(&mdir).map_err(|e| format!("保存配置失败: {}", e))?;
+    Ok("已忽略运行时提示".to_string())
 }
 
 /// 前端（WebView）JS 错误上报：写入 <根>/logs/frontend.log。

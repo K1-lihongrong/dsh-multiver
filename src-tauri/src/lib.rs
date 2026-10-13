@@ -119,6 +119,7 @@ pub fn run() {
             commands::check_env,
             commands::runtime_status,
             commands::setup_runtime,
+            commands::dismiss_runtime_prompt,
             commands::set_isolated,
             commands::set_use_official_home,
             commands::get_official_home,

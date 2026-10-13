@@ -8,6 +8,7 @@ import { t } from "./composables/useI18n.js";
 import PathSettings from "./components/PathSettings.vue";
 import InstalledList from "./components/InstalledList.vue";
 import RemoteList from "./components/RemoteList.vue";
+import RuntimeGuide from "./components/RuntimeGuide.vue";
 
 const state = ref(null);
 const installed = ref([]);
@@ -18,6 +19,11 @@ const updateDismissed = ref(false);
 const { toast, toastExpanded, notify, dismissToast, toggleToast } = useToast();
 const envCheckRef = ref(null);  // <EnvCheck> 组件引用（安装前调 run()）
 let unlistenCrash = null;
+
+// v0.2.9 运行时横幅：首次启动若缺运行时且用户未忽略，则显示。
+const runtimeNeeds = ref(false);       // 是否缺运行时
+const runtimeDismissed = ref(false);   // 本次会话内已忽略
+const guideOpen = ref(false);          // 「去官网安装」综合说明对话框
 
 async function refresh() {
   state.value = await invoke("get_state");
@@ -76,9 +82,44 @@ onMounted(async () => {
     notify(p.message || t("app.launchCrashed", { v: p.version }));
   });
   await runEnvCheck();
+  checkRuntime();   // v0.2.9 运行时横幅检测（缺运行时且未忽略才显示）
   // 更新检查放最后，且不 await 阻塞（网络慢时不影响界面可用）
   checkUpdate();
 });
+
+/// 检测运行时是否缺失；缺且用户未忽略 → 显示横幅。
+async function checkRuntime() {
+  try {
+    const s = await invoke("runtime_status");
+    const missing =
+      (!s.system_node_ok && !s.bundled_node_ok) ||
+      (!s.system_pnpm_ok && !s.bundled_pnpm_ok);
+    // 用户已在配置里忽略则不显示
+    if (missing && !(state.value && state.value.runtime_prompt_dismissed)) {
+      runtimeNeeds.value = true;
+    }
+  } catch (_) { /* 静默 */ }
+}
+
+/// 横幅里点「准备便携版」→ 转到环境检查面板的按钮（那里有进度条）。
+function prepareRuntimeFromBanner() {
+  runtimeNeeds.value = false;
+  if (envCheckRef.value && envCheckRef.value.prepareRuntime) {
+    envCheckRef.value.prepareRuntime();
+  }
+}
+
+/// 横幅里点「去官网安装」→ 打开综合说明对话框。
+function openGuide() {
+  guideOpen.value = true;
+}
+
+/// 横幅里点「忽略」→ 记录到配置，不再弹。
+async function dismissRuntime() {
+  runtimeNeeds.value = false;
+  runtimeDismissed.value = true;
+  try { await invoke("dismiss_runtime_prompt"); } catch (_) {}
+}
 
 onUnmounted(() => {
   window.removeEventListener("error", onWindowError);
@@ -117,7 +158,16 @@ onUnmounted(() => {
       </span>
     </div>
 
-    <EnvCheck ref="envCheckRef" @open-url="openUrl" @error="notify" />
+    <div class="runtime-banner" v-if="runtimeNeeds && !runtimeDismissed">
+      <span class="runtime-text">{{ t("runtime.banner") }}</span>
+      <span class="runtime-actions">
+        <button class="btn small primary" @click="prepareRuntimeFromBanner">{{ t("runtime.prepare") }}</button>
+        <button class="btn small" @click="openGuide">{{ t("runtime.guide") }}</button>
+        <button class="btn small" @click="dismissRuntime">{{ t("runtime.ignore") }}</button>
+      </span>
+    </div>
+
+    <EnvCheck ref="envCheckRef" @open-url="openUrl" @error="notify" @guide="openGuide" />
 
     <InstalledList
       :installed="installed"
@@ -155,6 +205,8 @@ onUnmounted(() => {
       <button class="toast-close" @click.stop="dismissToast">×</button>
     </div>
   </transition>
+
+  <RuntimeGuide v-if="guideOpen" @close="guideOpen = false" @open-url="openUrl" />
 
 </div>
 </template>
@@ -202,6 +254,15 @@ onUnmounted(() => {
 }
 .update-text { color: var(--text); }
 .update-actions { display: flex; gap: 8px; align-items: center; }
+
+.runtime-banner {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  padding: 10px 14px; border-radius: 9px;
+  background: var(--warn-weak, var(--accent-weak)); border: 1px solid var(--warn-border, var(--accent-border));
+  font-size: 13px; flex-wrap: wrap;
+}
+.runtime-text { color: var(--text); line-height: 1.5; }
+.runtime-actions { display: flex; gap: 8px; align-items: center; flex-shrink: 0; }
 
 .toast {
   position: fixed; bottom: 22px; left: 50%; transform: translateX(-50%);

@@ -1,6 +1,7 @@
 <script setup>
-import { ref, onMounted } from "vue";
+import { ref, onMounted, onUnmounted } from "vue";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { t } from "../composables/useI18n.js";
 
 // 环境自检面板：自己调 check_env、自己管状态。
@@ -14,6 +15,11 @@ const loading = ref(false);
 // v0.2.9：运行时状态（判断是否需要"自动准备运行时"按钮）
 const rtStatus = ref(null);
 const preparing = ref(false);
+// v0.2.9：下载进度（来自 runtime-progress 事件）
+const progStage = ref("");
+const progDone = ref(0);
+const progTotal = ref(null);
+let unlistenProgress = null;
 
 /// 是否缺运行时（系统与便携都没有）。
 function needsRuntime() {
@@ -42,9 +48,12 @@ async function run() {
   }
 }
 
-/// 自动下载缺失的便携运行时，完成后刷新检查。
+/// 自动下载缺失的便携运行时（含进度），完成后刷新检查。
 async function prepareRuntime() {
   preparing.value = true;
+  progStage.value = "";
+  progDone.value = 0;
+  progTotal.value = null;
   try {
     await invoke("setup_runtime");
     emit("error", t("env.runtimeReady"));
@@ -53,12 +62,36 @@ async function prepareRuntime() {
     emit("error", t("env.runtimeFailed") + ": " + e);
   } finally {
     preparing.value = false;
+    progStage.value = "";
   }
 }
 
-onMounted(run);
+/// 进度百分比（0-100）；总大小未知时返回 null。
+function progressPct() {
+  if (!progTotal.value) return null;
+  return Math.min(100, Math.round((progDone.value * 100) / progTotal.value));
+}
 
-defineExpose({ run });
+/// 已下载 / 总大小（MB 文本）。
+function mbText(bytes) {
+  return (bytes / 1048576).toFixed(1) + " MB";
+}
+
+onMounted(async () => {
+  unlistenProgress = await listen("runtime-progress", (e) => {
+    const p = e.payload || {};
+    progStage.value = p.stage || "";
+    progDone.value = p.done || 0;
+    progTotal.value = p.total || null;
+  });
+  await run();
+});
+
+onUnmounted(() => {
+  if (unlistenProgress) unlistenProgress();
+});
+
+defineExpose({ run, prepareRuntime });
 </script>
 
 <template>
@@ -70,11 +103,16 @@ defineExpose({ run });
         <span class="badge-err" v-else-if="checked">{{ t("env.fail") }}</span>
       </h2>
       <button
-        v-if="checked && needsRuntime()"
+        v-if="checked && !passed && needsRuntime()"
         class="btn small primary"
         @click="prepareRuntime"
         :disabled="preparing"
       >{{ preparing ? t("env.preparing") : t("env.prepareRuntime") }}</button>
+      <button
+        v-if="checked && !passed && needsRuntime()"
+        class="btn small"
+        @click="emit('guide')"
+      >{{ t("env.installGuide") }}</button>
       <button class="btn small" @click="run" :disabled="loading">{{ t("env.recheck") }}</button>
     </div>
     <ul class="env-list" v-if="checks.length">
@@ -101,6 +139,16 @@ defineExpose({ run });
       </li>
     </ul>
     <div v-else class="hint">{{ t("env.checking") }}</div>
+
+    <div class="rt-progress" v-if="preparing && progStage">
+      <div class="prog-line">
+        <span class="stage-text">{{ progStage }}</span>
+        <span class="prog-size" v-if="progTotal">{{ mbText(progDone) }} / {{ mbText(progTotal) }} ({{ progressPct() }}%)</span>
+      </div>
+      <div class="prog-bar">
+        <div class="prog-fill" :style="{ width: (progressPct() || 0) + '%' }" :class="{ indeterminate: progressPct() === null }"></div>
+      </div>
+    </div>
   </section>
 </template>
 
@@ -131,4 +179,18 @@ defineExpose({ run });
 }
 .env-guide-text { flex: 1; min-width: 200px; }
 /* .badge-ok / .badge-err 见 src/styles/common.css */
+
+/* v0.2.9 运行时下载进度 */
+.rt-progress { margin-top: 10px; padding: 8px 12px; border-radius: 8px; background: var(--surface-1); }
+.prog-line { display: flex; align-items: center; justify-content: space-between; gap: 10px; font-size: 12px; margin-bottom: 6px; }
+.stage-text { color: var(--text-2); font-weight: 500; }
+.prog-size { color: var(--text-3); font-size: 11px; }
+.prog-bar { height: 6px; border-radius: 3px; background: var(--surface-3); overflow: hidden; }
+.prog-fill { height: 100%; background: var(--accent); border-radius: 3px; transition: width .2s; }
+.prog-fill.indeterminate { width: 40% !important; animation: rt-indeterminate 1.2s infinite ease-in-out; }
+@keyframes rt-indeterminate {
+  0% { margin-left: 0; }
+  50% { margin-left: 60%; }
+  100% { margin-left: 0; }
+}
 </style>
