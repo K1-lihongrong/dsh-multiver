@@ -10,14 +10,9 @@
 //! 交互（提示、进度、确认）由命令层 + 前端负责。
 
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 /// 便携运行时依赖的 Node 版本（与 envcheck 的下限一致）。
 pub const NODE_VERSION: &str = "22.19.0";
-
-/// 便携 Node 的官方下载地址（Windows x64）。
-/// 备用源见 `NODE_URLS`。
-pub const NODE_URL_PRIMARY: &str = "https://nodejs.org/dist";
 
 /// 便携 Node 目录：`<root>/tools/node`
 pub fn node_dir(root: &Path) -> PathBuf {
@@ -68,14 +63,6 @@ pub struct RuntimeStatus {
     pub system_pnpm_ok: bool,
     /// 便携 pnpm 是否已就绪
     pub bundled_pnpm_ok: bool,
-}
-
-impl RuntimeStatus {
-    /// 是否还需要下载便携运行时（Node 或 pnpm 任一缺且系统也没有）。
-    pub fn needs_download(&self) -> bool {
-        (!self.system_node_ok && !self.bundled_node_ok)
-            || (!self.system_pnpm_ok && !self.bundled_pnpm_ok)
-    }
 }
 
 /// 检测运行时应走系统还是便携：返回该注入 dsh 子进程 PATH 的额外目录列表。
@@ -287,23 +274,6 @@ pub fn install_bundled_pnpm(root: &Path) -> Result<PathBuf, String> {
     Ok(pnpm_dir(root))
 }
 
-/// 用便携 Node 执行一条命令并返回 stdout（用于验证便携 Node 可用）。
-pub fn run_bundled_node(root: &Path, args: &[&str]) -> Result<String, String> {
-    let exe = node_dir(root).join(node_exe_name());
-    if !exe.is_file() {
-        return Err("便携 Node 不存在".to_string());
-    }
-    let out = Command::new(&exe)
-        .args(args)
-        .output()
-        .map_err(|e| e.to_string())?;
-    if out.status.success() {
-        Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
-    } else {
-        Err(String::from_utf8_lossy(&out.stderr).trim().to_string())
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -338,27 +308,6 @@ mod tests {
         std::fs::write(dir.join(node_exe_name()), b"x").unwrap();
         assert!(bundled_node_ok(&root));
         let _ = std::fs::remove_dir_all(&root);
-    }
-
-    #[test]
-    fn needs_download_logic() {
-        // 系统都没有 + 便携都没有 → 需要下载
-        let s = RuntimeStatus::default();
-        assert!(s.needs_download());
-        // 系统都有 → 不需要
-        let s = RuntimeStatus {
-            system_node_ok: true,
-            system_pnpm_ok: true,
-            ..Default::default()
-        };
-        assert!(!s.needs_download());
-        // 只有便携 → 不需要
-        let s = RuntimeStatus {
-            bundled_node_ok: true,
-            bundled_pnpm_ok: true,
-            ..Default::default()
-        };
-        assert!(!s.needs_download());
     }
 
     #[test]
