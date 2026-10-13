@@ -27,7 +27,8 @@ tauri-plugin-dialog = "2"
 # 只用到阻塞式 client + json，关闭默认 features 减小体积（不用 TLS 后端之外的特性）
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
 # v0.2.9 运行时适配：解压便携 Node（官方 zip）
-zip = { version = "2", default-features = false, features = ["deflate"] }
+# 用 deflate-flate2（只拉 flate2 后端）；不用聚合的 "deflate"，它还会拉入解压用不到的 zopfli
+zip = { version = "2", default-features = false, features = ["deflate-flate2", "flate2"] }
 # v0.2.9 运行时适配：解压便携 pnpm（npm tgz）
 flate2 = "1"
 tar = "0.4"

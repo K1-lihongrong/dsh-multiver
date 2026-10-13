@@ -286,7 +286,6 @@ pub fn install_bundled_pnpm(root: &Path) -> Result<PathBuf, String> {
 pub fn webview2_installed() -> bool {
     use windows_sys::Win32::System::Registry::{
         RegCloseKey, RegOpenKeyExW, RegQueryValueExW, HKEY, HKEY_LOCAL_MACHINE, KEY_READ,
-        REG_SZ,
     };
     // WebView2 Runtime 的固定 GUID（微软文档）
     const GUID: &str = "{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}";
