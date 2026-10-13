@@ -169,66 +169,100 @@ fn probe_import_meta_main() -> Option<bool> {
     }
 }
 
+/// 纯系统检测：系统 Node 是否满足 dsh 要求（不涉及便携运行时）。
+///
+/// 供 runtime 模块判断"是否需要便携 Node"——故**不含 root**，避免与 runtime 循环依赖。
+pub fn system_node_ok() -> bool {
+    match run_version("node") {
+        Some(v) => {
+            if !parse_semver(&v).map(node_version_ok).unwrap_or(false) {
+                return false;
+            }
+            !matches!(probe_import_meta_main(), Some(false))
+        }
+        None => false,
+    }
+}
+
+/// 纯系统检测：系统 pnpm 是否可用。
+pub fn system_pnpm_ok() -> bool {
+    run_version("pnpm").is_some()
+}
+
 /// 检查 Node.js 是否可用，且版本与能力都满足 dsh 的要求。
 ///
-/// 两层判断：
-/// 1. **版本号**（快速拦截）—— 需 `^22.19.0` 或 `>=24`
-/// 2. **特性探测**（兜底）—— 实测 `import.meta.main` 是否可用；仅在**版本号通过但探测失败**时报警
-pub fn check_node() -> CheckItem {
+/// 判断顺序（v0.2.9 起）：
+/// 1. 系统 Node 满足 → 通过
+/// 2. 系统不满足但**便携 Node 已就绪** → 通过（提示将用便携运行时）
+/// 3. 都没有 → 失败（引导下载；可用 `--setup-runtime` 自动下载）
+///
+/// 系统的两层判断：版本号（需 `^22.19.0` 或 `>=24`）+ 特性探测（`import.meta.main`）。
+pub fn check_node(root: &Path) -> CheckItem {
     match run_version("node") {
         Some(v) => {
             let ok_ver = parse_semver(&v).map(node_version_ok).unwrap_or(false);
             if !ok_ver {
-                return fail_item(
-                    "Node.js",
-                    format!("{}（需要 22.19+ 或 24+）", v),
-                    true,
-                    "dsh 需要 Node.js 22.19 或更高（或 24+）。旧版 22.x 缺少 dsh 依赖的 \"import.meta.main\" 特性，会导致内嵌窗口连不上。请到官网下载 LTS 版（22.19+ / 24+）安装后重新检查。",
-                    "env.node.hint_version",
-                    "https://nodejs.org/zh-cn/download",
-                )
-                .i18n_detail("env.node.detail_old", serde_json::json!({ "v": v }));
+                return node_fallback_or_fail(root, format!("{}（需要 22.19+ 或 24+）", v));
             }
             // 版本号通过 → 特性探测兜底
             match probe_import_meta_main() {
-                Some(false) => fail_item(
-                    "Node.js",
+                Some(false) => node_fallback_or_fail(
+                    root,
                     format!("{}（版本看似满足，但缺少 import.meta.main 特性）", v),
-                    true,
-                    "当前 Node 虽满足版本号要求，但实测不支持 dsh 依赖的 \"import.meta.main\"（可能是定制构建或异常版本）。建议改用 Node.js 官网的 LTS 版（22.19+ / 24+）。",
-                    "env.node.hint_feature",
-                    "https://nodejs.org/zh-cn/download",
-                )
-                .i18n_detail("env.node.detail_feature", serde_json::json!({ "v": v })),
+                ),
                 _ => ok_item("Node.js", format!("{}（满足 22.19+ / 24+）", v), true)
                     .i18n_detail("env.node.detail_ok", serde_json::json!({ "v": v })),
             }
         }
-        None => fail_item(
-            "Node.js",
-            "未找到 node 命令，请先安装 Node.js 22.19+（或 24+）".to_string(),
-            true,
-            "请到 Node.js 官网下载 LTS 版（22.19 或更高，或 24+）安装。安装时勾选「Add to PATH」，装完重开本工具。",
-            "env.node.hint_missing",
-            "https://nodejs.org/zh-cn/download",
-        )
-        .i18n_detail("env.node.detail_missing", serde_json::Value::Null),
+        None => node_fallback_or_fail(root, "未找到 node 命令".to_string()),
     }
 }
 
-/// 检查 pnpm 是否可用
-pub fn check_pnpm() -> CheckItem {
+/// 系统 Node 不可用时的处理：便携 Node 就绪 → 通过；否则失败。
+fn node_fallback_or_fail(root: &Path, detail: String) -> CheckItem {
+    if crate::runtime::bundled_node_ok(root) {
+        return ok_item(
+            "Node.js",
+            format!("{}（将使用便携 Node）", detail),
+            true,
+        )
+        .i18n_detail("env.node.detail_bundled", serde_json::json!({ "v": detail }));
+    }
+    fail_item(
+        "Node.js",
+        format!("{}，且未准备便携 Node", detail),
+        true,
+        "可运行 dsh-multiver --setup-runtime 自动下载便携 Node，或到 Node.js 官网下载 LTS 版（22.19+ / 24+）安装。",
+        "env.node.hint_missing",
+        "https://nodejs.org/zh-cn/download",
+    )
+    .i18n_detail("env.node.detail_missing", serde_json::Value::Null)
+}
+
+/// 检查 pnpm 是否可用。
+///
+/// 判断顺序（v0.2.9 起）：
+/// 1. 系统 pnpm 可用 → 通过
+/// 2. 系统不可用但**便携 pnpm 已就绪** → 通过
+/// 3. 都没有 → 失败（引导下载；可用 `--setup-runtime` 自动下载）
+pub fn check_pnpm(root: &Path) -> CheckItem {
     match run_version("pnpm") {
         Some(v) => ok_item("pnpm", v, true),
-        None => fail_item(
-            "pnpm",
-            "未找到 pnpm 命令，请先安装 pnpm".to_string(),
-            true,
-            "Node 装好后，在终端运行：npm install -g pnpm（也可参考 pnpm 官网）。",
-            "env.pnpm.hint_missing",
-            "https://pnpm.io/zh/installation",
-        )
-        .i18n_detail("env.pnpm.detail_missing", serde_json::Value::Null),
+        None => {
+            if crate::runtime::bundled_pnpm_ok(root) {
+                return ok_item("pnpm", "将使用便携 pnpm".to_string(), true)
+                    .i18n_detail("env.pnpm.detail_bundled", serde_json::Value::Null);
+            }
+            fail_item(
+                "pnpm",
+                "未找到 pnpm 命令，且未准备便携 pnpm".to_string(),
+                true,
+                "可运行 dsh-multiver --setup-runtime 自动下载便携 pnpm，或先安装 Node 后运行 npm install -g pnpm。",
+                "env.pnpm.hint_missing",
+                "https://pnpm.io/zh/installation",
+            )
+            .i18n_detail("env.pnpm.detail_missing", serde_json::Value::Null)
+        }
     }
 }
 
@@ -376,8 +410,8 @@ pub fn check_registry() -> CheckItem {
 /// 执行全部环境检查
 pub fn run_all(root: &Path) -> Vec<CheckItem> {
     vec![
-        check_node(),
-        check_pnpm(),
+        check_node(root),
+        check_pnpm(root),
         check_writable(root),
         check_disk(root),
         check_registry(),

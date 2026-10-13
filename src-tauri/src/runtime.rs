@@ -115,14 +115,14 @@ pub fn path_env_additions(root: &Path) -> Option<String> {
 
 // ───────────────────────── 系统运行时探测 ─────────────────────────
 
-/// 系统 Node 是否满足 dsh 要求（复用 envcheck 的版本 + 特性判断）。
+/// 系统 Node 是否满足 dsh 要求（复用 envcheck 的纯系统判断）。
 pub fn system_node_ok() -> bool {
-    crate::envcheck::check_node().ok
+    crate::envcheck::system_node_ok()
 }
 
 /// 系统 pnpm 是否可用。
 pub fn system_pnpm_ok() -> bool {
-    crate::envcheck::check_pnpm().ok
+    crate::envcheck::system_pnpm_ok()
 }
 
 // ───────────────────────── 下载 ─────────────────────────
