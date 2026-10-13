@@ -28,6 +28,9 @@ tauri-plugin-dialog = "2"
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
 # v0.2.9 运行时适配：解压便携 Node（官方 zip）
 zip = { version = "2", default-features = false, features = ["deflate"] }
+# v0.2.9 运行时适配：解压便携 pnpm（npm tgz）
+flate2 = "1"
+tar = "0.4"
 
 # 用于设置进程 AppUserModelID，稳定 Windows 任务栏图标分组（见 lib.rs）
 # 以及用 Job Object 绑定 dsh 子进程，根除孤儿进程（见 jobobj.rs）

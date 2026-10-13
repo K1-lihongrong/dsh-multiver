@@ -216,6 +216,77 @@ pub fn install_bundled_node(root: &Path) -> Result<PathBuf, String> {
     Ok(node_dir(root))
 }
 
+// ───────────────────────── 便携 pnpm ─────────────────────────
+
+/// 便携 pnpm 版本（@pnpm/exe 的稳定版）。
+pub const PNPM_VERSION: &str = "12.11.2";
+
+/// 下载 pnpm 独立版（@pnpm/exe.win32-x64 的 tgz）到临时文件。
+///
+/// 源顺序：官方 registry → npmmirror。任一成功即返回。
+pub fn download_pnpm_tgz() -> Result<PathBuf, String> {
+    let rel = format!("@pnpm/exe.win32-x64/-/exe.win32-x64-{}.tgz", PNPM_VERSION);
+    let urls = [
+        format!("https://registry.npmjs.org/{}", rel),
+        format!("https://registry.npmmirror.com/{}", rel),
+    ];
+    let tmp = std::env::temp_dir().join(format!(
+        "dsh-multiver-pnpm-{}.tgz",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0)
+    ));
+    let mut last_err = String::from("未尝试任何下载源");
+    for url in &urls {
+        match download_to(url, &tmp) {
+            Ok(_) => return Ok(tmp),
+            Err(e) => last_err = format!("{} → {}", url, e),
+        }
+    }
+    Err(format!("下载 pnpm 失败：{}", last_err))
+}
+
+/// 解压 pnpm tgz 到 `<root>/tools/pnpm/`，取出 `package/pnpm.exe`（及其余文件）。
+pub fn extract_pnpm_tgz(tgz_path: &Path, root: &Path) -> Result<(), String> {
+    let target = pnpm_dir(root);
+    let _ = std::fs::remove_dir_all(&target);
+    std::fs::create_dir_all(&target).map_err(|e| e.to_string())?;
+
+    let file = std::fs::File::open(tgz_path).map_err(|e| e.to_string())?;
+    let gz = flate2::read::GzDecoder::new(file);
+    let mut archive = tar::Archive::new(gz);
+    for entry in archive.entries().map_err(|e| e.to_string())? {
+        let mut entry = entry.map_err(|e| e.to_string())?;
+        let path = entry.path().map_err(|e| e.to_string())?.to_path_buf();
+        // 取 package/ 下的相对路径
+        let rel = match path.components().next() {
+            Some(std::path::Component::Normal(first)) if first == "package" => {
+                path.strip_prefix("package").unwrap_or(&path)
+            }
+            _ => continue,
+        };
+        if rel.as_os_str().is_empty() {
+            continue;
+        }
+        let out = target.join(rel);
+        if let Some(parent) = out.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+        }
+        entry.unpack(&out).map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+/// 完整流程：下载 + 解压便携 pnpm。返回 pnpm 目录。
+pub fn install_bundled_pnpm(root: &Path) -> Result<PathBuf, String> {
+    let tgz = download_pnpm_tgz()?;
+    let result = extract_pnpm_tgz(&tgz, root);
+    let _ = std::fs::remove_file(&tgz);
+    result?;
+    Ok(pnpm_dir(root))
+}
+
 /// 用便携 Node 执行一条命令并返回 stdout（用于验证便携 Node 可用）。
 pub fn run_bundled_node(root: &Path, args: &[&str]) -> Result<String, String> {
     let exe = node_dir(root).join(node_exe_name());

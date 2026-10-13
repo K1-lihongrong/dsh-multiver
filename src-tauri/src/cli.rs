@@ -939,6 +939,11 @@ fn cmd_setup_runtime(dry_run: bool, json: bool) -> i32 {
             } else {
                 println!("  → 无需下载 Node");
             }
+            if !sys_pnpm && !bun_pnpm {
+                println!("  → 将下载便携 pnpm（约 22MB）");
+            } else {
+                println!("  → 无需下载 pnpm");
+            }
         }
         return 0;
     }
@@ -967,17 +972,31 @@ fn cmd_setup_runtime(dry_run: bool, json: bool) -> i32 {
         }
     }
 
-    // pnpm：本轮暂不做独立版下载（待确认分发形式），仅报告
-    let pnpm_ok = sys_pnpm || bun_pnpm;
-    let pnpm_msg = if sys_pnpm {
+    // pnpm：系统有就跳过；否则下便携独立版
+    let mut pnpm_ok = sys_pnpm || bun_pnpm;
+    let mut pnpm_msg = if sys_pnpm {
         "系统 pnpm 可用".to_string()
     } else if bun_pnpm {
         "便携 pnpm 已就绪".to_string()
     } else {
-        "未找到 pnpm（本轮不自动下载，请参考 --env 的引导）".to_string()
+        String::new()
     };
+    if !sys_pnpm && !bun_pnpm {
+        if !json {
+            eprintln!("正在下载便携 pnpm（约 22MB）…");
+        }
+        match crate::runtime::install_bundled_pnpm(root) {
+            Ok(dir) => {
+                pnpm_ok = true;
+                pnpm_msg = format!("已安装便携 pnpm：{}", dir.to_string_lossy());
+            }
+            Err(e) => {
+                pnpm_msg = format!("下载便携 pnpm 失败：{}", e);
+            }
+        }
+    }
 
-    let ok = node_ok;
+    let ok = node_ok && pnpm_ok;
     if json {
         println!("{}", json_str(&serde_json::json!({
             "ok": ok,
