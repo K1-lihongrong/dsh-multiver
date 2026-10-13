@@ -154,6 +154,8 @@ pub struct Dirs {
     pub trash: PathBuf,
     /// 管理器资源目录（如桌面快捷方式用的 dsh 图标）；仅 Windows 使用。
     pub assets: PathBuf,
+    /// 运行时适配（v0.2.9）：按需下载的便携运行时（Node / pnpm）存放目录。
+    pub tools: PathBuf,
 }
 
 impl Dirs {
@@ -167,6 +169,7 @@ impl Dirs {
             webview: root.join("webview"),
             trash: root.join("trash"),
             assets: root.join("assets"),
+            tools: root.join("tools"),
             root,
         }
     }

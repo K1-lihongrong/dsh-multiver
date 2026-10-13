@@ -10,6 +10,7 @@ mod logging;
 mod maintenance;
 #[cfg(unix)]
 mod procreg;
+mod runtime;
 mod updater;
 mod versions;
 mod window;

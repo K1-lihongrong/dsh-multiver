@@ -488,6 +488,13 @@ pub fn install(
             cmd.arg(format!("--config.registry={}", reg.trim()));
         }
     }
+    // 运行时适配（v0.2.9）：若系统缺 Node/pnpm，把便携运行时目录注入子进程 PATH，
+    // 使 pnpm 能用便携 Node 运行（root 由 versions_dir 的父目录推出）。
+    if let Some(root) = versions_dir.parent() {
+        if let Some(new_path) = crate::runtime::path_env_additions(root) {
+            cmd.env("PATH", new_path);
+        }
+    }
     cmd.stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped());
 

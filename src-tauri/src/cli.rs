@@ -85,6 +85,8 @@ pub enum CliCommand {
     Import {
         file: String,
     },
+    /// 准备便携运行时（v0.2.9）：检测缺失的 Node/pnpm 并下载到数据根
+    SetupRuntime,
     Help,
     Version,
 }
@@ -117,6 +119,7 @@ fn is_cli_flag(a: &str) -> bool {
             | "--export"
             | "--run"
             | "--import"
+            | "--setup-runtime"
             | "--help"
             | "-h"
             | "--version"
@@ -218,6 +221,7 @@ pub fn parse(args: &[String]) -> Result<Option<CliCommand>, String> {
                 let file = next_value(args, i, "--import")?;
                 return Ok(Some(CliCommand::Import { file }));
             }
+            "--setup-runtime" => return Ok(Some(CliCommand::SetupRuntime)),
             "--maintenance" => {
                 let kind = if args.iter().any(|x| x == "--cleanup") {
                     "cleanup"
@@ -392,6 +396,7 @@ pub fn run(cmd: CliCommand, dry_run: bool, json: bool) -> i32 {
         CliCommand::Export { file } => cmd_export(file.as_deref(), json),
         CliCommand::Run { version } => cmd_run(&version, json),
         CliCommand::Import { file } => cmd_import(&file, dry_run, json),
+        CliCommand::SetupRuntime => cmd_setup_runtime(dry_run, json),
     }
 }
 
@@ -900,6 +905,92 @@ fn cmd_run(version: &str, json: bool) -> i32 {
     }
 }
 
+/// `--setup-runtime`：检测并下载缺失的便携运行时（v0.2.9）。
+///
+/// - `--dry-run`：只报告检测结果（缺什么），不下载
+/// - 正常：下载缺失的便携 Node 到 `<root>/tools/node/`
+fn cmd_setup_runtime(dry_run: bool, json: bool) -> i32 {
+    let ctx = load_ctx();
+    let root = &ctx.dirs.root;
+    let sys_node = crate::runtime::system_node_ok();
+    let bun_node = crate::runtime::bundled_node_ok(root);
+    let sys_pnpm = crate::runtime::system_pnpm_ok();
+    let bun_pnpm = crate::runtime::bundled_pnpm_ok(root);
+
+    if dry_run {
+        if json {
+            println!("{}", json_str(&serde_json::json!({
+                "dry_run": true,
+                "system_node_ok": sys_node,
+                "bundled_node_ok": bun_node,
+                "system_pnpm_ok": sys_pnpm,
+                "bundled_pnpm_ok": bun_pnpm,
+                "need_node": !sys_node && !bun_node,
+                "need_pnpm": !sys_pnpm && !bun_pnpm,
+            })));
+        } else {
+            println!("[预览] 运行时检测：");
+            println!("  系统 Node：{}", if sys_node { "可用" } else { "不可用" });
+            println!("  便携 Node：{}", if bun_node { "已就绪" } else { "缺失" });
+            println!("  系统 pnpm：{}", if sys_pnpm { "可用" } else { "不可用" });
+            println!("  便携 pnpm：{}", if bun_pnpm { "已就绪" } else { "缺失" });
+            if !sys_node && !bun_node {
+                println!("  → 将下载便携 Node（约 30MB）");
+            } else {
+                println!("  → 无需下载 Node");
+            }
+        }
+        return 0;
+    }
+
+    // Node：系统有就跳过；否则下便携版
+    let mut node_ok = sys_node || bun_node;
+    let mut node_msg = if sys_node {
+        "系统 Node 可用".to_string()
+    } else if bun_node {
+        "便携 Node 已就绪".to_string()
+    } else {
+        String::new()
+    };
+    if !sys_node && !bun_node {
+        if !json {
+            eprintln!("正在下载便携 Node（约 30MB）…");
+        }
+        match crate::runtime::install_bundled_node(root) {
+            Ok(dir) => {
+                node_ok = true;
+                node_msg = format!("已安装便携 Node：{}", dir.to_string_lossy());
+            }
+            Err(e) => {
+                node_msg = format!("下载便携 Node 失败：{}", e);
+            }
+        }
+    }
+
+    // pnpm：本轮暂不做独立版下载（待确认分发形式），仅报告
+    let pnpm_ok = sys_pnpm || bun_pnpm;
+    let pnpm_msg = if sys_pnpm {
+        "系统 pnpm 可用".to_string()
+    } else if bun_pnpm {
+        "便携 pnpm 已就绪".to_string()
+    } else {
+        "未找到 pnpm（本轮不自动下载，请参考 --env 的引导）".to_string()
+    };
+
+    let ok = node_ok;
+    if json {
+        println!("{}", json_str(&serde_json::json!({
+            "ok": ok,
+            "node": node_msg,
+            "pnpm": pnpm_msg,
+        })));
+    } else {
+        println!("{}", node_msg);
+        println!("{}", pnpm_msg);
+    }
+    if ok { 0 } else { 1 }
+}
+
 /// `--export [<文件>]`：导出配置 + 版本清单（JSON）。默认写到数据根目录。
 fn cmd_export(file: Option<&str>, json: bool) -> i32 {
     let ctx = load_ctx();
@@ -1232,6 +1323,7 @@ fn print_help() {
   dsh-multiver --export [<文件>]
   dsh-multiver --run <版本>
   dsh-multiver --import <文件>
+  dsh-multiver --setup-runtime [--dry-run]
   dsh-multiver --maintenance [--cleanup | --prune]
   dsh-multiver --help
   dsh-multiver --version [--json]
@@ -1251,6 +1343,7 @@ fn print_help() {
   --export       导出配置 + 版本清单（JSON）到指定文件（默认写到数据根目录）
   --run          启动 dsh web（新控制台 + 自动打开系统浏览器；关窗口即停止）
   --import       导入配置（从 --export 生成的备份文件）；--dry-run 只预览
+  --setup-runtime 检测并下载缺失的便携运行时（Node）；--dry-run 只报告不下载
   --install      安装指定版本；--registry 可指定 npm 源（默认官方源）
   --uninstall    卸载指定版本
   --set-default  设为默认版本，并重生成终端 dsh 命令
@@ -1356,6 +1449,7 @@ mod tests {
 
     #[test]
     fn import_command() {
+        assert!(matches!(parse(&args(&["--setup-runtime"])), Ok(Some(CliCommand::SetupRuntime))));
         match parse(&args(&["--import", "b.json"])) {
             Ok(Some(CliCommand::Import { file })) => assert_eq!(file, "b.json"),
             other => panic!("unexpected: {:?}", other),

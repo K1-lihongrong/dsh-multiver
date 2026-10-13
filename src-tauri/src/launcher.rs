@@ -45,6 +45,15 @@ pub fn spawn_web_hidden(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
 
+    // 运行时适配（v0.2.9）：若系统缺 Node，把便携 Node 目录注入 dsh 子进程 PATH，
+    // 使 dsh.cmd 的 "就近 node.exe → PATH 兜底" 解析到便携 Node（已实测有效）。
+    // version_dir = <root>/versions/<ver>，上两级即 <root>。
+    if let Some(root) = version_dir.parent().and_then(|p| p.parent()) {
+        if let Some(new_path) = crate::runtime::path_env_additions(root) {
+            cmd.env("PATH", new_path);
+        }
+    }
+
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
@@ -639,6 +648,13 @@ pub fn spawn_web_console(
         .env("npm_config_store_dir", store_dir)
         .env("npm_config_cache_dir", cache_dir)
         .env("npm_config_state_dir", state_dir);
+
+    // 运行时适配（v0.2.9）：同 spawn_web_hidden，注入便携运行时 PATH。
+    if let Some(root) = version_dir.parent().and_then(|p| p.parent()) {
+        if let Some(new_path) = crate::runtime::path_env_additions(root) {
+            cmd.env("PATH", new_path);
+        }
+    }
 
     #[cfg(windows)]
     {
