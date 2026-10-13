@@ -43,6 +43,8 @@ windows-sys = { version = "0.59", features = [
     "Win32_Security",
     "Win32_Storage_FileSystem",
     "Win32_System_Console",
+    "Win32_System_Registry",
+    "Win32_UI_WindowsAndMessaging",
 ] }
 # 给 dsh 内嵌窗口单独设 AppUserModelID（任务栏显示 dsh 图标、独立分组），
 # 需要 COM 的 IPropertyStore / SHGetPropertyStoreForWindow。

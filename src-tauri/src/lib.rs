@@ -83,6 +83,14 @@ pub fn run() {
         }
     }
 
+    // v0.2.9 批 2：WebView2 早期检测（必须在 Tauri 初始化前——GUI 本体依赖它）。
+    // 缺失时弹 Win32 原生框（不依赖 WebView2）引导安装；用户装完重开即可。
+    // 仅在 GUI 路径检测（CLI 不需要 WebView2）。
+    if !runtime::webview2_installed() {
+        runtime::prompt_webview2_missing();
+        std::process::exit(0);
+    }
+
     // 进程级 AUMID 必须在任何窗口创建之前设置（Tauri 在 setup 回调前就建了主窗口）。
     // 否则任务栏会退化为"找指向本 exe 的快捷方式取图标"，被桌面 dsh 快捷方式污染。
     window::set_process_aumid();
