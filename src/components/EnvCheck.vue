@@ -11,12 +11,26 @@ const checks = ref([]);
 const checked = ref(false);
 const passed = ref(false);
 const loading = ref(false);
+// v0.2.9：运行时状态（判断是否需要"自动准备运行时"按钮）
+const rtStatus = ref(null);
+const preparing = ref(false);
+
+/// 是否缺运行时（系统与便携都没有）。
+function needsRuntime() {
+  const s = rtStatus.value;
+  if (!s) return false;
+  return (
+    (!s.system_node_ok && !s.bundled_node_ok) ||
+    (!s.system_pnpm_ok && !s.bundled_pnpm_ok)
+  );
+}
 
 /// 运行环境检查，返回是否通过（致命项全 ok）。
 async function run() {
   loading.value = true;
   try {
     checks.value = await invoke("check_env");
+    rtStatus.value = await invoke("runtime_status");
     checked.value = true;
     passed.value = checks.value.filter((c) => c.critical).every((c) => c.ok);
     return passed.value;
@@ -25,6 +39,20 @@ async function run() {
     return false;
   } finally {
     loading.value = false;
+  }
+}
+
+/// 自动下载缺失的便携运行时，完成后刷新检查。
+async function prepareRuntime() {
+  preparing.value = true;
+  try {
+    await invoke("setup_runtime");
+    emit("error", t("env.runtimeReady"));
+    await run();
+  } catch (e) {
+    emit("error", t("env.runtimeFailed") + ": " + e);
+  } finally {
+    preparing.value = false;
   }
 }
 
@@ -41,6 +69,12 @@ defineExpose({ run });
         <span class="badge-ok" v-if="checked && passed">{{ t("env.pass") }}</span>
         <span class="badge-err" v-else-if="checked">{{ t("env.fail") }}</span>
       </h2>
+      <button
+        v-if="checked && needsRuntime()"
+        class="btn small primary"
+        @click="prepareRuntime"
+        :disabled="preparing"
+      >{{ preparing ? t("env.preparing") : t("env.prepareRuntime") }}</button>
       <button class="btn small" @click="run" :disabled="loading">{{ t("env.recheck") }}</button>
     </div>
     <ul class="env-list" v-if="checks.length">

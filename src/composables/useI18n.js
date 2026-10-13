@@ -55,6 +55,10 @@ const MESSAGES = {
 
     "env.title": "环境检查",
     "env.recheck": "重新检查",
+    "env.prepareRuntime": "自动准备运行时",
+    "env.preparing": "正在准备运行时…",
+    "env.runtimeReady": "便携运行时已就绪",
+    "env.runtimeFailed": "准备运行时失败",
     "env.pass": "通过",
     "env.fail": "未通过",
     "env.checking": "正在检查环境...",
@@ -253,6 +257,10 @@ const MESSAGES = {
 
     "env.title": "Environment Check",
     "env.recheck": "Re-check",
+    "env.prepareRuntime": "Prepare runtime",
+    "env.preparing": "Preparing runtime…",
+    "env.runtimeReady": "Portable runtime ready",
+    "env.runtimeFailed": "Failed to prepare runtime",
     "env.pass": "Pass",
     "env.fail": "Failed",
     "env.checking": "Checking environment...",
@@ -451,6 +459,10 @@ const MESSAGES = {
 
     "env.title": "環境チェック",
     "env.recheck": "再チェック",
+    "env.prepareRuntime": "ランタイムを自動準備",
+    "env.preparing": "ランタイムを準備中…",
+    "env.runtimeReady": "ポータブルランタイムの準備が完了しました",
+    "env.runtimeFailed": "ランタイムの準備に失敗しました",
     "env.pass": "合格",
     "env.fail": "不合格",
     "env.checking": "環境を確認中...",
@@ -649,6 +661,10 @@ const MESSAGES = {
 
     "env.title": "環境檢查",
     "env.recheck": "重新檢查",
+    "env.prepareRuntime": "自動準備執行環境",
+    "env.preparing": "正在準備執行環境…",
+    "env.runtimeReady": "可攜執行環境已就緒",
+    "env.runtimeFailed": "準備執行環境失敗",
     "env.pass": "通過",
     "env.fail": "未通過",
     "env.checking": "正在檢查環境...",

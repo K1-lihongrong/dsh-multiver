@@ -109,6 +109,8 @@ pub fn run() {
             commands::open_dir,
             commands::open_url,
             commands::check_env,
+            commands::runtime_status,
+            commands::setup_runtime,
             commands::set_isolated,
             commands::set_use_official_home,
             commands::get_official_home,

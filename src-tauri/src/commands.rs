@@ -6,7 +6,7 @@
 use crate::config::{Config, Dirs};
 use crate::logging;
 use crate::window;
-use crate::{actions, cli, config, envcheck, launcher, maintenance, versions};
+use crate::{actions, cli, config, envcheck, launcher, maintenance, runtime, versions};
 use crate::{lock_procs, manager_dir, ProcMap, NEXT_GEN};
 use serde::Serialize;
 use std::path::PathBuf;
@@ -1029,6 +1029,44 @@ pub(crate) fn check_env(app: tauri::AppHandle) -> Vec<envcheck::CheckItem> {
     let dirs = Dirs::new(cfg.resolve_root(&mdir));
     let _ = dirs.ensure();
     envcheck::run_all(&dirs.root)
+}
+
+/// 运行时状态：系统/便携的 Node、pnpm 是否就绪（供前端判断是否显示"自动准备"按钮）。
+#[tauri::command]
+pub(crate) fn runtime_status(app: tauri::AppHandle) -> runtime::RuntimeStatus {
+    let mdir = manager_dir(&app);
+    let cfg = Config::load(&mdir);
+    let root = cfg.resolve_root(&mdir);
+    runtime::RuntimeStatus {
+        system_node_ok: runtime::system_node_ok(),
+        bundled_node_ok: runtime::bundled_node_ok(&root),
+        system_pnpm_ok: runtime::system_pnpm_ok(),
+        bundled_pnpm_ok: runtime::bundled_pnpm_ok(&root),
+    }
+}
+
+/// 准备便携运行时（下载缺失的 Node/pnpm）。同步命令，前端应显示等待态。
+/// 返回 (是否全部就绪, 结果消息)。
+#[tauri::command]
+pub(crate) fn setup_runtime(app: tauri::AppHandle) -> Result<String, String> {
+    let mdir = manager_dir(&app);
+    let cfg = Config::load(&mdir);
+    let root = cfg.resolve_root(&mdir);
+    let mut msgs: Vec<String> = Vec::new();
+
+    if !runtime::system_node_ok() && !runtime::bundled_node_ok(&root) {
+        runtime::install_bundled_node(&root).map_err(|e| format!("下载便携 Node 失败：{}", e))?;
+        msgs.push("已安装便携 Node".to_string());
+    }
+    if !runtime::system_pnpm_ok() && !runtime::bundled_pnpm_ok(&root) {
+        runtime::install_bundled_pnpm(&root).map_err(|e| format!("下载便携 pnpm 失败：{}", e))?;
+        msgs.push("已安装便携 pnpm".to_string());
+    }
+    if msgs.is_empty() {
+        Ok("运行时已就绪，无需下载".to_string())
+    } else {
+        Ok(msgs.join("；"))
+    }
 }
 
 /// 前端（WebView）JS 错误上报：写入 <根>/logs/frontend.log。
