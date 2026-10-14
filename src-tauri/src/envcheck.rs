@@ -425,15 +425,31 @@ pub fn check_registry(root: &Path) -> CheckItem {
     }
 }
 
-/// 执行全部环境检查
+/// 执行全部环境检查。
+///
+/// v0.2.11 性能优化：**并行执行**。
+/// 这些检查主要是**进程启动 + 网络等待**（node --version、pnpm view 等），
+/// 串行约 4.3s，并行后取最慢一项的耗时。结果顺序保持不变。
 pub fn run_all(root: &Path) -> Vec<CheckItem> {
-    vec![
-        check_node(root),
-        check_pnpm(root),
-        check_writable(root),
-        check_disk(root),
-        check_registry(root),
-    ]
+    std::thread::scope(|s| {
+        let h_node = s.spawn(|| check_node(root));
+        let h_pnpm = s.spawn(|| check_pnpm(root));
+        let h_writable = s.spawn(|| check_writable(root));
+        let h_disk = s.spawn(|| check_disk(root));
+        let h_registry = s.spawn(|| check_registry(root));
+        vec![
+            h_node.join().unwrap_or_else(|_| panic_item("Node.js")),
+            h_pnpm.join().unwrap_or_else(|_| panic_item("pnpm")),
+            h_writable.join().unwrap_or_else(|_| panic_item("根目录可写")),
+            h_disk.join().unwrap_or_else(|_| panic_item("磁盘空间")),
+            h_registry.join().unwrap_or_else(|_| panic_item("npm 源连通")),
+        ]
+    })
+}
+
+/// 子线程 panic 时的兜底检查项（正常不会发生）。
+fn panic_item(name: &str) -> CheckItem {
+    fail_item(name, "检查异常".to_string(), false, "", "", "")
 }
 
 #[cfg(test)]
