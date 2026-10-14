@@ -132,6 +132,8 @@ pub fn run() {
             commands::open_isolated_dir,
             commands::log_frontend,
             commands::check_update,
+            commands::perform_update,
+            commands::exit_app,
             commands::export_backup,
             commands::preview_import,
             commands::apply_import,

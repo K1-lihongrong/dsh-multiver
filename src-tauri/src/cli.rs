@@ -87,6 +87,8 @@ pub enum CliCommand {
     },
     /// 准备便携运行时（v0.2.9）：检测缺失的 Node/pnpm 并下载到数据根
     SetupRuntime,
+    /// 检查并执行自动更新（v0.2.10）：下载 → 校验 → 替换自身 → 重启
+    Update,
     Help,
     Version,
 }
@@ -120,6 +122,7 @@ fn is_cli_flag(a: &str) -> bool {
             | "--run"
             | "--import"
             | "--setup-runtime"
+            | "--update"
             | "--help"
             | "-h"
             | "--version"
@@ -222,6 +225,7 @@ pub fn parse(args: &[String]) -> Result<Option<CliCommand>, String> {
                 return Ok(Some(CliCommand::Import { file }));
             }
             "--setup-runtime" => return Ok(Some(CliCommand::SetupRuntime)),
+            "--update" => return Ok(Some(CliCommand::Update)),
             "--maintenance" => {
                 let kind = if args.iter().any(|x| x == "--cleanup") {
                     "cleanup"
@@ -397,6 +401,7 @@ pub fn run(cmd: CliCommand, dry_run: bool, json: bool) -> i32 {
         CliCommand::Run { version } => cmd_run(&version, json),
         CliCommand::Import { file } => cmd_import(&file, dry_run, json),
         CliCommand::SetupRuntime => cmd_setup_runtime(dry_run, json),
+        CliCommand::Update => cmd_update(dry_run, json),
     }
 }
 
@@ -1027,6 +1032,68 @@ fn cmd_setup_runtime(dry_run: bool, json: bool) -> i32 {
     if ok { 0 } else { 1 }
 }
 
+/// `--update`：检查并执行自动更新（v0.2.10）。
+///
+/// - `--dry-run`：只检查是否有新版，不下载
+/// - 正常：下载 → 校验 → 生成替换批处理 → 退出（由批处理替换并重启）
+fn cmd_update(dry_run: bool, json: bool) -> i32 {
+    let info = crate::updater::check();
+    if !info.has_update {
+        if json {
+            println!("{}", json_str(&serde_json::json!({
+                "has_update": false, "current": info.current, "latest": info.latest,
+            })));
+        } else {
+            println!("已是最新版本（{}）", info.current);
+        }
+        return 0;
+    }
+    let latest = info.latest.clone().unwrap_or_default();
+    if dry_run {
+        if json {
+            println!("{}", json_str(&serde_json::json!({
+                "has_update": true, "current": info.current, "latest": latest,
+                "download_url": info.download_url, "sha256": info.sha256, "dry_run": true,
+            })));
+        } else {
+            println!("发现新版本 {}（当前 {}）", latest, info.current);
+            println!("运行不带 --dry-run 的 --update 即可下载并更新");
+        }
+        return 0;
+    }
+    let Some(url) = info.download_url.clone() else {
+        out_result(json, false, "未找到下载地址（Release 资产缺失）");
+        return 1;
+    };
+    if !json {
+        eprintln!("正在下载 v{} …", latest);
+    }
+    let new_exe = match crate::updater::download_and_verify(&url, info.sha256.as_deref()) {
+        Ok(p) => p,
+        Err(e) => {
+            out_result(json, false, &format!("下载或校验失败：{}", e));
+            return 1;
+        }
+    };
+    let target = match std::env::current_exe() {
+        Ok(p) => p,
+        Err(e) => {
+            out_result(json, false, &format!("无法定位当前程序：{}", e));
+            return 1;
+        }
+    };
+    match crate::updater::spawn_replacer(&new_exe, &target) {
+        Ok(_) => {
+            out_result(json, true, &format!("更新就绪（v{}），管理器将退出以完成替换", latest));
+            0
+        }
+        Err(e) => {
+            out_result(json, false, &format!("启动替换程序失败：{}", e));
+            1
+        }
+    }
+}
+
 /// `--export [<文件>]`：导出配置 + 版本清单（JSON）。默认写到数据根目录。
 fn cmd_export(file: Option<&str>, json: bool) -> i32 {
     let ctx = load_ctx();
@@ -1360,6 +1427,7 @@ fn print_help() {
   dsh-multiver --run <版本>
   dsh-multiver --import <文件>
   dsh-multiver --setup-runtime [--dry-run]
+  dsh-multiver --update [--dry-run]
   dsh-multiver --maintenance [--cleanup | --prune]
   dsh-multiver --help
   dsh-multiver --version [--json]
@@ -1380,6 +1448,7 @@ fn print_help() {
   --run          启动 dsh web（新控制台 + 自动打开系统浏览器；关窗口即停止）
   --import       导入配置（从 --export 生成的备份文件）；--dry-run 只预览
   --setup-runtime 检测并下载缺失的便携运行时（Node）；--dry-run 只报告不下载
+  --update       检查并执行自动更新（下载 → 校验 → 替换自身 → 重启）；--dry-run 只检查
   --install      安装指定版本；--registry 可指定 npm 源（默认官方源）
   --uninstall    卸载指定版本
   --set-default  设为默认版本，并重生成终端 dsh 命令
@@ -1486,6 +1555,8 @@ mod tests {
     #[test]
     fn import_command() {
         assert!(matches!(parse(&args(&["--setup-runtime"])), Ok(Some(CliCommand::SetupRuntime))));
+        assert!(matches!(parse(&args(&["--update"])), Ok(Some(CliCommand::Update))));
+        assert!(matches!(parse(&args(&["--update", "--dry-run"])), Ok(Some(CliCommand::Update))));
         match parse(&args(&["--import", "b.json"])) {
             Ok(Some(CliCommand::Import { file })) => assert_eq!(file, "b.json"),
             other => panic!("unexpected: {:?}", other),

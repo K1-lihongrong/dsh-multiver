@@ -55,6 +55,25 @@ async function checkUpdate() {
   } catch (_) { /* 静默：更新检查不该打扰用户 */ }
 }
 
+// v0.2.10 一键更新：下载 + 校验 + 替换 + 重启
+const updating = ref(false);
+async function oneClickUpdate() {
+  if (!updateInfo.value || !updateInfo.value.download_url) return;
+  updating.value = true;
+  try {
+    await invoke("perform_update", {
+      url: updateInfo.value.download_url,
+      sha256: updateInfo.value.sha256 || null,
+    });
+    // 后端已启动替换程序；提示用户后退出，由批处理完成替换并重启
+    notify(t("update.restarting"));
+    setTimeout(() => invoke("exit_app").catch(() => {}), 1500);
+  } catch (e) {
+    updating.value = false;
+    notify(t("update.failed") + "：" + e);
+  }
+}
+
 async function openDir(which) {
   try { await invoke("open_dir", { which }); }
   catch (e) { notify("" + e); }
@@ -148,10 +167,13 @@ onUnmounted(() => {
         {{ t("update.available", { latest: updateInfo.latest, current: updateInfo.current }) }}
       </span>
       <span class="update-actions">
-        <button class="btn small primary" @click="openUrl(updateInfo.download_url || updateInfo.release_url)">
-          {{ updateInfo.download_url ? t("update.download") : t("update.viewRelease") }}
-        </button>
-        <button class="btn small" v-if="updateInfo.release_url && updateInfo.download_url" @click="openUrl(updateInfo.release_url)">
+        <button
+          v-if="updateInfo.download_url && !updating"
+          class="btn small primary"
+          @click="oneClickUpdate"
+        >{{ t("update.updateNow") }}</button>
+        <span v-if="updating" class="update-progress">{{ t("update.updating") }}</span>
+        <button class="btn small" v-if="updateInfo.release_url" @click="openUrl(updateInfo.release_url)">
           {{ t("update.viewRelease") }}
         </button>
         <button class="btn small" @click="updateDismissed = true">×</button>
@@ -254,6 +276,7 @@ onUnmounted(() => {
 }
 .update-text { color: var(--text); }
 .update-actions { display: flex; gap: 8px; align-items: center; }
+.update-progress { font-size: 12px; color: var(--text-3); }
 
 .runtime-banner {
   display: flex; align-items: center; justify-content: space-between; gap: 12px;

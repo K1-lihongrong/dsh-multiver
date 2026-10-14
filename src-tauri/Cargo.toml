@@ -32,6 +32,8 @@ zip = { version = "2", default-features = false, features = ["deflate-flate2", "
 # v0.2.9 运行时适配：解压便携 pnpm（npm tgz）
 flate2 = "1"
 tar = "0.4"
+# v0.2.10 自动更新：校验下载的 exe（SHA256）
+sha2 = "0.10"
 
 # 用于设置进程 AppUserModelID，稳定 Windows 任务栏图标分组（见 lib.rs）
 # 以及用 Job Object 绑定 dsh 子进程，根除孤儿进程（见 jobobj.rs）
