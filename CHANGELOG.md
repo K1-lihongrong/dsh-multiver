@@ -7,6 +7,16 @@
 
 ---
 
+## [0.2.12] - 2026-10-14
+
+### 清理（无功能变更）
+- **清 10 条 Clippy 警告**：collapsible_if / doc_lazy_continuation×5 / ptr_arg / derivable_impls / io_other_error / unnecessary_cast。
+- **全量 `cargo fmt`**：单独一个纯格式化提交，并在仓库加 `.git-blame-ignore-revs`。
+- **CI 加 lint 门禁**：`ci.yml` 增 `cargo clippy -- -D warnings` + `cargo fmt --check`。
+- **`useI18n.js` 拆分**：958 → 91 行；4 语言词条拆到 `src/composables/i18n/*.js`（词条逐条核对一致，4 语言渲染验证通过）。
+
+---
+
 ## [0.2.11] - 2026-10-14
 
 ### 优化
