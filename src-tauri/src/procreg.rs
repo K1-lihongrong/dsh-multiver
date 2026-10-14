@@ -321,7 +321,7 @@ mod tests {
             pgid: fake_pgid,
             version: "fake".into(),
             at: 0,
-            owner_pid: 2147483000,          // 不存在的 owner → owner_alive=false
+            owner_pid: 2147483000, // 不存在的 owner → owner_alive=false
             owner_ident: "nonexistent".into(),
             dsh_ident: "definitely-not-my-ident".into(), // 与真实身份不符
         }];

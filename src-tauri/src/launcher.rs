@@ -64,7 +64,9 @@ pub fn spawn_web_hidden(
     // spawn 前：平台相关配置（Unix 下设为新进程组；Windows 无操作）
     crate::jobobj::configure_command(&mut cmd);
 
-    let mut child = cmd.spawn().map_err(|e| format!("启动 dsh web 失败: {}", e))?;
+    let mut child = cmd
+        .spawn()
+        .map_err(|e| format!("启动 dsh web 失败: {}", e))?;
 
     // spawn 后：加入进程守卫。
     // - Windows：加入 Job（KILL_ON_JOB_CLOSE），管理器退出即由 OS 杀光组内进程
@@ -102,8 +104,13 @@ pub fn spawn_web_hidden(
         let _ = writeln!(f, "===== DSH {} session @ {} =====", version_name, stamp);
         let _ = writeln!(f, "cmd: dsh web --port 0 --no-open");
         let _ = writeln!(f, "env DSH_HOME={}", home_dir.to_string_lossy());
-        let _ = writeln!(f, "env store={} cache={} state={}",
-            store_dir.to_string_lossy(), cache_dir.to_string_lossy(), state_dir.to_string_lossy());
+        let _ = writeln!(
+            f,
+            "env store={} cache={} state={}",
+            store_dir.to_string_lossy(),
+            cache_dir.to_string_lossy(),
+            state_dir.to_string_lossy()
+        );
         let _ = writeln!(f, "pid: {}", child.id());
         std::sync::Arc::new(std::sync::Mutex::new(f))
     });
@@ -180,7 +187,8 @@ pub fn spawn_web_hidden(
                     if detail.is_empty() {
                         return Err(format!(
                             "dsh web 进程提前退出（状态: {}）。\n请查看日志目录：\n{}",
-                            status, log_dir.to_string_lossy()
+                            status,
+                            log_dir.to_string_lossy()
                         ));
                     }
                     return Err(format!(
@@ -203,7 +211,8 @@ pub fn spawn_web_hidden(
                 }
                 return Err(format!(
                     "dsh web 启动失败。dsh 输出：\n{}\n\n完整日志目录：\n{}",
-                    detail, log_dir.to_string_lossy()
+                    detail,
+                    log_dir.to_string_lossy()
                 ));
             }
         }
@@ -402,9 +411,8 @@ pub fn create_desktop_shortcut(exe_path: &Path, version: &str) -> Result<String,
 /// 无桌面环境时返回清晰错误（见 desktop_dir）。已在 WSL 上验证（GAP-005）。
 #[cfg(unix)]
 pub fn create_desktop_shortcut(exe_path: &Path, version: &str) -> Result<String, String> {
-    let desktop = desktop_dir().ok_or_else(|| {
-        "未找到桌面目录（当前环境可能没有桌面，如 WSL/服务器/容器）".to_string()
-    })?;
+    let desktop = desktop_dir()
+        .ok_or_else(|| "未找到桌面目录（当前环境可能没有桌面，如 WSL/服务器/容器）".to_string())?;
     let file = desktop.join(format!("DSH {}.desktop", version));
     let work = exe_path.parent().unwrap_or(Path::new("."));
     let content = format!(
@@ -434,7 +442,12 @@ pub fn create_desktop_shortcut(exe_path: &Path, version: &str) -> Result<String,
 }
 
 #[cfg(windows)]
-fn build_shortcut_script(lnk: &Path, exe_path: &Path, version: &str, icon: Option<&Path>) -> String {
+fn build_shortcut_script(
+    lnk: &Path,
+    exe_path: &Path,
+    version: &str,
+    icon: Option<&Path>,
+) -> String {
     let work = exe_path.parent().unwrap_or(Path::new("."));
     // 快捷方式的 AUMID 用「dsh 窗口」的（而非管理器的）：
     //   - 快捷方式的目标虽同为管理器 exe，但语义是"启动某个 dsh 版本"
@@ -444,7 +457,10 @@ fn build_shortcut_script(lnk: &Path, exe_path: &Path, version: &str, icon: Optio
     let aumid = crate::window::DSH_WINDOW_AUMID;
     // IconLocation = "<ico 路径>,0"（第 0 个图标）；无 ico 则省略，退回 exe 内嵌图标
     let icon_line = match icon {
-        Some(p) => format!("$lnk.IconLocation = '{}';", escape_ps(&format!("{},0", p.to_string_lossy()))),
+        Some(p) => format!(
+            "$lnk.IconLocation = '{}';",
+            escape_ps(&format!("{},0", p.to_string_lossy()))
+        ),
         None => String::new(),
     };
     // 注意：WScript.Shell 的快捷方式对象**没有** AppUserModelID 属性
@@ -676,7 +692,10 @@ pub fn spawn_web_console(
     crate::jobobj::configure_command(&mut cmd);
 
     match cmd.spawn() {
-        Ok(_) => (true, format!("已用端口 {} 启动 dsh web，稍候会自动打开浏览器", port)),
+        Ok(_) => (
+            true,
+            format!("已用端口 {} 启动 dsh web，稍候会自动打开浏览器", port),
+        ),
         Err(e) => (false, format!("启动失败: {}", e)),
     }
 }

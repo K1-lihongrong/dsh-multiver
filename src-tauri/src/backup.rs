@@ -32,7 +32,11 @@ pub struct VersionEntry {
 
 /// 构造备份清单（不写盘）。
 pub fn build_manifest(cfg: &Config, versions_dir: &Path) -> BackupManifest {
-    let list = versions::list(versions_dir, cfg.default_version.as_deref(), &cfg.isolated_versions);
+    let list = versions::list(
+        versions_dir,
+        cfg.default_version.as_deref(),
+        &cfg.isolated_versions,
+    );
     let versions = list
         .into_iter()
         .map(|v| VersionEntry {
@@ -75,10 +79,14 @@ pub struct ImportPreview {
 }
 
 /// 读取并校验备份文件，生成导入预览（不应用）。
-pub fn preview_import(file: &Path, current: &Config, versions_dir: &Path) -> Result<ImportPreview, String> {
+pub fn preview_import(
+    file: &Path,
+    current: &Config,
+    versions_dir: &Path,
+) -> Result<ImportPreview, String> {
     let text = std::fs::read_to_string(file).map_err(|e| format!("读取文件失败：{}", e))?;
-    let manifest: BackupManifest =
-        serde_json::from_str(&text).map_err(|e| format!("解析失败（不是有效的备份文件）：{}", e))?;
+    let manifest: BackupManifest = serde_json::from_str(&text)
+        .map_err(|e| format!("解析失败（不是有效的备份文件）：{}", e))?;
 
     let b = &manifest.config;
     let mut changes = Vec::new();
@@ -165,7 +173,10 @@ mod tests {
         let d = std::env::temp_dir().join(format!(
             "dsh-backup-{}-{}",
             tag,
-            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
         ));
         let _ = std::fs::remove_dir_all(&d);
         std::fs::create_dir_all(&d).unwrap();
@@ -178,8 +189,10 @@ mod tests {
         let versions_dir = base.join("versions");
         // versions::list 要求目录内含 node_modules 才算有效版本
         std::fs::create_dir_all(versions_dir.join("0.1.7").join("node_modules")).unwrap();
-        let mut cfg = Config::default();
-        cfg.default_version = Some("0.1.7".to_string());
+        let cfg = Config {
+            default_version: Some("0.1.7".to_string()),
+            ..Default::default()
+        };
         let m = build_manifest(&cfg, &versions_dir);
         assert_eq!(m.manager_version, crate::cli::VERSION);
         assert_eq!(m.versions.len(), 1);
@@ -195,15 +208,19 @@ mod tests {
         std::fs::create_dir_all(versions_dir.join("0.2.0").join("node_modules")).unwrap();
 
         // 造一个备份文件：默认版本 0.1.7（本机未装）、复用官方=true
-        let mut src = Config::default();
-        src.default_version = Some("0.1.7".to_string());
-        src.use_official_dsh_home = true;
+        let src = Config {
+            default_version: Some("0.1.7".to_string()),
+            use_official_dsh_home: true,
+            ..Default::default()
+        };
         let file = base.join("backup.json");
         export_to_file(&src, &versions_dir, &file).unwrap();
 
         // 当前配置：默认版本 0.2.0、复用官方=false
-        let mut cur = Config::default();
-        cur.default_version = Some("0.2.0".to_string());
+        let mut cur = Config {
+            default_version: Some("0.2.0".to_string()),
+            ..Default::default()
+        };
 
         let preview = preview_import(&file, &cur, &versions_dir).unwrap();
         assert!(preview.changes.iter().any(|c| c.contains("默认版本")));

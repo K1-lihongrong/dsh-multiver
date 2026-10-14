@@ -116,7 +116,9 @@ pub fn run_store_prune(store: &Path, cache: &Path, state: &Path) -> Result<(), S
 
     // spawn 前：平台配置（Unix 新进程组；Windows 无操作）
     crate::jobobj::configure_command(&mut cmd);
-    let mut child = cmd.spawn().map_err(|e| format!("启动 store prune 失败: {}", e))?;
+    let mut child = cmd
+        .spawn()
+        .map_err(|e| format!("启动 store prune 失败: {}", e))?;
     // spawn 后：绑定进程守卫（Windows Job / Unix 进程组），管理器退出即杀，避免孤儿
     let _job = crate::jobobj::attach(&child);
     let status = child.wait();
@@ -144,8 +146,8 @@ mod tests {
         let versions = base.join("versions");
         let webview = base.join("webview");
         std::fs::create_dir_all(versions.join("0.1.7")).unwrap();
-        std::fs::create_dir_all(webview.join("0.1.7")).unwrap();       // 存活
-        std::fs::create_dir_all(webview.join("0.1.6")).unwrap();       // 孤儿
+        std::fs::create_dir_all(webview.join("0.1.7")).unwrap(); // 存活
+        std::fs::create_dir_all(webview.join("0.1.6")).unwrap(); // 孤儿
         let orphans = list_orphan_webviews(&versions, &webview);
         assert_eq!(orphans, vec!["0.1.6".to_string()]);
         // 只列不删
@@ -182,5 +184,4 @@ mod tests {
         assert!(removed.is_empty());
         let _ = std::fs::remove_dir_all(&base);
     }
-
 }

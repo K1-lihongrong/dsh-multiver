@@ -1,6 +1,6 @@
+use serde::Serialize;
 use std::path::Path;
 use std::process::Command;
-use serde::Serialize;
 
 #[cfg(windows)]
 fn cmd_command(program: &str) -> Command {
@@ -120,7 +120,11 @@ fn run_version(program: &str) -> Option<String> {
             let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
             if s.is_empty() {
                 let e = String::from_utf8_lossy(&out.stderr).trim().to_string();
-                if e.is_empty() { None } else { Some(e.lines().next().unwrap_or("").to_string()) }
+                if e.is_empty() {
+                    None
+                } else {
+                    Some(e.lines().next().unwrap_or("").to_string())
+                }
             } else {
                 Some(s.lines().next().unwrap_or("").to_string())
             }
@@ -132,7 +136,10 @@ fn run_version(program: &str) -> Option<String> {
 /// 解析版本号为 (major, minor, patch)，如 "v22.19.0" -> (22, 19, 0)。
 /// 缺失的段按 0 处理（"22" -> (22, 0, 0)）。
 fn parse_semver(s: &str) -> Option<(u32, u32, u32)> {
-    let cleaned: String = s.chars().filter(|c| c.is_ascii_digit() || *c == '.').collect();
+    let cleaned: String = s
+        .chars()
+        .filter(|c| c.is_ascii_digit() || *c == '.')
+        .collect();
     let mut it = cleaned.split('.');
     let major = it.next()?.parse::<u32>().ok()?;
     let minor = it.next().and_then(|x| x.parse().ok()).unwrap_or(0);
@@ -221,12 +228,10 @@ pub fn check_node(root: &Path) -> CheckItem {
 /// 系统 Node 不可用时的处理：便携 Node 就绪 → 通过；否则失败。
 fn node_fallback_or_fail(root: &Path, detail: String) -> CheckItem {
     if crate::runtime::bundled_node_ok(root) {
-        return ok_item(
-            "Node.js",
-            format!("{}（将使用便携 Node）", detail),
-            true,
-        )
-        .i18n_detail("env.node.detail_bundled", serde_json::json!({ "v": detail }));
+        return ok_item("Node.js", format!("{}（将使用便携 Node）", detail), true).i18n_detail(
+            "env.node.detail_bundled",
+            serde_json::json!({ "v": detail }),
+        );
     }
     fail_item(
         "Node.js",
@@ -292,12 +297,11 @@ pub fn check_writable(root: &Path) -> CheckItem {
 /// 返回可用空间（人类可读）。查不到时降级为"未知"（非致命，不误报失败）。
 pub fn check_disk(root: &Path) -> CheckItem {
     match free_space(root) {
-        Some(bytes) => ok_item(
-            "磁盘空间",
-            format!("可用 {}", human_bytes(bytes)),
-            false,
-        )
-        .i18n_detail("env.disk.detail_ok", serde_json::json!({ "size": human_bytes(bytes) })),
+        Some(bytes) => ok_item("磁盘空间", format!("可用 {}", human_bytes(bytes)), false)
+            .i18n_detail(
+                "env.disk.detail_ok",
+                serde_json::json!({ "size": human_bytes(bytes) }),
+            ),
         None => ok_item(
             "磁盘空间",
             format!("无法获取（目标 {}）", root.to_string_lossy()),
@@ -328,7 +332,11 @@ fn free_space(path: &Path) -> Option<u64> {
             &mut free as *mut u64,
         )
     };
-    if ok != 0 { Some(free) } else { None }
+    if ok != 0 {
+        Some(free)
+    } else {
+        None
+    }
 }
 
 #[cfg(unix)]
@@ -372,11 +380,8 @@ pub fn check_registry(root: &Path) -> CheckItem {
     let mut cmd = if system_pnpm_ok() {
         cmd_command("pnpm")
     } else {
-        let bundled = crate::runtime::pnpm_dir(root).join(if cfg!(windows) {
-            "pnpm.exe"
-        } else {
-            "pnpm"
-        });
+        let bundled =
+            crate::runtime::pnpm_dir(root).join(if cfg!(windows) { "pnpm.exe" } else { "pnpm" });
         if bundled.is_file() {
             Command::new(bundled)
         } else {
@@ -398,7 +403,10 @@ pub fn check_registry(root: &Path) -> CheckItem {
             if ver.is_empty() {
                 item.i18n_detail("env.registry.detail_ok", serde_json::Value::Null)
             } else {
-                item.i18n_detail("env.registry.detail_latest", serde_json::json!({ "v": ver }))
+                item.i18n_detail(
+                    "env.registry.detail_latest",
+                    serde_json::json!({ "v": ver }),
+                )
             }
         }
         Ok(out) => {
@@ -421,7 +429,10 @@ pub fn check_registry(root: &Path) -> CheckItem {
             "env.registry.hint",
             "",
         )
-        .i18n_detail("env.registry.detail_err", serde_json::json!({ "err": e.to_string() })),
+        .i18n_detail(
+            "env.registry.detail_err",
+            serde_json::json!({ "err": e.to_string() }),
+        ),
     }
 }
 
@@ -440,9 +451,13 @@ pub fn run_all(root: &Path) -> Vec<CheckItem> {
         vec![
             h_node.join().unwrap_or_else(|_| panic_item("Node.js")),
             h_pnpm.join().unwrap_or_else(|_| panic_item("pnpm")),
-            h_writable.join().unwrap_or_else(|_| panic_item("根目录可写")),
+            h_writable
+                .join()
+                .unwrap_or_else(|_| panic_item("根目录可写")),
             h_disk.join().unwrap_or_else(|_| panic_item("磁盘空间")),
-            h_registry.join().unwrap_or_else(|_| panic_item("npm 源连通")),
+            h_registry
+                .join()
+                .unwrap_or_else(|_| panic_item("npm 源连通")),
         ]
     })
 }
@@ -476,7 +491,7 @@ mod tests {
     fn node_version_requires_22_19_or_24() {
         // 22.x 需次版本 >= 19
         assert!(!node_version_ok((22, 0, 0)));
-        assert!(!node_version_ok((22, 16, 0)));   // ← 本次修复的关键用例
+        assert!(!node_version_ok((22, 16, 0))); // ← 本次修复的关键用例
         assert!(!node_version_ok((22, 18, 0)));
         assert!(node_version_ok((22, 19, 0)));
         assert!(node_version_ok((22, 20, 1)));

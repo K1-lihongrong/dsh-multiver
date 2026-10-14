@@ -81,6 +81,7 @@ pub struct RuntimeStatus {
 /// 规则（与规划一致）：
 /// 1. 系统 Node 满足 → 用系统的（不注入便携 node；便携存在仍保留作兜底）
 /// 2. 系统 Node 不满足 → 注入便携 Node 目录（若有）
+///
 /// pnpm 同理。
 pub fn runtime_path_dirs(root: &Path) -> Vec<PathBuf> {
     let mut dirs = Vec::new();
@@ -181,7 +182,11 @@ fn download_to(
     let mut file = std::fs::File::create(dest).map_err(|e| e.to_string())?;
     let mut buf = [0u8; 64 * 1024];
     let mut done: u64 = 0;
-    on_progress(RuntimeProgress { stage: stage.to_string(), done, total });
+    on_progress(RuntimeProgress {
+        stage: stage.to_string(),
+        done,
+        total,
+    });
     loop {
         let n = resp.read(&mut buf).map_err(|e| e.to_string())?;
         if n == 0 {
@@ -189,7 +194,11 @@ fn download_to(
         }
         file.write_all(&buf[..n]).map_err(|e| e.to_string())?;
         done += n as u64;
-        on_progress(RuntimeProgress { stage: stage.to_string(), done, total });
+        on_progress(RuntimeProgress {
+            stage: stage.to_string(),
+            done,
+            total,
+        });
     }
     Ok(())
 }
@@ -235,7 +244,11 @@ pub fn install_bundled_node(
     on_progress: &(dyn Fn(RuntimeProgress) + Send + Sync),
 ) -> Result<PathBuf, String> {
     let zip = download_node_zip(on_progress)?;
-    on_progress(RuntimeProgress { stage: "正在解压 Node".to_string(), done: 0, total: None });
+    on_progress(RuntimeProgress {
+        stage: "正在解压 Node".to_string(),
+        done: 0,
+        total: None,
+    });
     let result = extract_node_zip(&zip, root);
     let _ = std::fs::remove_file(&zip);
     result?;
@@ -312,7 +325,11 @@ pub fn install_bundled_pnpm(
     on_progress: &(dyn Fn(RuntimeProgress) + Send + Sync),
 ) -> Result<PathBuf, String> {
     let tgz = download_pnpm_tgz(on_progress)?;
-    on_progress(RuntimeProgress { stage: "正在解压 pnpm".to_string(), done: 0, total: None });
+    on_progress(RuntimeProgress {
+        stage: "正在解压 pnpm".to_string(),
+        done: 0,
+        total: None,
+    });
     let result = extract_pnpm_tgz(&tgz, root);
     let _ = std::fs::remove_file(&tgz);
     result?;
@@ -345,15 +362,8 @@ pub fn webview2_installed() -> bool {
     for sub in &subkeys {
         let wide: Vec<u16> = sub.encode_utf16().chain(std::iter::once(0)).collect();
         let mut hkey: HKEY = std::ptr::null_mut();
-        let rc = unsafe {
-            RegOpenKeyExW(
-                HKEY_LOCAL_MACHINE,
-                wide.as_ptr(),
-                0,
-                KEY_READ,
-                &mut hkey,
-            )
-        };
+        let rc =
+            unsafe { RegOpenKeyExW(HKEY_LOCAL_MACHINE, wide.as_ptr(), 0, KEY_READ, &mut hkey) };
         if rc != 0 {
             continue;
         }
@@ -393,7 +403,7 @@ pub fn webview2_installed() -> bool {
 #[cfg(windows)]
 pub fn prompt_webview2_missing() -> bool {
     use windows_sys::Win32::UI::WindowsAndMessaging::{
-        MessageBoxW, IDYES, IDNO, MB_ICONWARNING, MB_YESNO,
+        MessageBoxW, IDNO, IDYES, MB_ICONWARNING, MB_YESNO,
     };
     let text = "本工具需要 Microsoft Edge WebView2 运行时才能显示界面，但系统未安装。\n\n                选择「是」自动下载并安装（约 2MB，需联网）；\n                选择「否」打开微软官方下载页手动安装。\n\n                安装完成后请重新打开本工具。";
     let caption = "DSH 版本管理器 - 缺少 WebView2 运行时";
@@ -414,7 +424,12 @@ pub fn prompt_webview2_missing() -> bool {
             let msg = format!("自动安装失败：{}\n\n将打开微软官方下载页。", e);
             let wm: Vec<u16> = msg.encode_utf16().chain(std::iter::once(0)).collect();
             unsafe {
-                MessageBoxW(std::ptr::null_mut(), wm.as_ptr(), wcap.as_ptr(), MB_ICONWARNING);
+                MessageBoxW(
+                    std::ptr::null_mut(),
+                    wm.as_ptr(),
+                    wcap.as_ptr(),
+                    MB_ICONWARNING,
+                );
             }
             open_webview2_download_page();
         }
@@ -433,8 +448,7 @@ pub fn prompt_webview2_missing() -> bool {
 /// 下载并拉起 WebView2 Evergreen Bootstrapper（Windows）。
 #[cfg(windows)]
 fn install_webview2_bootstrapper() -> Result<(), String> {
-    const URL: &str =
-        "https://go.microsoft.com/fwlink/p/?LinkId=2124703";
+    const URL: &str = "https://go.microsoft.com/fwlink/p/?LinkId=2124703";
     let tmp = std::env::temp_dir().join("MicrosoftEdgeWebview2Setup.exe");
     download_to(URL, &tmp, "正在下载 WebView2 安装程序", &|_| {})?;
     // 拉起安装程序（等待用户完成）
@@ -490,8 +504,12 @@ mod tests {
     #[test]
     fn paths_under_root() {
         let root = PathBuf::from("C:\\data");
-        assert!(node_dir(&root).ends_with("tools\\node") || node_dir(&root).ends_with("tools/node"));
-        assert!(pnpm_dir(&root).ends_with("tools\\pnpm") || pnpm_dir(&root).ends_with("tools/pnpm"));
+        assert!(
+            node_dir(&root).ends_with("tools\\node") || node_dir(&root).ends_with("tools/node")
+        );
+        assert!(
+            pnpm_dir(&root).ends_with("tools\\pnpm") || pnpm_dir(&root).ends_with("tools/pnpm")
+        );
     }
 
     #[test]

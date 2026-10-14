@@ -105,8 +105,6 @@ pub fn prune_old(dir: &Path, prefix: &str, suffix: &str, keep: usize) {
     }
 }
 
-
-
 // ───────── 项目级日志写入便捷函数（从 lib.rs 抽出，GAP-003）─────────
 
 /// 精简启动模式的错误 → <root>/logs/launch-error.log
@@ -162,7 +160,13 @@ mod tests {
             .filter_map(|e| e.ok())
             .map(|e| e.file_name().to_string_lossy().to_string())
             .collect();
-        assert_eq!(remaining.iter().filter(|n| n.starts_with("session-")).count(), 2);
+        assert_eq!(
+            remaining
+                .iter()
+                .filter(|n| n.starts_with("session-"))
+                .count(),
+            2
+        );
         assert!(remaining.contains(&"other.log".to_string()));
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -180,4 +184,3 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
-

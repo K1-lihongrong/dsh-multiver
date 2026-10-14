@@ -9,7 +9,7 @@ use crate::window;
 use crate::{actions, cli, config, envcheck, launcher, maintenance, runtime, versions};
 use crate::{lock_procs, manager_dir, ProcMap, NEXT_GEN};
 use serde::Serialize;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// 「路径设置」里额外展示的目录项（默认收起，点"展开"才显示）。
 #[derive(Serialize)]
@@ -100,7 +100,11 @@ pub(crate) fn list_installed(app: tauri::AppHandle) -> Vec<versions::VersionInfo
     let mdir = manager_dir(&app);
     let cfg = Config::load(&mdir);
     let dirs = Dirs::new(cfg.resolve_root(&mdir));
-    versions::list(&dirs.versions, cfg.default_version.as_deref(), &cfg.isolated_versions)
+    versions::list(
+        &dirs.versions,
+        cfg.default_version.as_deref(),
+        &cfg.isolated_versions,
+    )
 }
 
 #[tauri::command]
@@ -110,7 +114,11 @@ pub(crate) fn list_remote(app: tauri::AppHandle) -> Result<Vec<String>, String> 
     let dirs = Dirs::new(cfg.resolve_root(&mdir));
     let _ = dirs.ensure();
     let (ok, list, err) = actions::list_remote(&dirs.store, &dirs.cache, &dirs.state);
-    if ok { Ok(list) } else { Err(err) }
+    if ok {
+        Ok(list)
+    } else {
+        Err(err)
+    }
 }
 
 #[tauri::command]
@@ -138,18 +146,30 @@ pub(crate) async fn install_version(
                     if let Some(dir) = mdir.parent() {
                         use std::io::Write;
                         if let Ok(mut f) = std::fs::OpenOptions::new()
-                            .create(true).append(true)
+                            .create(true)
+                            .append(true)
                             .open(dir.join("progress-debug.log"))
                         {
-                            let _ = writeln!(f, "step={} total={} stage={:?} detail={:?} frac={:.2}",
-                                ev.step, ev.total, ev.stage, ev.detail, ev.fraction);
+                            let _ = writeln!(
+                                f,
+                                "step={} total={} stage={:?} detail={:?} frac={:.2}",
+                                ev.step, ev.total, ev.stage, ev.detail, ev.fraction
+                            );
                         }
                     }
                 }
             }
             let _ = app2.emit("install-progress", ev.clone());
         };
-        versions::install(&dirs.versions, &dirs.store, &dirs.cache, &dirs.state, &version, &on_progress, registry.as_deref())
+        versions::install(
+            &dirs.versions,
+            &dirs.store,
+            &dirs.cache,
+            &dirs.state,
+            &version,
+            &on_progress,
+            registry.as_deref(),
+        )
     })
     .await
     .map_err(|e| format!("安装任务失败: {}", e))?;
@@ -157,11 +177,19 @@ pub(crate) async fn install_version(
     let (ok, msg) = result;
     // 维护 broken_versions：失败且分类为「私有包/不完整」时记入；成功时移除。
     let mut c = cfg.clone();
-    let kind = if ok { "" } else { versions::classify_error(&msg) };
+    let kind = if ok {
+        ""
+    } else {
+        versions::classify_error(&msg)
+    };
     if c.apply_install_result(&version_for_record, ok, kind) {
         let _ = c.save(&mdir);
     }
-    if ok { Ok(msg) } else { Err(msg) }
+    if ok {
+        Ok(msg)
+    } else {
+        Err(msg)
+    }
 }
 
 /// 清除「已知安装失败」标记（用户手动重试前可调用）。
@@ -177,7 +205,10 @@ pub(crate) fn clear_broken(app: tauri::AppHandle, version: Option<String>) -> Re
 }
 
 #[tauri::command]
-pub(crate) async fn uninstall_version(app: tauri::AppHandle, version: String) -> Result<String, String> {
+pub(crate) async fn uninstall_version(
+    app: tauri::AppHandle,
+    version: String,
+) -> Result<String, String> {
     let mdir = manager_dir(&app);
     let cfg = Config::load(&mdir);
     let dirs = Dirs::new(cfg.resolve_root(&mdir));
@@ -212,7 +243,11 @@ pub(crate) async fn uninstall_version(app: tauri::AppHandle, version: String) ->
     })
     .await
     .map_err(|e| format!("卸载任务失败: {}", e))?;
-    if ok { Ok(msg) } else { Err(msg) }
+    if ok {
+        Ok(msg)
+    } else {
+        Err(msg)
+    }
 }
 
 /// set_default 检测到"非管理器生成的同名 dsh 命令"时，返回此前缀的错误，
@@ -220,7 +255,11 @@ pub(crate) async fn uninstall_version(app: tauri::AppHandle, version: String) ->
 pub(crate) const CONFLICT_PREFIX: &str = "DSH_CONFLICT:";
 
 #[tauri::command]
-pub(crate) fn set_default(app: tauri::AppHandle, version: Option<String>, force: Option<bool>) -> Result<String, String> {
+pub(crate) fn set_default(
+    app: tauri::AppHandle,
+    version: Option<String>,
+    force: Option<bool>,
+) -> Result<String, String> {
     let mdir = manager_dir(&app);
     let mut cfg = Config::load(&mdir);
     let dirs = Dirs::new(cfg.resolve_root(&mdir));
@@ -235,11 +274,7 @@ pub(crate) fn set_default(app: tauri::AppHandle, version: Option<String>, force:
     if version.is_some() && force != Some(true) {
         let target = path_bin_dir(&mdir);
         if let Some(p) = actions::existing_foreign_dsh(&target) {
-            return Err(format!(
-                "{}{}",
-                CONFLICT_PREFIX,
-                p.to_string_lossy()
-            ));
+            return Err(format!("{}{}", CONFLICT_PREFIX, p.to_string_lossy()));
         }
     }
 
@@ -258,8 +293,9 @@ pub(crate) fn set_default(app: tauri::AppHandle, version: Option<String>, force:
 ///
 /// - 有默认版本：写入转发脚本（Windows 为 dsh.cmd，Unix 为 dsh；含 DSH_HOME）
 /// - 无默认版本：删除转发脚本
+///
 /// 供 set_default / set_root / set_isolated / uninstall_version 统一调用。
-pub(crate) fn regenerate_forward_script(mdir: &PathBuf, cfg: &Config) {
+pub(crate) fn regenerate_forward_script(mdir: &Path, cfg: &Config) {
     let target = path_bin_dir(mdir);
     match &cfg.default_version {
         Some(v) => {
@@ -268,7 +304,8 @@ pub(crate) fn regenerate_forward_script(mdir: &PathBuf, cfg: &Config) {
             // DSH_HOME 由 resolve_home 统一决定（隔离 / 复用官方 / 管理器共享），
             // 与 GUI 启动路径使用同一逻辑，保证"GUI 能用的配置，终端也能用"。
             let home = resolve_home(cfg, &dirs, v);
-            let script = actions::build_forward_script(v, &root.to_string_lossy(), &home.to_string_lossy());
+            let script =
+                actions::build_forward_script(v, &root.to_string_lossy(), &home.to_string_lossy());
             let _ = actions::write_forward_script(&target, &script);
         }
         None => {
@@ -291,24 +328,25 @@ pub(crate) fn regenerate_forward_script(mdir: &PathBuf, cfg: &Config) {
 /// - Windows：优先 `%APPDATA%\npm`（npm 全局 bin），否则管理器目录
 /// - Unix：优先 `~/.local/bin`（XDG，多数发行版已在 PATH），其次 `~/.local/share/pnpm`、
 ///   `~/.npm-global/bin`；都不存在则创建 `~/.local/bin`。最后回退管理器目录。
+///
 /// 转发脚本所在目录（供 CLI 检测冲突复用）。
-pub(crate) fn forward_script_dir(manager: &PathBuf) -> PathBuf {
+pub(crate) fn forward_script_dir(manager: &Path) -> PathBuf {
     path_bin_dir(manager)
 }
 
 #[cfg(windows)]
-fn path_bin_dir(manager: &PathBuf) -> PathBuf {
+fn path_bin_dir(manager: &Path) -> PathBuf {
     if let Ok(appdata) = std::env::var("APPDATA") {
         let npm_bin = PathBuf::from(appdata).join("npm");
         if npm_bin.exists() {
             return npm_bin;
         }
     }
-    manager.clone()
+    manager.to_path_buf()
 }
 
 #[cfg(unix)]
-fn path_bin_dir(manager: &PathBuf) -> PathBuf {
+fn path_bin_dir(manager: &Path) -> PathBuf {
     let home = std::env::var("HOME").unwrap_or_default();
     if !home.is_empty() {
         let candidates = [
@@ -328,12 +366,12 @@ fn path_bin_dir(manager: &PathBuf) -> PathBuf {
             return fallback;
         }
     }
-    manager.clone()
+    manager.to_path_buf()
 }
 
 #[cfg(not(any(windows, unix)))]
-fn path_bin_dir(manager: &PathBuf) -> PathBuf {
-    manager.clone()
+fn path_bin_dir(manager: &Path) -> PathBuf {
+    manager.to_path_buf()
 }
 
 /// 官方 dsh 默认配置目录（~/.dsh 或 %USERPROFILE% 下的 .dsh）。
@@ -463,7 +501,11 @@ pub(crate) async fn launch_window(
         Err(e) => {
             let mut c = child;
             launcher::kill_tree(&mut c);
-            logging::log_app_error(&dirs.root, "launch_window", &format!("{} 创建窗口失败: {}", version, e));
+            logging::log_app_error(
+                &dirs.root,
+                "launch_window",
+                &format!("{} 创建窗口失败: {}", version, e),
+            );
             return Err(format!("创建窗口失败: {}", e));
         }
     };
@@ -484,13 +526,21 @@ pub(crate) async fn launch_window(
     #[cfg(windows)]
     {
         if let Err(e) = window::set_window_app_user_model_id(&window, window::DSH_WINDOW_AUMID) {
-            logging::log_app_error(&dirs.root, "launch_window", &format!("{} 设窗口 AUMID 失败: {}", version, e));
+            logging::log_app_error(
+                &dirs.root,
+                "launch_window",
+                &format!("{} 设窗口 AUMID 失败: {}", version, e),
+            );
         }
     }
 
     // 设好 AUMID / 图标后再显示
     if let Err(e) = window.show() {
-        logging::log_app_error(&dirs.root, "launch_window", &format!("{} 显示窗口失败: {}", version, e));
+        logging::log_app_error(
+            &dirs.root,
+            "launch_window",
+            &format!("{} 显示窗口失败: {}", version, e),
+        );
     }
 
     lock_procs(&procs).insert(version.clone(), (label.clone(), generation, child, job));
@@ -555,17 +605,31 @@ pub(crate) async fn launch_window(
             }
             let detail = launcher::latest_session_errors(&logs_dir, &version3, 6);
             let msg = if detail.is_empty() {
-                format!("版本 {} 的 dsh 启动后立即退出。请查看日志目录：\n{}", version3, logs_dir.to_string_lossy())
+                format!(
+                    "版本 {} 的 dsh 启动后立即退出。请查看日志目录：\n{}",
+                    version3,
+                    logs_dir.to_string_lossy()
+                )
             } else {
-                format!("版本 {} 的 dsh 启动后立即退出。dsh 输出：\n{}", version3, detail)
+                format!(
+                    "版本 {} 的 dsh 启动后立即退出。dsh 输出：\n{}",
+                    version3, detail
+                )
             };
-            logging::log_app_error(&logs_dir, "launch_window", &format!("{} 启动后立即退出", version3));
+            logging::log_app_error(
+                &logs_dir,
+                "launch_window",
+                &format!("{} 启动后立即退出", version3),
+            );
             use tauri::Emitter;
-            let _ = app2.emit("launch-crashed", serde_json::json!({
-                "version": version3,
-                "detail": detail,
-                "message": msg,
-            }));
+            let _ = app2.emit(
+                "launch-crashed",
+                serde_json::json!({
+                    "version": version3,
+                    "detail": detail,
+                    "message": msg,
+                }),
+            );
         });
     }
 
@@ -622,7 +686,10 @@ pub(crate) async fn open_in_browser(
     if has_window {
         let ok = app
             .dialog()
-            .message(format!("版本 {} 已在窗口打开，确定还要在浏览器再开一个吗？", version))
+            .message(format!(
+                "版本 {} 已在窗口打开，确定还要在浏览器再开一个吗？",
+                version
+            ))
             .title("已在窗口打开")
             .kind(MessageDialogKind::Warning)
             .buttons(MessageDialogButtons::OkCancelCustom(
@@ -659,14 +726,17 @@ pub(crate) async fn open_in_browser(
     }
 
     // 3) 启动（新控制台，不传 --no-open，让 dsh 打开系统浏览器）
-    let (ok, msg) = launcher::spawn_web_console(
-        &vdir, &home, &dirs.store, &dirs.cache, &dirs.state, port,
-    );
+    let (ok, msg) =
+        launcher::spawn_web_console(&vdir, &home, &dirs.store, &dirs.cache, &dirs.state, port);
     if ok {
         // 提示：端口 + 数据目录
         Ok(format!("{}；数据目录：{}", msg, home.to_string_lossy()))
     } else {
-        logging::log_app_error(&dirs.root, "open_in_browser", &format!("{} ({})", version, msg));
+        logging::log_app_error(
+            &dirs.root,
+            "open_in_browser",
+            &format!("{} ({})", version, msg),
+        );
         Err(msg)
     }
 }
@@ -713,11 +783,19 @@ pub(crate) async fn restart_version(
     .await
     .map_err(|e| {
         let m = format!("重启任务失败: {}", e);
-        logging::log_app_error(&dirs.root, "restart_version", &format!("{} ({})", version, m));
+        logging::log_app_error(
+            &dirs.root,
+            "restart_version",
+            &format!("{} ({})", version, m),
+        );
         m
     })?;
     let (child, url, job) = spawned.map_err(|e| {
-        logging::log_app_error(&dirs.root, "restart_version", &format!("{} ({})", version, e));
+        logging::log_app_error(
+            &dirs.root,
+            "restart_version",
+            &format!("{} ({})", version, e),
+        );
         e
     })?;
 
@@ -732,7 +810,6 @@ pub(crate) async fn restart_version(
     Ok(())
 }
 
-
 /// 注入到 dsh 页面的顶部可折叠小栏（显示版本号 + 完整 URL + 重启按钮）。
 ///
 /// 脚本正文外置在 `src/topbar.js`（便于编辑/高亮/审查），编译期用 include_str! 内联；
@@ -742,11 +819,17 @@ fn build_topbar_script(version: &str, url: &str) -> String {
     // 防注入：转义反斜杠与单引号（模板中以单引号包裹字符串字面量）
     let ver = version.replace('\\', "\\\\").replace('\'', "\\'");
     let url_js = url.replace('\\', "\\\\").replace('\'', "\\'");
-    TEMPLATE.replace("__VER__", &ver).replace("__URL__", &url_js)
+    TEMPLATE
+        .replace("__VER__", &ver)
+        .replace("__URL__", &url_js)
 }
 
 #[tauri::command]
-pub(crate) fn set_isolated(app: tauri::AppHandle, version: String, isolated: bool) -> Result<String, String> {
+pub(crate) fn set_isolated(
+    app: tauri::AppHandle,
+    version: String,
+    isolated: bool,
+) -> Result<String, String> {
     let mdir = manager_dir(&app);
     let mut cfg = Config::load(&mdir);
     let dirs = Dirs::new(cfg.resolve_root(&mdir));
@@ -771,7 +854,10 @@ pub(crate) fn set_isolated(app: tauri::AppHandle, version: String, isolated: boo
 
 /// 导入预览：读备份文件，返回将改动的字段（不应用）。
 #[tauri::command]
-pub(crate) fn preview_import(app: tauri::AppHandle, file: String) -> Result<crate::backup::ImportPreview, String> {
+pub(crate) fn preview_import(
+    app: tauri::AppHandle,
+    file: String,
+) -> Result<crate::backup::ImportPreview, String> {
     let mdir = manager_dir(&app);
     let cfg = Config::load(&mdir);
     let dirs = Dirs::new(cfg.resolve_root(&mdir));
@@ -784,7 +870,8 @@ pub(crate) fn apply_import(app: tauri::AppHandle, file: String) -> Result<Vec<St
     let mdir = manager_dir(&app);
     let mut cfg = Config::load(&mdir);
     let applied = crate::backup::apply_import(std::path::Path::new(&file), &mut cfg)?;
-    cfg.save(&mdir).map_err(|e| format!("保存配置失败：{}", e))?;
+    cfg.save(&mdir)
+        .map_err(|e| format!("保存配置失败：{}", e))?;
     // 配置变了（默认版本/根目录/隔离可能变）→ 重生成转发脚本
     regenerate_forward_script(&mdir, &cfg);
     Ok(applied)
@@ -857,11 +944,15 @@ pub(crate) async fn perform_update(
 /// 开启后，非隔离版本的 DSH_HOME 指向官方默认目录，用户已有的会话/凭据/插件立即可用；
 /// 隔离版本不受影响。切换后重生成转发脚本，保证 GUI 与终端行为一致。
 #[tauri::command]
-pub(crate) fn set_use_official_home(app: tauri::AppHandle, enabled: bool) -> Result<String, String> {
+pub(crate) fn set_use_official_home(
+    app: tauri::AppHandle,
+    enabled: bool,
+) -> Result<String, String> {
     let mdir = manager_dir(&app);
     let mut cfg = Config::load(&mdir);
     cfg.use_official_dsh_home = enabled;
-    cfg.save(&mdir).map_err(|e| format!("保存配置失败: {}", e))?;
+    cfg.save(&mdir)
+        .map_err(|e| format!("保存配置失败: {}", e))?;
     // 非隔离版本的 home 来源变了：重生成转发脚本
     regenerate_forward_script(&mdir, &cfg);
     if enabled {
@@ -882,7 +973,10 @@ pub(crate) fn get_official_home() -> Option<String> {
 
 /// 扫描整个版本目录的占用（含依赖 + 隔离 home），返回总量 + 共享/独占详情。
 #[tauri::command]
-pub(crate) async fn scan_version_size(app: tauri::AppHandle, version: String) -> Result<versions::SizeInfo, String> {
+pub(crate) async fn scan_version_size(
+    app: tauri::AppHandle,
+    version: String,
+) -> Result<versions::SizeInfo, String> {
     let mdir = manager_dir(&app);
     let cfg = Config::load(&mdir);
     let dirs = Dirs::new(cfg.resolve_root(&mdir));
@@ -897,7 +991,10 @@ pub(crate) async fn scan_version_size(app: tauri::AppHandle, version: String) ->
 }
 
 #[tauri::command]
-pub(crate) async fn scan_isolated_size(app: tauri::AppHandle, version: String) -> Result<u64, String> {
+pub(crate) async fn scan_isolated_size(
+    app: tauri::AppHandle,
+    version: String,
+) -> Result<u64, String> {
     let mdir = manager_dir(&app);
     let cfg = Config::load(&mdir);
     let dirs = Dirs::new(cfg.resolve_root(&mdir));
@@ -936,7 +1033,14 @@ pub(crate) async fn run_maintenance(app: tauri::AppHandle, kind: String) -> Resu
             let removed = maintenance::cleanup_orphan_webviews(&dirs.versions, &dirs.webview);
             cfg.maintenance.last_cleanup_at = Some(maintenance::now_secs());
             cfg.maintenance.last_cleanup_count = removed.len() as u64;
-            logging::log_maintenance(&root, &format!("[手动] 清理孤立 webview：{} 项 {:?}", removed.len(), removed));
+            logging::log_maintenance(
+                &root,
+                &format!(
+                    "[手动] 清理孤立 webview：{} 项 {:?}",
+                    removed.len(),
+                    removed
+                ),
+            );
             // 同时清空「回收站」残留（卸载时 rename 进来的，后台可能未删净）
             let trashed = maintenance::cleanup_trash(&dirs.trash);
             let mut s = format!("已清理孤立缓存 {} 项", removed.len());
@@ -970,7 +1074,10 @@ pub(crate) async fn run_maintenance(app: tauri::AppHandle, kind: String) -> Resu
 }
 
 #[tauri::command]
-pub(crate) async fn copy_shared_to_isolated(app: tauri::AppHandle, version: String) -> Result<String, String> {
+pub(crate) async fn copy_shared_to_isolated(
+    app: tauri::AppHandle,
+    version: String,
+) -> Result<String, String> {
     let mdir = manager_dir(&app);
     let cfg = Config::load(&mdir);
     let dirs = Dirs::new(cfg.resolve_root(&mdir));
@@ -984,11 +1091,18 @@ pub(crate) async fn copy_shared_to_isolated(app: tauri::AppHandle, version: Stri
     })
     .await
     .map_err(|e| format!("复制任务失败: {}", e))?;
-    if ok { Ok(msg) } else { Err(msg) }
+    if ok {
+        Ok(msg)
+    } else {
+        Err(msg)
+    }
 }
 
 #[tauri::command]
-pub(crate) async fn clear_isolated_data(app: tauri::AppHandle, version: String) -> Result<String, String> {
+pub(crate) async fn clear_isolated_data(
+    app: tauri::AppHandle,
+    version: String,
+) -> Result<String, String> {
     let mdir = manager_dir(&app);
     let cfg = Config::load(&mdir);
     let dirs = Dirs::new(cfg.resolve_root(&mdir));
@@ -997,7 +1111,11 @@ pub(crate) async fn clear_isolated_data(app: tauri::AppHandle, version: String) 
     })
     .await
     .map_err(|e| format!("清理任务失败: {}", e))?;
-    if ok { Ok(msg) } else { Err(msg) }
+    if ok {
+        Ok(msg)
+    } else {
+        Err(msg)
+    }
 }
 
 #[tauri::command]
@@ -1008,7 +1126,11 @@ pub(crate) fn open_isolated_dir(app: tauri::AppHandle, version: String) -> Resul
     let home = versions::isolated_home(&dirs.versions, &version);
     let _ = std::fs::create_dir_all(&home);
     let (ok, msg) = actions::open_folder(&home);
-    if ok { Ok(()) } else { Err(msg) }
+    if ok {
+        Ok(())
+    } else {
+        Err(msg)
+    }
 }
 
 #[tauri::command]
@@ -1050,7 +1172,11 @@ pub(crate) fn open_url(url: String) -> Result<(), String> {
         return Err("只允许打开 http/https 链接".to_string());
     }
     let (ok, msg) = actions::open_url(&url);
-    if ok { Ok(()) } else { Err(msg) }
+    if ok {
+        Ok(())
+    } else {
+        Err(msg)
+    }
 }
 
 #[tauri::command]
@@ -1060,7 +1186,11 @@ pub(crate) fn open_dir(app: tauri::AppHandle, which: String) -> Result<(), Strin
     let dirs = Dirs::new(cfg.resolve_root(&mdir));
     let target = dirs.resolve(&which);
     let (ok, msg) = actions::open_folder(&target);
-    if ok { Ok(()) } else { Err(msg) }
+    if ok {
+        Ok(())
+    } else {
+        Err(msg)
+    }
 }
 
 #[tauri::command]
@@ -1132,7 +1262,8 @@ pub(crate) fn dismiss_runtime_prompt(app: tauri::AppHandle) -> Result<String, St
     let mdir = manager_dir(&app);
     let mut cfg = Config::load(&mdir);
     cfg.runtime_prompt_dismissed = true;
-    cfg.save(&mdir).map_err(|e| format!("保存配置失败: {}", e))?;
+    cfg.save(&mdir)
+        .map_err(|e| format!("保存配置失败: {}", e))?;
     Ok("已忽略运行时提示".to_string())
 }
 
@@ -1182,12 +1313,11 @@ mod tests {
 
     #[test]
     fn resolve_home_isolated_uses_version_subdir() {
-        let mut cfg = Config::default();
-        cfg.isolated_versions = vec!["0.1.0".to_string()];
-        let base = std::env::temp_dir().join(format!(
-            "dsh-rh-iso-{}",
-            crate::logging::now_secs()
-        ));
+        let cfg = Config {
+            isolated_versions: vec!["0.1.0".to_string()],
+            ..Default::default()
+        };
+        let base = std::env::temp_dir().join(format!("dsh-rh-iso-{}", crate::logging::now_secs()));
         let _ = std::fs::remove_dir_all(&base);
         let dirs = Dirs::new(base.clone());
         let h = resolve_home(&cfg, &dirs, "0.1.0");
@@ -1200,8 +1330,10 @@ mod tests {
 
     #[test]
     fn resolve_home_isolated_only_for_listed_version() {
-        let mut cfg = Config::default();
-        cfg.isolated_versions = vec!["0.1.0".to_string()];
+        let cfg = Config {
+            isolated_versions: vec!["0.1.0".to_string()],
+            ..Default::default()
+        };
         let dirs = Dirs::new(std::env::temp_dir().join("dsh-rh-mixed"));
         // 未列入隔离的版本 → 共享 home
         let h = resolve_home(&cfg, &dirs, "0.2.0");
@@ -1211,8 +1343,10 @@ mod tests {
     #[test]
     fn resolve_home_official_when_flag_on() {
         // 开启 use_official_dsh_home → 非隔离版本解析到官方 ~/.dsh
-        let mut cfg = Config::default();
-        cfg.use_official_dsh_home = true;
+        let cfg = Config {
+            use_official_dsh_home: true,
+            ..Default::default()
+        };
         let dirs = Dirs::new(std::env::temp_dir().join("dsh-rh-official"));
         let h = resolve_home(&cfg, &dirs, "0.1.0");
         let expected = official_dsh_home().expect("应能解析出用户主目录");
@@ -1223,9 +1357,11 @@ mod tests {
     #[test]
     fn resolve_home_isolated_beats_official_flag() {
         // 隔离优先级高于"复用官方"：即使全局开了复用，隔离版本仍用版本目录
-        let mut cfg = Config::default();
-        cfg.use_official_dsh_home = true;
-        cfg.isolated_versions = vec!["0.1.0".to_string()];
+        let cfg = Config {
+            use_official_dsh_home: true,
+            isolated_versions: vec!["0.1.0".to_string()],
+            ..Default::default()
+        };
         let base = std::env::temp_dir().join(format!("dsh-rh-prio-{}", crate::logging::now_secs()));
         let _ = std::fs::remove_dir_all(&base);
         let dirs = Dirs::new(base.clone());
