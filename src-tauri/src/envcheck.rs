@@ -362,10 +362,28 @@ fn human_bytes(n: u64) -> String {
     }
 }
 
-/// 检查 npm registry 是否可达
-pub fn check_registry() -> CheckItem {
-    // 用 pnpm view 查询一个轻量包，验证 registry 连通
-    let mut cmd = cmd_command("pnpm");
+/// 检查 npm registry 是否可达。
+///
+/// v0.2.9：系统 pnpm 不可用时回退到**便携 pnpm**（`<root>/tools/pnpm/pnpm.exe`）。
+/// 否则"仅有便携运行时"的场景下，本项会误报失败（实际不影响安装）。
+pub fn check_registry(root: &Path) -> CheckItem {
+    // 用 pnpm view 查询一个轻量包，验证 registry 连通。
+    // 系统 pnpm 优先；不可用时用便携 pnpm 的完整路径（独立可执行文件，无需走 cmd）。
+    let mut cmd = if system_pnpm_ok() {
+        cmd_command("pnpm")
+    } else {
+        let bundled = crate::runtime::pnpm_dir(root).join(if cfg!(windows) {
+            "pnpm.exe"
+        } else {
+            "pnpm"
+        });
+        if bundled.is_file() {
+            Command::new(bundled)
+        } else {
+            // 系统与便携都没有 → 直接用 cmd_command("pnpm")，让下面的 Err 分支给出引导
+            cmd_command("pnpm")
+        }
+    };
     cmd.arg("view").arg("@deepseek-ai/dsh").arg("version");
     match cmd.output() {
         Ok(out) if out.status.success() => {
@@ -414,7 +432,7 @@ pub fn run_all(root: &Path) -> Vec<CheckItem> {
         check_pnpm(root),
         check_writable(root),
         check_disk(root),
-        check_registry(),
+        check_registry(root),
     ]
 }
 
