@@ -261,6 +261,8 @@ onUnmounted(() => {
   background: var(--surface-2); padding: 3px 8px; border-radius: 5px;
   font-size: 12px; color: var(--text-code); max-width: 420px;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  /* 路径用等宽字体：避免日文字体把反斜杠渲染成 ¥（U+005C 的字形差异） */
+  font-family: ui-monospace, Consolas, "Courier New", monospace;
 }
 
 .content {

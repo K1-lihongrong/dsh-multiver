@@ -189,7 +189,7 @@ function fmtTs(sec) {
       <span>{{ t("paths.useOfficialHome") }}</span>
     </label>
     <div class="maint-rules" style="margin-top: -8px; margin-bottom: 14px;" v-if="state && state.use_official_dsh_home">
-      <div>{{ t("paths.officialHomePath") }}：{{ state.official_home_dir || "~/.dsh" }}</div>
+      <div>{{ t("paths.officialHomePath") }}：<code class="inline-path">{{ state.official_home_dir || "~/.dsh" }}</code></div>
     </div>
 
     <div class="paths" v-if="state">
@@ -289,7 +289,9 @@ function fmtTs(sec) {
 .field-row { display: flex; gap: 8px; }
 .field-row input {
   flex: 1; padding: 8px 12px; border: 1px solid var(--border);
-  border-radius: 7px; font-size: 13px; font-family: inherit; outline: none;
+  border-radius: 7px; font-size: 13px; outline: none;
+  /* 路径输入框用等宽字体：避免日文字体把反斜杠渲染成 ¥ */
+  font-family: ui-monospace, Consolas, "Courier New", monospace;
 }
 .field-row input:focus { border-color: var(--accent); }
 .field-row select {
@@ -318,6 +320,13 @@ function fmtTs(sec) {
 .path-item code {
   font-size: 12px; color: var(--text-3); overflow: hidden;
   text-overflow: ellipsis; white-space: nowrap;
+  /* 路径用等宽字体：避免日文字体把反斜杠渲染成 ¥ */
+  font-family: ui-monospace, Consolas, "Courier New", monospace;
+}
+.inline-path {
+  /* 同上：路径用等宽字体，避免日文字体把反斜杠渲染成 ¥ */
+  font-family: ui-monospace, Consolas, "Courier New", monospace;
+  font-size: 12px;
 }
 .hint { color: var(--text-muted); font-size: 13px; padding: 8px 0; }
 .paths-toggle { display: flex; align-items: center; gap: 10px; padding: 6px 0 2px; }
