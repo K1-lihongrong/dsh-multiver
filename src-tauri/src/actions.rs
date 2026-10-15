@@ -30,17 +30,37 @@ fn run(cmd: &mut Command) -> (bool, String, String) {
 
 /// 从 npm 查询所有可安装的版本号，倒序返回。
 /// 显式指定 store/cache/state，避免污染 pnpm 全局目录。
-pub fn list_remote(store_dir: &Path, cache_dir: &Path, state_dir: &Path) -> (bool, Vec<String>, String) {
+pub fn list_remote(
+    store_dir: &Path,
+    cache_dir: &Path,
+    state_dir: &Path,
+) -> (bool, Vec<String>, String) {
     let mut cmd = pnpm_command();
     // 注意：pnpm view 不接受顶层 --store-dir/--cache-dir/--state-dir（会报 Unknown option），
     // 要用 --config.xxx=value 形式传，既不报错也保持"不污染全局目录"的意图。
-    cmd.arg("view").arg("@deepseek-ai/dsh").arg("versions").arg("--json")
-        .arg(format!("--config.store-dir={}", store_dir.to_string_lossy()))
-        .arg(format!("--config.cache-dir={}", cache_dir.to_string_lossy()))
-        .arg(format!("--config.state-dir={}", state_dir.to_string_lossy()));
+    cmd.arg("view")
+        .arg("@deepseek-ai/dsh")
+        .arg("versions")
+        .arg("--json")
+        .arg(format!(
+            "--config.store-dir={}",
+            store_dir.to_string_lossy()
+        ))
+        .arg(format!(
+            "--config.cache-dir={}",
+            cache_dir.to_string_lossy()
+        ))
+        .arg(format!(
+            "--config.state-dir={}",
+            state_dir.to_string_lossy()
+        ));
     let (ok, stdout, stderr) = run(&mut cmd);
     if !ok {
-        let msg = if stderr.trim().is_empty() { stdout } else { stderr };
+        let msg = if stderr.trim().is_empty() {
+            stdout
+        } else {
+            stderr
+        };
         return (false, Vec::new(), msg);
     }
     let trimmed = stdout.trim();
@@ -54,7 +74,14 @@ pub fn list_remote(store_dir: &Path, cache_dir: &Path, state_dir: &Path) -> (boo
     } else {
         versions = trimmed
             .lines()
-            .map(|s| s.trim().trim_matches('"').trim_matches(',').trim_matches('[').trim_matches(']').to_string())
+            .map(|s| {
+                s.trim()
+                    .trim_matches('"')
+                    .trim_matches(',')
+                    .trim_matches('[')
+                    .trim_matches(']')
+                    .to_string()
+            })
             .filter(|s| !s.is_empty())
             .collect();
     }
@@ -259,7 +286,11 @@ mod unix_tests {
 
     #[test]
     fn unix_forward_script_sets_home_and_bin() {
-        let s = build_forward_script("0.2.0-rc.2", "/home/u/dsh", "/home/u/dsh/versions/0.2.0-rc.2/home");
+        let s = build_forward_script(
+            "0.2.0-rc.2",
+            "/home/u/dsh",
+            "/home/u/dsh/versions/0.2.0-rc.2/home",
+        );
         assert!(s.contains("VER='0.2.0-rc.2'"));
         assert!(s.contains("ROOT='/home/u/dsh'"));
         // 隔离版本 → home 指向版本目录
@@ -320,4 +351,3 @@ mod tests {
         assert!(!s.contains("D:\\data\\\\home"));
     }
 }
-

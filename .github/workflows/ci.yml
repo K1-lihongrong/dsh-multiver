@@ -56,6 +56,14 @@ jobs:
       - name: Frontend build
         run: pnpm build
 
+      # 代码规范门禁（v0.2.12）：rustfmt 格式 + clippy 零警告。
+      # 防止代码质量欠账累积（此前无门禁，曾累积 10 条 clippy 警告 + 全仓未格式化）。
+      - name: Rust fmt check
+        run: cargo fmt --manifest-path src-tauri/Cargo.toml --check
+
+      - name: Rust clippy
+        run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
+
       # 编译 + 运行单元测试。
       # Linux runner 会**真正编译** #[cfg(unix)] 分支——这正是本地 Windows 无法覆盖的
       # （历史上这些 cfg(unix) 分支仅在本机 Windows 无法覆盖，故用 Linux runner 兜底验证）。

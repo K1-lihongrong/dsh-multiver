@@ -57,7 +57,11 @@ fn progress(step: usize, detail: String, fraction: f32) -> ProgressEvent {
     ProgressEvent {
         step,
         total: INSTALL_TOTAL_STEPS,
-        stage: STAGE_NAMES.get(step.saturating_sub(1)).copied().unwrap_or("").to_string(),
+        stage: STAGE_NAMES
+            .get(step.saturating_sub(1))
+            .copied()
+            .unwrap_or("")
+            .to_string(),
         detail,
         fraction: fraction.clamp(0.0, 1.0),
     }
@@ -74,7 +78,10 @@ pub struct ProgressParser {
 
 impl ProgressParser {
     pub fn new() -> Self {
-        Self { total_packages: None, max_step: 0 }
+        Self {
+            total_packages: None,
+            max_step: 0,
+        }
     }
 
     /// 归一化 step：不允许小于已达到的最大值（防回退）。
@@ -121,7 +128,9 @@ impl ProgressParser {
             }
             // 原生模块构建
             if line.contains("node_modules/")
-                && (line.contains("postinstall") || line.contains("preinstall") || line.contains("install:"))
+                && (line.contains("postinstall")
+                    || line.contains("preinstall")
+                    || line.contains("install:"))
             {
                 break 'p Some((7, String::new(), 0.0));
             }
@@ -177,7 +186,11 @@ fn pnpm_command() -> Command {
 }
 
 /// 列出已安装的版本（扫描 versions 目录）
-pub fn list(versions_dir: &Path, default_version: Option<&str>, isolated: &[String]) -> Vec<VersionInfo> {
+pub fn list(
+    versions_dir: &Path,
+    default_version: Option<&str>,
+    isolated: &[String],
+) -> Vec<VersionInfo> {
     let mut result = Vec::new();
     if let Ok(entries) = std::fs::read_dir(versions_dir) {
         for entry in entries.flatten() {
@@ -273,13 +286,18 @@ pub fn parse_stage(line: &str) -> Option<&'static str> {
     if line.starts_with("Packages:") || line.contains("Packages: +") {
         return Some("正在计算依赖树...");
     }
-    if line.contains("Progress: resolved") && line.contains("downloaded") && !line.contains("added") {
+    if line.contains("Progress: resolved") && line.contains("downloaded") && !line.contains("added")
+    {
         return Some("正在下载依赖包...");
     }
     if line.contains("Progress: resolved") && line.contains("added") {
         return Some("正在写入文件...");
     }
-    if line.contains("node_modules/") && (line.contains("postinstall") || line.contains("preinstall") || line.contains("install:")) {
+    if line.contains("node_modules/")
+        && (line.contains("postinstall")
+            || line.contains("preinstall")
+            || line.contains("install:"))
+    {
         return Some("正在构建原生模块...");
     }
     if line.contains("dependencies:") || line.contains("+ @deepseek-ai/dsh") {
@@ -312,15 +330,21 @@ mod tests {
         // Packages 行不再产生事件，只记下总数
         assert!(p.parse("Packages: +445").is_none());
         // resolved 阶段
-        let (s, d, _) = p.parse("Progress: resolved 234, reused 222, downloaded 0, added 0").unwrap();
+        let (s, d, _) = p
+            .parse("Progress: resolved 234, reused 222, downloaded 0, added 0")
+            .unwrap();
         assert_eq!(s, 4);
         assert!(d.contains("234"), "detail={}", d);
         // downloaded 阶段
-        let (s, d, _) = p.parse("Progress: resolved 234, reused 222, downloaded 5, added 0").unwrap();
+        let (s, d, _) = p
+            .parse("Progress: resolved 234, reused 222, downloaded 5, added 0")
+            .unwrap();
         assert_eq!(s, 5);
         assert!(d.contains("5"));
         // added 阶段：fraction = 12/445
-        let (s, d, f) = p.parse("Progress: resolved 234, reused 222, downloaded 5, added 12").unwrap();
+        let (s, d, f) = p
+            .parse("Progress: resolved 234, reused 222, downloaded 5, added 12")
+            .unwrap();
         assert_eq!(s, 6);
         assert!(d.contains("12"));
         assert!((f - 12.0 / 445.0).abs() < 0.001, "frac={}", f);
@@ -333,29 +357,41 @@ mod tests {
     fn step_never_goes_backwards() {
         let mut p = ProgressParser::new();
         // 先到 step 5（下载）
-        let (s, _, _) = p.parse("Progress: resolved 100, reused 0, downloaded 5, added 0").unwrap();
+        let (s, _, _) = p
+            .parse("Progress: resolved 100, reused 0, downloaded 5, added 0")
+            .unwrap();
         assert_eq!(s, 5);
         // 交错出现 resolved 行（raw step 4）——不应回退
-        let (s2, _, _) = p.parse("Progress: resolved 200, reused 0, downloaded 0, added 0").unwrap();
+        let (s2, _, _) = p
+            .parse("Progress: resolved 200, reused 0, downloaded 0, added 0")
+            .unwrap();
         assert_eq!(s2, 5, "阶段不应回退");
         // 再到 step 6
-        let (s3, _, _) = p.parse("Progress: resolved 200, reused 0, downloaded 5, added 10").unwrap();
+        let (s3, _, _) = p
+            .parse("Progress: resolved 200, reused 0, downloaded 5, added 10")
+            .unwrap();
         assert_eq!(s3, 6);
         // 又出现 resolved 行（raw 4）——仍不回退
-        let (s4, _, _) = p.parse("Progress: resolved 300, reused 0, downloaded 0, added 0").unwrap();
+        let (s4, _, _) = p
+            .parse("Progress: resolved 300, reused 0, downloaded 0, added 0")
+            .unwrap();
         assert_eq!(s4, 6, "阶段不应回退");
     }
 
     #[test]
     fn extract_num_works() {
-        assert_eq!(extract_num("resolved 234, reused 222", "resolved"), Some(234));
+        assert_eq!(
+            extract_num("resolved 234, reused 222", "resolved"),
+            Some(234)
+        );
         assert_eq!(extract_num("resolved 234, reused 222", "reused"), Some(222));
         assert_eq!(extract_num("no number here", "xyz"), None);
     }
 
     #[test]
     fn classify_private_package() {
-        let raw = "ERR_PNPM_FETCH_404  GET https://registry.npmjs.org/@deepseek-ai/dsh: Not Found - 404";
+        let raw =
+            "ERR_PNPM_FETCH_404  GET https://registry.npmjs.org/@deepseek-ai/dsh: Not Found - 404";
         assert_eq!(classify_error(raw), "private-package");
         // 需要同时含 @deepseek-ai 才归为 private-package
         assert_eq!(classify_error("ERR_PNPM_FETCH_404 other-pkg"), "network");
@@ -463,8 +499,11 @@ pub fn install(
     // pnpm 默认的符号链接结构会导致 "Cannot find package" 错误。
     // hoisted 生成扁平化的真实 node_modules（兼容 dsh），
     // 同时底层仍用 store 硬链接，保持磁盘去重。
-    if let Err(e) = std::fs::write(target.join(".npmrc"), "node-linker=hoisted
-") {
+    if let Err(e) = std::fs::write(
+        target.join(".npmrc"),
+        "node-linker=hoisted
+",
+    ) {
         return (false, format!("写入 .npmrc 失败: {}", e));
     }
 
@@ -477,9 +516,18 @@ pub fn install(
         .arg(&spec)
         // 注意：pnpm add 不接受顶层 --state-dir（报 Unknown option），
         // 统一改用 --config.xxx=value 形式，既不报错也保持"不污染全局目录"的意图。
-        .arg(format!("--config.store-dir={}", store_dir.to_string_lossy()))
-        .arg(format!("--config.cache-dir={}", cache_dir.to_string_lossy()))
-        .arg(format!("--config.state-dir={}", state_dir.to_string_lossy()))
+        .arg(format!(
+            "--config.store-dir={}",
+            store_dir.to_string_lossy()
+        ))
+        .arg(format!(
+            "--config.cache-dir={}",
+            cache_dir.to_string_lossy()
+        ))
+        .arg(format!(
+            "--config.state-dir={}",
+            state_dir.to_string_lossy()
+        ))
         .arg("--config.confirmModulesPurge=false")
         .arg("--config.dangerouslyAllowAllBuilds=true");
     // 可选：自定义 npm 源（换源重试用）
@@ -554,8 +602,12 @@ pub fn install(
             }
         }
     }
-    if let Some(h) = h_out { let _ = h.join(); }
-    if let Some(h) = h_err { let _ = h.join(); }
+    if let Some(h) = h_out {
+        let _ = h.join();
+    }
+    if let Some(h) = h_err {
+        let _ = h.join();
+    }
 
     let status = child.wait();
     let ok = matches!(status, Ok(s) if s.success());
@@ -600,8 +652,12 @@ fn friendly_error(raw: &str) -> String {
             "该版本在官方源上发布不完整（依赖子包缺失），无法安装。\n建议换一个版本重试。\n\n原始信息：\n{}",
             raw
         )
-    } else if raw.contains("ERR_PNPM_FETCH") || raw.contains("UND_ERR") || raw.contains("ETIMEDOUT") {
-        format!("网络连接失败，请检查网络或稍后重试。\n\n原始信息：\n{}", raw)
+    } else if raw.contains("ERR_PNPM_FETCH") || raw.contains("UND_ERR") || raw.contains("ETIMEDOUT")
+    {
+        format!(
+            "网络连接失败，请检查网络或稍后重试。\n\n原始信息：\n{}",
+            raw
+        )
     } else {
         format!("安装失败：\n{}", raw)
     }
@@ -693,7 +749,9 @@ pub struct SizeInfo {
 #[cfg(windows)]
 fn file_nlink(path: &Path) -> u32 {
     use std::os::windows::io::AsRawHandle;
-    use windows_sys::Win32::Storage::FileSystem::{GetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION};
+    use windows_sys::Win32::Storage::FileSystem::{
+        GetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION,
+    };
     let f = match std::fs::File::open(path) {
         Ok(f) => f,
         Err(_) => return 1,
@@ -711,7 +769,9 @@ fn file_nlink(path: &Path) -> u32 {
 #[cfg(unix)]
 fn file_nlink(path: &Path) -> u32 {
     use std::os::unix::fs::MetadataExt;
-    std::fs::metadata(path).map(|m| m.nlink() as u32).unwrap_or(1)
+    std::fs::metadata(path)
+        .map(|m| m.nlink() as u32)
+        .unwrap_or(1)
 }
 
 #[cfg(not(any(windows, unix)))]
@@ -740,12 +800,16 @@ fn dir_size_detail(path: &Path, acc: &mut SizeInfo) {
 
 /// 整个版本目录的占用详情（含共享/独占）。用于"扫描占用"。
 pub fn version_size_detail(versions_dir: &Path, version: &str) -> SizeInfo {
-    let mut info = SizeInfo { total: 0, shared_size: 0, shared_count: 0, exclusive_size: 0 };
+    let mut info = SizeInfo {
+        total: 0,
+        shared_size: 0,
+        shared_count: 0,
+        exclusive_size: 0,
+    };
     dir_size_detail(&versions_dir.join(version), &mut info);
     info.exclusive_size = info.total.saturating_sub(info.shared_size);
     info
 }
-
 
 /// 隔离 home 的路径
 pub fn isolated_home(versions_dir: &Path, version: &str) -> std::path::PathBuf {
@@ -812,7 +876,9 @@ fn is_reparse_point(path: &Path) -> bool {
     }
     #[cfg(not(windows))]
     {
-        std::fs::symlink_metadata(path).map(|m| m.file_type().is_symlink()).unwrap_or(false)
+        std::fs::symlink_metadata(path)
+            .map(|m| m.file_type().is_symlink())
+            .unwrap_or(false)
     }
 }
 
@@ -841,8 +907,7 @@ fn create_junction(link: &Path, target: &Path) -> std::io::Result<()> {
         if out.status.success() {
             Ok(())
         } else {
-            Err(std::io::Error::new(
-                std::io::ErrorKind::Other,
+            Err(std::io::Error::other(
                 String::from_utf8_lossy(&out.stderr).to_string(),
             ))
         }

@@ -7,7 +7,13 @@
 pub(crate) fn window_label_prefix(version: &str) -> String {
     let sanitized: String = version
         .chars()
-        .map(|c| if c.is_ascii_alphanumeric() || matches!(c, '-' | '/' | ':' | '_') { c } else { '_' })
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || matches!(c, '-' | '/' | ':' | '_') {
+                c
+            } else {
+                '_'
+            }
+        })
         .collect();
     format!("dsh-{}", sanitized)
 }
@@ -38,7 +44,10 @@ pub(crate) fn parse_launch_version(args: &[String]) -> Option<String> {
 /// 必须提前到 run() 的最开头（Builder 之前）。
 #[cfg(windows)]
 pub(crate) fn set_process_aumid() {
-    let wide: Vec<u16> = MANAGER_AUMID.encode_utf16().chain(std::iter::once(0)).collect();
+    let wide: Vec<u16> = MANAGER_AUMID
+        .encode_utf16()
+        .chain(std::iter::once(0))
+        .collect();
     unsafe {
         windows_sys::Win32::UI::Shell::SetCurrentProcessExplicitAppUserModelID(wide.as_ptr());
     }
@@ -81,11 +90,16 @@ pub(crate) const DSH_WINDOW_AUMID: &str = "io.github.K1-lihongrong.dsh-multiver.
 /// PKEY_AppUserModel_ID，从而让 dsh 窗口用独立的 AUMID。
 /// 必须在窗口**显示之前**调用（否则任务栏可能已按旧 AUMID 建项）。
 #[cfg(windows)]
-pub(crate) fn set_window_app_user_model_id(window: &tauri::WebviewWindow, aumid: &str) -> Result<(), String> {
+pub(crate) fn set_window_app_user_model_id(
+    window: &tauri::WebviewWindow,
+    aumid: &str,
+) -> Result<(), String> {
     use windows::core::GUID;
     use windows::Win32::Foundation::{HWND, PROPERTYKEY};
-    use windows::Win32::UI::Shell::PropertiesSystem::{IPropertyStore, SHGetPropertyStoreForWindow};
     use windows::Win32::System::Com::StructuredStorage::PROPVARIANT;
+    use windows::Win32::UI::Shell::PropertiesSystem::{
+        IPropertyStore, SHGetPropertyStoreForWindow,
+    };
 
     // PKEY_AppUserModel_ID = {9F4C2855-9F79-4B39-A8D0-E1D42DE1D5F3}, 5
     const PKEY_APPUSERMODEL_ID: PROPERTYKEY = PROPERTYKEY {
@@ -93,8 +107,10 @@ pub(crate) fn set_window_app_user_model_id(window: &tauri::WebviewWindow, aumid:
         pid: 5,
     };
 
-    let raw = window.hwnd().map_err(|e| format!("取窗口句柄失败: {}", e))?;
-    let hwnd = HWND(raw.0 as *mut core::ffi::c_void);
+    let raw = window
+        .hwnd()
+        .map_err(|e| format!("取窗口句柄失败: {}", e))?;
+    let hwnd = HWND(raw.0);
 
     unsafe {
         let store: IPropertyStore = SHGetPropertyStoreForWindow(hwnd)

@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
 /// 管理器配置，持久化到 <根目录>/config.json
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Config {
     /// 数据根目录。为空时表示使用默认（exe 同目录）
     pub root_dir: Option<String>,
@@ -58,20 +58,6 @@ impl Default for MaintenanceConfig {
     }
 }
 
-impl Default for Config {
-    fn default() -> Self {
-        Self {
-            root_dir: None,
-            default_version: None,
-            isolated_versions: Vec::new(),
-            broken_versions: Vec::new(),
-            maintenance: MaintenanceConfig::default(),
-            use_official_dsh_home: false,
-            runtime_prompt_dismissed: false,
-        }
-    }
-}
-
 impl Config {
     /// 配置文件名
     pub const FILE_NAME: &'static str = "config.json";
@@ -109,6 +95,7 @@ impl Config {
     /// 根据一次安装结果维护 `broken_versions`：
     /// - 成功：移除该版本标记
     /// - 失败且分类为「私有包/不完整」：加入标记
+    ///
     /// 返回配置是否发生变化（调用方据此决定是否保存）。
     pub fn apply_install_result(&mut self, version: &str, ok: bool, err_kind: &str) -> bool {
         if ok {
@@ -234,8 +221,10 @@ mod tests {
     #[test]
     fn empty_or_blank_root_falls_back_to_manager_dir() {
         let mdir = PathBuf::from("C:\\manager");
-        let mut cfg = Config::default();
-        cfg.root_dir = Some("   ".to_string());
+        let mut cfg = Config {
+            root_dir: Some("   ".to_string()),
+            ..Default::default()
+        };
         assert_eq!(cfg.resolve_root(&mdir), mdir);
         cfg.root_dir = Some("".to_string());
         assert_eq!(cfg.resolve_root(&mdir), mdir);
@@ -247,7 +236,10 @@ mod tests {
             root_dir: Some("D:\\data".to_string()),
             ..Config::default()
         };
-        assert_eq!(cfg.resolve_root(&PathBuf::from("C:\\m")), PathBuf::from("D:\\data"));
+        assert_eq!(
+            cfg.resolve_root(&PathBuf::from("C:\\m")),
+            PathBuf::from("D:\\data")
+        );
     }
 
     #[test]
@@ -257,7 +249,10 @@ mod tests {
             root_dir: Some("  D:\\DSH  ".to_string()),
             ..Config::default()
         };
-        assert_eq!(cfg.resolve_root(&PathBuf::from("C:\\m")), PathBuf::from("D:\\DSH"));
+        assert_eq!(
+            cfg.resolve_root(&PathBuf::from("C:\\m")),
+            PathBuf::from("D:\\DSH")
+        );
     }
 
     #[test]
@@ -317,13 +312,14 @@ mod tests {
         assert_eq!(d.webview, PathBuf::from("R").join("webview"));
     }
 
-
     // ── apply_install_result：broken_versions 维护 ──
 
     #[test]
     fn install_success_removes_broken_mark() {
-        let mut c = Config::default();
-        c.broken_versions = vec!["0.1.0".to_string(), "0.2.0".to_string()];
+        let mut c = Config {
+            broken_versions: vec!["0.1.0".to_string(), "0.2.0".to_string()],
+            ..Default::default()
+        };
         let changed = c.apply_install_result("0.1.0", true, "");
         assert!(changed);
         assert_eq!(c.broken_versions, vec!["0.2.0".to_string()]);
@@ -360,8 +356,10 @@ mod tests {
 
     #[test]
     fn install_failure_already_marked_is_noop() {
-        let mut c = Config::default();
-        c.broken_versions = vec!["0.1.0".to_string()];
+        let mut c = Config {
+            broken_versions: vec!["0.1.0".to_string()],
+            ..Default::default()
+        };
         assert!(!c.apply_install_result("0.1.0", false, "private-package"));
         assert_eq!(c.broken_versions.len(), 1);
     }
@@ -402,7 +400,6 @@ mod tests {
         assert_eq!(c.default_version.as_deref(), Some("0.2.0"));
         assert_eq!(c.isolated_versions, vec!["0.2.0".to_string()]);
     }
-
 
     // ── Dirs::resolve：目录名 → 路径 ──
 

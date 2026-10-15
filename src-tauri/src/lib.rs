@@ -152,7 +152,9 @@ pub fn run() {
             }
             // 精简启动模式：命令行带 --launch-version <版本> 时，
             // 关闭默认主窗口，直接打开该版本的内嵌窗口。
-            if let Some(version) = window::parse_launch_version(&std::env::args().collect::<Vec<_>>()) {
+            if let Some(version) =
+                window::parse_launch_version(&std::env::args().collect::<Vec<_>>())
+            {
                 // 注意：不能立刻 close 主窗口——若此时尚无其他窗口，Tauri 会认为
                 // "所有窗口已关闭" 而直接退出事件循环，导致异步创建 dsh 窗口来不及执行。
                 // 因此先**隐藏**主窗口（保持进程存活），待 dsh 窗口建好后再关闭它。
@@ -164,7 +166,13 @@ pub fn run() {
                 let procs_for_launch = procs_setup.clone();
                 let version_for_launch = version.clone();
                 tauri::async_runtime::spawn(async move {
-                    match commands::launch_window(app_handle.clone(), procs_for_launch, version_for_launch.clone()).await {
+                    match commands::launch_window(
+                        app_handle.clone(),
+                        procs_for_launch,
+                        version_for_launch.clone(),
+                    )
+                    .await
+                    {
                         Ok(_) => {
                             // dsh 窗口已建好，此时再关闭主窗口
                             if let Some(main) = app_handle.get_webview_window("main") {
@@ -175,7 +183,10 @@ pub fn run() {
                             // 无控制台，错误同时落盘，便于排查
                             let mdir = manager_dir(&app_handle);
                             let root = Config::load(&mdir).resolve_root(&mdir);
-                            logging::log_launch_error(&root, &format!("版本 {} 启动失败: {}", version_for_launch, e));
+                            logging::log_launch_error(
+                                &root,
+                                &format!("版本 {} 启动失败: {}", version_for_launch, e),
+                            );
                             eprintln!("[dsh-multiver] 启动失败: {}", e);
                             // 启动失败时把主窗口显示出来，避免用户看到"什么都没有"
                             if let Some(main) = app_handle.get_webview_window("main") {
@@ -228,17 +239,24 @@ pub fn run() {
                     }
 
                     // 1) 孤立 webview：每次启动都能跑（成本极低）
-                    let removed = maintenance::cleanup_orphan_webviews(&dirs.versions, &dirs.webview);
+                    let removed =
+                        maintenance::cleanup_orphan_webviews(&dirs.versions, &dirs.webview);
                     cfg.maintenance.last_cleanup_at = Some(maintenance::now_secs());
                     cfg.maintenance.last_cleanup_count = removed.len() as u64;
                     let _ = cfg.save(&mdir);
                     if !removed.is_empty() {
-                        logging::log_maintenance(&root, &format!("清理孤立 webview：{:?}", removed));
+                        logging::log_maintenance(
+                            &root,
+                            &format!("清理孤立 webview：{:?}", removed),
+                        );
                     }
 
                     // 2) store prune：距上次 >= 7 天才跑，且延迟 30 秒错开启动 IO
                     let due = match cfg.maintenance.last_prune_at {
-                        Some(t) => maintenance::now_secs().saturating_sub(t) >= maintenance::PRUNE_INTERVAL_SECS,
+                        Some(t) => {
+                            maintenance::now_secs().saturating_sub(t)
+                                >= maintenance::PRUNE_INTERVAL_SECS
+                        }
                         None => true,
                     };
                     if due {
@@ -251,7 +269,10 @@ pub fn run() {
                                 logging::log_maintenance(&root, "store prune 完成");
                             }
                             Err(e) => {
-                                logging::log_maintenance(&root, &format!("store prune 失败（下次重试）: {}", e));
+                                logging::log_maintenance(
+                                    &root,
+                                    &format!("store prune 失败（下次重试）: {}", e),
+                                );
                             }
                         }
                     }
@@ -280,4 +301,3 @@ pub fn run() {
             }
         });
 }
-

@@ -384,7 +384,9 @@ pub fn run(cmd: CliCommand, dry_run: bool, json: bool) -> i32 {
         // --list / --which 是只读命令，dry-run 对它们无意义（照常执行）
         CliCommand::List => cmd_list(json),
         CliCommand::Which => cmd_which(json),
-        CliCommand::Install { version, registry } => cmd_install(&version, registry.as_deref(), dry_run, json),
+        CliCommand::Install { version, registry } => {
+            cmd_install(&version, registry.as_deref(), dry_run, json)
+        }
         CliCommand::Uninstall { version } => cmd_uninstall(&version, dry_run, json),
         CliCommand::SetDefault { version } => cmd_set_default(&version, dry_run, json),
         CliCommand::Maintenance { kind } => cmd_maintenance(&kind, dry_run, json),
@@ -414,7 +416,10 @@ fn json_str<T: serde::Serialize>(v: &T) -> String {
 /// 用于破坏性命令的成功/失败提示。
 fn out_result(json: bool, ok: bool, message: &str) {
     if json {
-        println!("{}", json_str(&serde_json::json!({ "ok": ok, "message": message })));
+        println!(
+            "{}",
+            json_str(&serde_json::json!({ "ok": ok, "message": message }))
+        );
     } else if ok {
         println!("{}", message);
     } else {
@@ -460,13 +465,19 @@ fn cmd_which(json: bool) -> i32 {
         .join(".bin")
         .join(if cfg!(windows) { "dsh.cmd" } else { "dsh" });
     if !bin.exists() {
-        return which_fail(json, &format!("默认版本 {} 的入口不存在：{}", def, bin.to_string_lossy()));
+        return which_fail(
+            json,
+            &format!("默认版本 {} 的入口不存在：{}", def, bin.to_string_lossy()),
+        );
     }
     if json {
-        println!("{}", json_str(&serde_json::json!({
-            "version": def,
-            "path": bin.to_string_lossy(),
-        })));
+        println!(
+            "{}",
+            json_str(&serde_json::json!({
+                "version": def,
+                "path": bin.to_string_lossy(),
+            }))
+        );
     } else {
         println!("{}", bin.to_string_lossy());
     }
@@ -475,7 +486,10 @@ fn cmd_which(json: bool) -> i32 {
 
 fn which_fail(json: bool, msg: &str) -> i32 {
     if json {
-        println!("{}", json_str(&serde_json::json!({ "ok": false, "error": msg })));
+        println!(
+            "{}",
+            json_str(&serde_json::json!({ "ok": false, "error": msg }))
+        );
     } else {
         eprintln!("{}", msg);
     }
@@ -487,14 +501,21 @@ fn cmd_install(version: &str, registry: Option<&str>, dry_run: bool, json: bool)
     let mut ctx = load_ctx();
     if dry_run {
         if json {
-            println!("{}", json_str(&serde_json::json!({
-                "dry_run": true,
-                "action": "install",
-                "version": version,
-                "registry": registry,
-            })));
+            println!(
+                "{}",
+                json_str(&serde_json::json!({
+                    "dry_run": true,
+                    "action": "install",
+                    "version": version,
+                    "registry": registry,
+                }))
+            );
         } else {
-            println!("[dry-run] 将安装版本 {} 到 {}", version, ctx.dirs.versions.join(version).to_string_lossy());
+            println!(
+                "[dry-run] 将安装版本 {} 到 {}",
+                version,
+                ctx.dirs.versions.join(version).to_string_lossy()
+            );
             if let Some(r) = registry {
                 println!("[dry-run] 使用 npm 源：{}", r);
             }
@@ -544,11 +565,10 @@ fn cmd_install(version: &str, registry: Option<&str>, dry_run: bool, json: bool)
         0
     } else {
         let kind = versions::classify_error(&msg);
-        if kind == "private-package" || kind == "incomplete-version" {
-            if !ctx.cfg.broken_versions.iter().any(|v| v == version) {
-                ctx.cfg.broken_versions.push(version.to_string());
-                let _ = ctx.cfg.save(&ctx.mdir);
-            }
+        let is_broken_kind = kind == "private-package" || kind == "incomplete-version";
+        if is_broken_kind && !ctx.cfg.broken_versions.iter().any(|v| v == version) {
+            ctx.cfg.broken_versions.push(version.to_string());
+            let _ = ctx.cfg.save(&ctx.mdir);
         }
         out_result(json, false, &msg);
         1
@@ -560,10 +580,13 @@ fn cmd_uninstall(version: &str, dry_run: bool, json: bool) -> i32 {
     let mut ctx = load_ctx();
     if dry_run {
         if json {
-            println!("{}", json_str(&serde_json::json!({
-                "dry_run": true, "action": "uninstall", "version": version,
-                "installed": versions::exists(&ctx.dirs.versions, version),
-            })));
+            println!(
+                "{}",
+                json_str(&serde_json::json!({
+                    "dry_run": true, "action": "uninstall", "version": version,
+                    "installed": versions::exists(&ctx.dirs.versions, version),
+                }))
+            );
             return 0;
         }
         let installed = versions::exists(&ctx.dirs.versions, version);
@@ -605,7 +628,10 @@ fn cmd_uninstall(version: &str, dry_run: bool, json: bool) -> i32 {
         let wv = ctx.dirs.webview.join(version);
         if wv.exists() {
             let _ = std::fs::create_dir_all(&ctx.dirs.trash);
-            let dest = ctx.dirs.trash.join(format!("webview-{}-{}", version, std::process::id()));
+            let dest = ctx
+                .dirs
+                .trash
+                .join(format!("webview-{}-{}", version, std::process::id()));
             if std::fs::rename(&wv, &dest).is_err() {
                 let _ = std::fs::remove_dir_all(&wv);
             }
@@ -625,10 +651,13 @@ fn cmd_set_default(version: &str, dry_run: bool, json: bool) -> i32 {
     let mut ctx = load_ctx();
     if dry_run {
         if json {
-            println!("{}", json_str(&serde_json::json!({
-                "dry_run": true, "action": "set-default", "version": version,
-                "installed": versions::exists(&ctx.dirs.versions, version),
-            })));
+            println!(
+                "{}",
+                json_str(&serde_json::json!({
+                    "dry_run": true, "action": "set-default", "version": version,
+                    "installed": versions::exists(&ctx.dirs.versions, version),
+                }))
+            );
             return 0;
         }
         let installed = versions::exists(&ctx.dirs.versions, version);
@@ -664,7 +693,11 @@ fn cmd_set_default(version: &str, dry_run: bool, json: bool) -> i32 {
         return 1;
     }
     crate::commands::regenerate_forward_script(&ctx.mdir, &ctx.cfg);
-    out_result(json, true, &format!("默认版本已设为 {}，dsh 命令已就绪", version));
+    out_result(
+        json,
+        true,
+        &format!("默认版本已设为 {}，dsh 命令已就绪", version),
+    );
     0
 }
 
@@ -678,13 +711,19 @@ fn cmd_maintenance(kind: &str, dry_run: bool, json: bool) -> i32 {
     let mut ctx = load_ctx();
     if dry_run {
         if json {
-            println!("{}", json_str(&serde_json::json!({
-                "dry_run": true, "action": "maintenance", "kind": kind,
-            })));
+            println!(
+                "{}",
+                json_str(&serde_json::json!({
+                    "dry_run": true, "action": "maintenance", "kind": kind,
+                }))
+            );
             return 0;
         }
         if kind == "cleanup" || kind == "all" {
-            println!("[dry-run] 将清理孤立 webview 缓存（{}）", ctx.dirs.webview.to_string_lossy());
+            println!(
+                "[dry-run] 将清理孤立 webview 缓存（{}）",
+                ctx.dirs.webview.to_string_lossy()
+            );
         }
         if kind == "prune" || kind == "all" {
             println!("[dry-run] 将回收依赖仓库（pnpm store prune）");
@@ -721,7 +760,12 @@ fn cmd_maintenance(kind: &str, dry_run: bool, json: bool) -> i32 {
             Err(e) => {
                 let _ = ctx.cfg.save(&ctx.mdir);
                 if json {
-                    println!("{}", json_str(&serde_json::json!({ "ok": false, "error": format!("回收依赖仓库失败：{}", e) })));
+                    println!(
+                        "{}",
+                        json_str(
+                            &serde_json::json!({ "ok": false, "error": format!("回收依赖仓库失败：{}", e) })
+                        )
+                    );
                 } else {
                     eprintln!("回收依赖仓库失败：{}", e);
                 }
@@ -732,16 +776,24 @@ fn cmd_maintenance(kind: &str, dry_run: bool, json: bool) -> i32 {
 
     if let Err(e) = ctx.cfg.save(&ctx.mdir) {
         if json {
-            println!("{}", json_str(&serde_json::json!({ "ok": false, "error": format!("保存配置失败：{}", e) })));
+            println!(
+                "{}",
+                json_str(
+                    &serde_json::json!({ "ok": false, "error": format!("保存配置失败：{}", e) })
+                )
+            );
         } else {
             eprintln!("保存配置失败：{}", e);
         }
         return 1;
     }
     if json {
-        println!("{}", json_str(&serde_json::json!({
-            "ok": true, "kind": kind, "cleaned": cleaned, "pruned": pruned,
-        })));
+        println!(
+            "{}",
+            json_str(&serde_json::json!({
+                "ok": true, "kind": kind, "cleaned": cleaned, "pruned": pruned,
+            }))
+        );
     }
     0
 }
@@ -755,9 +807,13 @@ fn cmd_doctor(json: bool) -> i32 {
     // 1) 数据根目录存在 / 可写
     let root = &ctx.dirs.root;
     let root_exists = root.exists();
-    let root_writable = std::fs::metadata(root).map(|m| !m.permissions().readonly()).unwrap_or(false);
+    let root_writable = std::fs::metadata(root)
+        .map(|m| !m.permissions().readonly())
+        .unwrap_or(false);
     let root_ok = root_exists && root_writable;
-    if !root_ok { fatal = true; }
+    if !root_ok {
+        fatal = true;
+    }
     items.push(serde_json::json!({
         "name": "数据根目录", "ok": root_ok, "critical": true,
         "detail": if !root_exists { format!("不存在：{}", root.to_string_lossy()) }
@@ -787,7 +843,11 @@ fn cmd_doctor(json: bool) -> i32 {
     }));
 
     // 4) 已安装版本数
-    let installed = versions::list(&ctx.dirs.versions, ctx.cfg.default_version.as_deref(), &ctx.cfg.isolated_versions);
+    let installed = versions::list(
+        &ctx.dirs.versions,
+        ctx.cfg.default_version.as_deref(),
+        &ctx.cfg.isolated_versions,
+    );
     items.push(serde_json::json!({
         "name": "已安装版本", "ok": !installed.is_empty(), "critical": false,
         "detail": if installed.is_empty() { "无".to_string() }
@@ -805,7 +865,9 @@ fn cmd_doctor(json: bool) -> i32 {
     // 6) 环境检查（Node / pnpm / 磁盘 / npm 源等）
     let env_items = crate::envcheck::run_all(&ctx.dirs.root);
     for it in &env_items {
-        if it.critical && !it.ok { fatal = true; }
+        if it.critical && !it.ok {
+            fatal = true;
+        }
         items.push(serde_json::json!({
             "name": it.name, "ok": it.ok, "critical": it.critical, "detail": it.detail,
         }));
@@ -814,17 +876,34 @@ fn cmd_doctor(json: bool) -> i32 {
     let _ = root;
 
     if json {
-        println!("{}", json_str(&serde_json::json!({ "ok": !fatal, "items": items })));
+        println!(
+            "{}",
+            json_str(&serde_json::json!({ "ok": !fatal, "items": items }))
+        );
     } else {
         for it in &items {
             let ok = it["ok"].as_bool().unwrap_or(false);
             let name = it["name"].as_str().unwrap_or("");
             let detail = it["detail"].as_str().unwrap_or("");
-            let crit = if it["critical"].as_bool().unwrap_or(false) { "" } else { "（非致命）" };
-            println!("[{}] {}{}  {}", if ok { "✓" } else { "✗" }, name, crit, detail);
+            let crit = if it["critical"].as_bool().unwrap_or(false) {
+                ""
+            } else {
+                "（非致命）"
+            };
+            println!(
+                "[{}] {}{}  {}",
+                if ok { "✓" } else { "✗" },
+                name,
+                crit,
+                detail
+            );
         }
     }
-    if fatal { 1 } else { 0 }
+    if fatal {
+        1
+    } else {
+        0
+    }
 }
 
 /// `--import <文件>`：导入备份文件（`--export` 生成的）里的配置。
@@ -836,7 +915,10 @@ fn cmd_import(file: &str, dry_run: bool, json: bool) -> i32 {
     // 预览
     let preview = match crate::backup::preview_import(path, &ctx.cfg, &ctx.dirs.versions) {
         Ok(p) => p,
-        Err(e) => { out_result(json, false, &e); return 1; }
+        Err(e) => {
+            out_result(json, false, &e);
+            return 1;
+        }
     };
 
     if dry_run {
@@ -847,11 +929,15 @@ fn cmd_import(file: &str, dry_run: bool, json: bool) -> i32 {
             if preview.changes.is_empty() {
                 println!("  （无需改动）");
             } else {
-                for c in &preview.changes { println!("  · {}", c); }
+                for c in &preview.changes {
+                    println!("  · {}", c);
+                }
             }
             if !preview.missing_versions.is_empty() {
                 println!("[dry-run] 注意：以下版本本机未安装（仅恢复配置，需另行安装）：");
-                for v in &preview.missing_versions { println!("  · {}", v); }
+                for v in &preview.missing_versions {
+                    println!("  · {}", v);
+                }
             }
             println!("[dry-run] 未执行任何操作");
         }
@@ -874,7 +960,10 @@ fn cmd_import(file: &str, dry_run: bool, json: bool) -> i32 {
             out_result(json, true, &msg);
             0
         }
-        Err(e) => { out_result(json, false, &e); 1 }
+        Err(e) => {
+            out_result(json, false, &e);
+            1
+        }
     }
 }
 
@@ -889,15 +978,27 @@ fn cmd_run(version: &str, json: bool) -> i32 {
     let home = crate::commands::resolve_home(&ctx.cfg, &ctx.dirs, version);
 
     // 端口：固定 3080；被占用则随机（CLI 无交互，直接随机）
-    let port: u16 = if crate::launcher::port_in_use(3080) { 0 } else { 3080 };
+    let port: u16 = if crate::launcher::port_in_use(3080) {
+        0
+    } else {
+        3080
+    };
     let (ok, msg) = crate::launcher::spawn_web_console(
-        &vdir, &home, &ctx.dirs.store, &ctx.dirs.cache, &ctx.dirs.state, port,
+        &vdir,
+        &home,
+        &ctx.dirs.store,
+        &ctx.dirs.cache,
+        &ctx.dirs.state,
+        port,
     );
     if ok {
         if json {
-            println!("{}", json_str(&serde_json::json!({
-                "ok": true, "version": version, "port": port, "home": home.to_string_lossy(),
-            })));
+            println!(
+                "{}",
+                json_str(&serde_json::json!({
+                    "ok": true, "version": version, "port": port, "home": home.to_string_lossy(),
+                }))
+            );
         } else {
             println!("{}", msg);
             println!("数据目录：{}", home.to_string_lossy());
@@ -924,15 +1025,18 @@ fn cmd_setup_runtime(dry_run: bool, json: bool) -> i32 {
 
     if dry_run {
         if json {
-            println!("{}", json_str(&serde_json::json!({
-                "dry_run": true,
-                "system_node_ok": sys_node,
-                "bundled_node_ok": bun_node,
-                "system_pnpm_ok": sys_pnpm,
-                "bundled_pnpm_ok": bun_pnpm,
-                "need_node": !sys_node && !bun_node,
-                "need_pnpm": !sys_pnpm && !bun_pnpm,
-            })));
+            println!(
+                "{}",
+                json_str(&serde_json::json!({
+                    "dry_run": true,
+                    "system_node_ok": sys_node,
+                    "bundled_node_ok": bun_node,
+                    "system_pnpm_ok": sys_pnpm,
+                    "bundled_pnpm_ok": bun_pnpm,
+                    "need_node": !sys_node && !bun_node,
+                    "need_pnpm": !sys_pnpm && !bun_pnpm,
+                }))
+            );
         } else {
             println!("[预览] 运行时检测：");
             println!("  系统 Node：{}", if sys_node { "可用" } else { "不可用" });
@@ -967,9 +1071,17 @@ fn cmd_setup_runtime(dry_run: bool, json: bool) -> i32 {
             eprintln!("正在下载便携 Node（约 30MB）…");
         }
         let on_prog = |p: crate::runtime::RuntimeProgress| {
-            if json { return; }
+            if json {
+                return;
+            }
             match p.total {
-                Some(t) if t > 0 => eprint!("\r{}  {:.1} / {:.1} MB ({:.0}%)", p.stage, p.done as f64 / 1e6, t as f64 / 1e6, p.done as f64 * 100.0 / t as f64),
+                Some(t) if t > 0 => eprint!(
+                    "\r{}  {:.1} / {:.1} MB ({:.0}%)",
+                    p.stage,
+                    p.done as f64 / 1e6,
+                    t as f64 / 1e6,
+                    p.done as f64 * 100.0 / t as f64
+                ),
                 _ => eprint!("\r{}", p.stage),
             }
         };
@@ -998,9 +1110,17 @@ fn cmd_setup_runtime(dry_run: bool, json: bool) -> i32 {
             eprintln!("正在下载便携 pnpm（约 22MB）…");
         }
         let on_prog = |p: crate::runtime::RuntimeProgress| {
-            if json { return; }
+            if json {
+                return;
+            }
             match p.total {
-                Some(t) if t > 0 => eprint!("\r{}  {:.1} / {:.1} MB ({:.0}%)", p.stage, p.done as f64 / 1e6, t as f64 / 1e6, p.done as f64 * 100.0 / t as f64),
+                Some(t) if t > 0 => eprint!(
+                    "\r{}  {:.1} / {:.1} MB ({:.0}%)",
+                    p.stage,
+                    p.done as f64 / 1e6,
+                    t as f64 / 1e6,
+                    p.done as f64 * 100.0 / t as f64
+                ),
                 _ => eprint!("\r{}", p.stage),
             }
         };
@@ -1020,16 +1140,23 @@ fn cmd_setup_runtime(dry_run: bool, json: bool) -> i32 {
     }
     let ok = node_ok && pnpm_ok;
     if json {
-        println!("{}", json_str(&serde_json::json!({
-            "ok": ok,
-            "node": node_msg,
-            "pnpm": pnpm_msg,
-        })));
+        println!(
+            "{}",
+            json_str(&serde_json::json!({
+                "ok": ok,
+                "node": node_msg,
+                "pnpm": pnpm_msg,
+            }))
+        );
     } else {
         println!("{}", node_msg);
         println!("{}", pnpm_msg);
     }
-    if ok { 0 } else { 1 }
+    if ok {
+        0
+    } else {
+        1
+    }
 }
 
 /// `--update`：检查并执行自动更新（v0.2.10）。
@@ -1040,9 +1167,12 @@ fn cmd_update(dry_run: bool, json: bool) -> i32 {
     let info = crate::updater::check();
     if !info.has_update {
         if json {
-            println!("{}", json_str(&serde_json::json!({
-                "has_update": false, "current": info.current, "latest": info.latest,
-            })));
+            println!(
+                "{}",
+                json_str(&serde_json::json!({
+                    "has_update": false, "current": info.current, "latest": info.latest,
+                }))
+            );
         } else {
             println!("已是最新版本（{}）", info.current);
         }
@@ -1051,10 +1181,13 @@ fn cmd_update(dry_run: bool, json: bool) -> i32 {
     let latest = info.latest.clone().unwrap_or_default();
     if dry_run {
         if json {
-            println!("{}", json_str(&serde_json::json!({
-                "has_update": true, "current": info.current, "latest": latest,
-                "download_url": info.download_url, "sha256": info.sha256, "dry_run": true,
-            })));
+            println!(
+                "{}",
+                json_str(&serde_json::json!({
+                    "has_update": true, "current": info.current, "latest": latest,
+                    "download_url": info.download_url, "sha256": info.sha256, "dry_run": true,
+                }))
+            );
         } else {
             println!("发现新版本 {}（当前 {}）", latest, info.current);
             println!("运行不带 --dry-run 的 --update 即可下载并更新");
@@ -1084,7 +1217,11 @@ fn cmd_update(dry_run: bool, json: bool) -> i32 {
     };
     match crate::updater::spawn_replacer(&new_exe, &target) {
         Ok(_) => {
-            out_result(json, true, &format!("更新就绪（v{}），管理器将退出以完成替换", latest));
+            out_result(
+                json,
+                true,
+                &format!("更新就绪（v{}），管理器将退出以完成替换", latest),
+            );
             0
         }
         Err(e) => {
@@ -1107,7 +1244,10 @@ fn cmd_export(file: Option<&str>, json: bool) -> i32 {
     match crate::backup::export_to_file(&ctx.cfg, &ctx.dirs.versions, &out) {
         Ok(path) => {
             if json {
-                println!("{}", json_str(&serde_json::json!({ "ok": true, "path": path })));
+                println!(
+                    "{}",
+                    json_str(&serde_json::json!({ "ok": true, "path": path }))
+                );
             } else {
                 println!("已导出：{}", path);
             }
@@ -1133,9 +1273,12 @@ fn cmd_shortcut(version: &str, dry_run: bool, json: bool) -> i32 {
     });
     if dry_run {
         if json {
-            println!("{}", json_str(&serde_json::json!({
-                "dry_run": true, "action": "shortcut", "version": version,
-            })));
+            println!(
+                "{}",
+                json_str(&serde_json::json!({
+                    "dry_run": true, "action": "shortcut", "version": version,
+                }))
+            );
         } else {
             println!("[dry-run] 将为版本 {} 创建桌面快捷方式", version);
             println!("[dry-run] 未执行任何操作");
@@ -1159,25 +1302,39 @@ fn cmd_shortcut(version: &str, dry_run: bool, json: bool) -> i32 {
 fn cmd_copy_shared(version: &str, dry_run: bool, json: bool) -> i32 {
     let ctx = load_ctx();
     if !ctx.cfg.isolated_versions.iter().any(|v| v == version) {
-        return info_fail(json, &format!("{} 未开启隔离（先用 --isolate {} 开启）", version, version));
+        return info_fail(
+            json,
+            &format!("{} 未开启隔离（先用 --isolate {} 开启）", version, version),
+        );
     }
     let shared = ctx.dirs.home.clone();
     let isolated = versions::isolated_home(&ctx.dirs.versions, version);
     if dry_run {
         if json {
-            println!("{}", json_str(&serde_json::json!({
-                "dry_run": true, "action": "copy-shared", "version": version,
-                "from": shared.to_string_lossy(), "to": isolated.to_string_lossy(),
-            })));
+            println!(
+                "{}",
+                json_str(&serde_json::json!({
+                    "dry_run": true, "action": "copy-shared", "version": version,
+                    "from": shared.to_string_lossy(), "to": isolated.to_string_lossy(),
+                }))
+            );
         } else {
-            println!("[dry-run] 将把 {} 复制到 {}", shared.to_string_lossy(), isolated.to_string_lossy());
+            println!(
+                "[dry-run] 将把 {} 复制到 {}",
+                shared.to_string_lossy(),
+                isolated.to_string_lossy()
+            );
             println!("[dry-run] 未执行任何操作");
         }
         return 0;
     }
     let (ok, msg, _) = versions::copy_shared_to_isolated(&shared, &isolated);
     out_result(json, ok, &msg);
-    if ok { 0 } else { 1 }
+    if ok {
+        0
+    } else {
+        1
+    }
 }
 
 /// `--clear-isolated <版本>`：清空该隔离版本的独立 home（保留版本本身）。
@@ -1189,10 +1346,13 @@ fn cmd_clear_isolated(version: &str, dry_run: bool, json: bool) -> i32 {
     if dry_run {
         let home = versions::isolated_home(&ctx.dirs.versions, version);
         if json {
-            println!("{}", json_str(&serde_json::json!({
-                "dry_run": true, "action": "clear-isolated", "version": version,
-                "home": home.to_string_lossy(),
-            })));
+            println!(
+                "{}",
+                json_str(&serde_json::json!({
+                    "dry_run": true, "action": "clear-isolated", "version": version,
+                    "home": home.to_string_lossy(),
+                }))
+            );
         } else {
             println!("[dry-run] 将清空隔离数据：{}", home.to_string_lossy());
             println!("[dry-run] 未执行任何操作");
@@ -1201,7 +1361,11 @@ fn cmd_clear_isolated(version: &str, dry_run: bool, json: bool) -> i32 {
     }
     let (ok, msg) = versions::clear_isolated(&ctx.dirs.versions, version);
     out_result(json, ok, &msg);
-    if ok { 0 } else { 1 }
+    if ok {
+        0
+    } else {
+        1
+    }
 }
 
 /// `--isolate <版本> [--off]`：开关数据隔离（默认开启；--off 关闭）。
@@ -1211,10 +1375,13 @@ fn cmd_isolate(version: &str, on: bool, dry_run: bool, json: bool) -> i32 {
     if dry_run {
         let installed = versions::exists(&ctx.dirs.versions, version);
         if json {
-            println!("{}", json_str(&serde_json::json!({
-                "dry_run": true, "action": "isolate", "version": version,
-                "isolated": on, "installed": installed,
-            })));
+            println!(
+                "{}",
+                json_str(&serde_json::json!({
+                    "dry_run": true, "action": "isolate", "version": version,
+                    "isolated": on, "installed": installed,
+                }))
+            );
         } else {
             println!(
                 "[dry-run] 将{}版本 {} 的数据隔离",
@@ -1255,12 +1422,21 @@ fn cmd_clean(dry_run: bool, json: bool) -> i32 {
     let ctx = load_ctx();
     if dry_run {
         if json {
-            println!("{}", json_str(&serde_json::json!({
-                "dry_run": true, "action": "clean",
-            })));
+            println!(
+                "{}",
+                json_str(&serde_json::json!({
+                    "dry_run": true, "action": "clean",
+                }))
+            );
         } else {
-            println!("[dry-run] 将清理孤立 webview 缓存（{}）", ctx.dirs.webview.to_string_lossy());
-            println!("[dry-run] 将清空卸载回收站（{}）", ctx.dirs.trash.to_string_lossy());
+            println!(
+                "[dry-run] 将清理孤立 webview 缓存（{}）",
+                ctx.dirs.webview.to_string_lossy()
+            );
+            println!(
+                "[dry-run] 将清空卸载回收站（{}）",
+                ctx.dirs.trash.to_string_lossy()
+            );
             println!("[dry-run] 未执行任何操作");
         }
         return 0;
@@ -1271,9 +1447,12 @@ fn cmd_clean(dry_run: bool, json: bool) -> i32 {
     let removed = maintenance::cleanup_orphan_webviews(&ctx.dirs.versions, &ctx.dirs.webview);
     let trashed = maintenance::cleanup_trash(&ctx.dirs.trash);
     if json {
-        println!("{}", json_str(&serde_json::json!({
-            "ok": true, "webviews": removed.len(), "trash": trashed,
-        })));
+        println!(
+            "{}",
+            json_str(&serde_json::json!({
+                "ok": true, "webviews": removed.len(), "trash": trashed,
+            }))
+        );
     } else {
         println!("已清理孤立缓存 {} 项", removed.len());
         println!("已清空回收站 {} 项", trashed);
@@ -1300,16 +1479,19 @@ fn cmd_info(version: &str, json: bool) -> i32 {
     let home = crate::commands::resolve_home(&ctx.cfg, &ctx.dirs, version);
 
     if json {
-        println!("{}", json_str(&serde_json::json!({
-            "version": info.version,
-            "path": info.path,
-            "is_default": info.is_default,
-            "isolated": info.isolated,
-            "shared_home": info.shared_home,
-            "installed_at": info.installed_at,
-            "home": home.to_string_lossy(),
-            "size": size,
-        })));
+        println!(
+            "{}",
+            json_str(&serde_json::json!({
+                "version": info.version,
+                "path": info.path,
+                "is_default": info.is_default,
+                "isolated": info.isolated,
+                "shared_home": info.shared_home,
+                "installed_at": info.installed_at,
+                "home": home.to_string_lossy(),
+                "size": size,
+            }))
+        );
     } else {
         println!("版本:     {}", info.version);
         println!("路径:     {}", info.path);
@@ -1337,7 +1519,10 @@ fn cmd_info(version: &str, json: bool) -> i32 {
 
 fn info_fail(json: bool, msg: &str) -> i32 {
     if json {
-        println!("{}", json_str(&serde_json::json!({ "ok": false, "error": msg })));
+        println!(
+            "{}",
+            json_str(&serde_json::json!({ "ok": false, "error": msg }))
+        );
     } else {
         eprintln!("{}", msg);
     }
@@ -1376,7 +1561,11 @@ fn cmd_env(json: bool) -> i32 {
             println!("[{}] {}{}  {}", mark, it.name, crit, it.detail);
         }
     }
-    if fatal_fail { 1 } else { 0 }
+    if fatal_fail {
+        1
+    } else {
+        0
+    }
 }
 
 /// 人类可读的字节数（B / KB / MB / GB，保留两位）。
@@ -1478,7 +1667,10 @@ mod tests {
     #[test]
     fn gui_flags_pass_through() {
         // --launch-version / --debug-progress 属 GUI 路径，返回 None
-        assert!(matches!(parse(&args(&["--launch-version", "0.1.7"])), Ok(None)));
+        assert!(matches!(
+            parse(&args(&["--launch-version", "0.1.7"])),
+            Ok(None)
+        ));
         assert!(matches!(parse(&args(&["--debug-progress"])), Ok(None)));
     }
 
@@ -1490,15 +1682,27 @@ mod tests {
 
     #[test]
     fn help_and_version() {
-        assert!(matches!(parse(&args(&["--help"])), Ok(Some(CliCommand::Help))));
+        assert!(matches!(
+            parse(&args(&["--help"])),
+            Ok(Some(CliCommand::Help))
+        ));
         assert!(matches!(parse(&args(&["-h"])), Ok(Some(CliCommand::Help))));
-        assert!(matches!(parse(&args(&["--version"])), Ok(Some(CliCommand::Version))));
-        assert!(matches!(parse(&args(&["-V"])), Ok(Some(CliCommand::Version))));
+        assert!(matches!(
+            parse(&args(&["--version"])),
+            Ok(Some(CliCommand::Version))
+        ));
+        assert!(matches!(
+            parse(&args(&["-V"])),
+            Ok(Some(CliCommand::Version))
+        ));
     }
 
     #[test]
     fn list_command() {
-        assert!(matches!(parse(&args(&["--list"])), Ok(Some(CliCommand::List))));
+        assert!(matches!(
+            parse(&args(&["--list"])),
+            Ok(Some(CliCommand::List))
+        ));
     }
 
     #[test]
@@ -1510,7 +1714,12 @@ mod tests {
             }
             other => panic!("unexpected: {:?}", other),
         }
-        match parse(&args(&["--install", "0.1.7", "--registry", "https://r.example"])) {
+        match parse(&args(&[
+            "--install",
+            "0.1.7",
+            "--registry",
+            "https://r.example",
+        ])) {
             Ok(Some(CliCommand::Install { version, registry })) => {
                 assert_eq!(version, "0.1.7");
                 assert_eq!(registry.as_deref(), Some("https://r.example"));
@@ -1539,7 +1748,10 @@ mod tests {
 
     #[test]
     fn which_command() {
-        assert!(matches!(parse(&args(&["--which"])), Ok(Some(CliCommand::Which))));
+        assert!(matches!(
+            parse(&args(&["--which"])),
+            Ok(Some(CliCommand::Which))
+        ));
     }
 
     #[test]
@@ -1554,9 +1766,18 @@ mod tests {
 
     #[test]
     fn import_command() {
-        assert!(matches!(parse(&args(&["--setup-runtime"])), Ok(Some(CliCommand::SetupRuntime))));
-        assert!(matches!(parse(&args(&["--update"])), Ok(Some(CliCommand::Update))));
-        assert!(matches!(parse(&args(&["--update", "--dry-run"])), Ok(Some(CliCommand::Update))));
+        assert!(matches!(
+            parse(&args(&["--setup-runtime"])),
+            Ok(Some(CliCommand::SetupRuntime))
+        ));
+        assert!(matches!(
+            parse(&args(&["--update"])),
+            Ok(Some(CliCommand::Update))
+        ));
+        assert!(matches!(
+            parse(&args(&["--update", "--dry-run"])),
+            Ok(Some(CliCommand::Update))
+        ));
         match parse(&args(&["--import", "b.json"])) {
             Ok(Some(CliCommand::Import { file })) => assert_eq!(file, "b.json"),
             other => panic!("unexpected: {:?}", other),
@@ -1575,7 +1796,10 @@ mod tests {
 
     #[test]
     fn export_command() {
-        assert!(matches!(parse(&args(&["--export"])), Ok(Some(CliCommand::Export { file: None }))));
+        assert!(matches!(
+            parse(&args(&["--export"])),
+            Ok(Some(CliCommand::Export { file: None }))
+        ));
         match parse(&args(&["--export", "out.json"])) {
             Ok(Some(CliCommand::Export { file })) => assert_eq!(file.as_deref(), Some("out.json")),
             other => panic!("unexpected: {:?}", other),
@@ -1604,8 +1828,14 @@ mod tests {
 
     #[test]
     fn doctor_command() {
-        assert!(matches!(parse(&args(&["--doctor"])), Ok(Some(CliCommand::Doctor))));
-        assert!(matches!(parse(&args(&["--doctor", "--json"])), Ok(Some(CliCommand::Doctor))));
+        assert!(matches!(
+            parse(&args(&["--doctor"])),
+            Ok(Some(CliCommand::Doctor))
+        ));
+        assert!(matches!(
+            parse(&args(&["--doctor", "--json"])),
+            Ok(Some(CliCommand::Doctor))
+        ));
     }
 
     #[test]
@@ -1625,16 +1855,31 @@ mod tests {
             other => panic!("unexpected: {:?}", other),
         }
         assert!(parse(&args(&["--isolate"])).is_err());
-        assert!(matches!(parse(&args(&["--clean"])), Ok(Some(CliCommand::Clean))));
+        assert!(matches!(
+            parse(&args(&["--clean"])),
+            Ok(Some(CliCommand::Clean))
+        ));
     }
 
     #[test]
     fn versions_and_env_commands() {
-        assert!(matches!(parse(&args(&["--versions"])), Ok(Some(CliCommand::Versions))));
-        assert!(matches!(parse(&args(&["--env"])), Ok(Some(CliCommand::Env))));
+        assert!(matches!(
+            parse(&args(&["--versions"])),
+            Ok(Some(CliCommand::Versions))
+        ));
+        assert!(matches!(
+            parse(&args(&["--env"])),
+            Ok(Some(CliCommand::Env))
+        ));
         // 修饰符可搭配
-        assert!(matches!(parse(&args(&["--versions", "--json"])), Ok(Some(CliCommand::Versions))));
-        assert!(matches!(parse(&args(&["--env", "--json"])), Ok(Some(CliCommand::Env))));
+        assert!(matches!(
+            parse(&args(&["--versions", "--json"])),
+            Ok(Some(CliCommand::Versions))
+        ));
+        assert!(matches!(
+            parse(&args(&["--env", "--json"])),
+            Ok(Some(CliCommand::Env))
+        ));
     }
 
     #[test]
@@ -1644,8 +1889,14 @@ mod tests {
         // 只 --json（无命令）→ 报错（不启动 GUI）
         assert!(parse(&args(&["--json"])).is_err());
         // 命令仍正确解析
-        assert!(matches!(parse(&args(&["--list", "--json"])), Ok(Some(CliCommand::List))));
-        assert!(matches!(parse(&args(&["--which", "--json"])), Ok(Some(CliCommand::Which))));
+        assert!(matches!(
+            parse(&args(&["--list", "--json"])),
+            Ok(Some(CliCommand::List))
+        ));
+        assert!(matches!(
+            parse(&args(&["--which", "--json"])),
+            Ok(Some(CliCommand::Which))
+        ));
     }
 
     #[test]

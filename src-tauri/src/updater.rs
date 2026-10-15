@@ -67,7 +67,10 @@ pub fn check() -> UpdateInfo {
     };
 
     let tag = body.get("tag_name").and_then(|v| v.as_str()).unwrap_or("");
-    let html_url = body.get("html_url").and_then(|v| v.as_str()).map(String::from);
+    let html_url = body
+        .get("html_url")
+        .and_then(|v| v.as_str())
+        .map(String::from);
     // 从 assets 里找 exe 资产，同时取其 digest（sha256）
     let exe_asset = body
         .get("assets")
@@ -112,8 +115,12 @@ pub fn check() -> UpdateInfo {
 ///
 /// - `url`：exe 直链
 /// - `expected_sha256`：期望的 SHA256（小写十六进制）；为 None 时**跳过校验**（仅警告）
+///
 /// 返回下载后的临时文件路径。
-pub fn download_and_verify(url: &str, expected_sha256: Option<&str>) -> Result<std::path::PathBuf, String> {
+pub fn download_and_verify(
+    url: &str,
+    expected_sha256: Option<&str>,
+) -> Result<std::path::PathBuf, String> {
     let tmp = std::env::temp_dir().join(format!(
         "dsh-multiver-update-{}.exe",
         std::time::SystemTime::now()
@@ -165,7 +172,10 @@ fn sha256_file(path: &std::path::Path) -> Result<String, String> {
 /// 失败时不损坏旧 exe（复制是最后一步，且复制前旧 exe 仍在）。
 /// 返回批处理的路径（调用方随后应退出主进程）。
 #[cfg(windows)]
-pub fn spawn_replacer(new_exe: &std::path::Path, target_exe: &std::path::Path) -> Result<std::path::PathBuf, String> {
+pub fn spawn_replacer(
+    new_exe: &std::path::Path,
+    target_exe: &std::path::Path,
+) -> Result<std::path::PathBuf, String> {
     let pid = std::process::id();
     let bat = std::env::temp_dir().join(format!("dsh-multiver-replace-{}.bat", pid));
     let new_s = new_exe.to_string_lossy().to_string();
@@ -196,7 +206,10 @@ pub fn spawn_replacer(new_exe: &std::path::Path, target_exe: &std::path::Path) -
 }
 
 #[cfg(not(windows))]
-pub fn spawn_replacer(_new_exe: &std::path::Path, _target_exe: &std::path::Path) -> Result<std::path::PathBuf, String> {
+pub fn spawn_replacer(
+    _new_exe: &std::path::Path,
+    _target_exe: &std::path::Path,
+) -> Result<std::path::PathBuf, String> {
     Err("当前平台不支持自动替换（仅 Windows）".to_string())
 }
 
@@ -252,8 +265,10 @@ mod tests {
     #[ignore]
     fn live_check_returns_info() {
         let info = check();
-        eprintln!("LIVE: has_update={} current={} latest={:?} url={:?} dl={:?}",
-            info.has_update, info.current, info.latest, info.release_url, info.download_url);
+        eprintln!(
+            "LIVE: has_update={} current={} latest={:?} url={:?} dl={:?}",
+            info.has_update, info.current, info.latest, info.release_url, info.download_url
+        );
         // 当前本地 0.2.6 > 线上 0.2.5 → 不应提示更新
         assert!(info.latest.is_some(), "应能解析出线上版本");
         assert!(!info.has_update, "本地更新时不应提示");

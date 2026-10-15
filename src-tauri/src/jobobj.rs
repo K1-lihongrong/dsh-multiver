@@ -61,8 +61,8 @@ pub fn attach(child: &Child) -> Option<ProcessGuard> {
     use std::os::windows::io::AsRawHandle;
     use windows_sys::Win32::Foundation::{CloseHandle, HANDLE};
     use windows_sys::Win32::System::JobObjects::{
-        AssignProcessToJobObject, CreateJobObjectW, SetInformationJobObject,
-        JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JobObjectExtendedLimitInformation,
+        AssignProcessToJobObject, CreateJobObjectW, JobObjectExtendedLimitInformation,
+        SetInformationJobObject, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
         JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
     };
 
@@ -139,10 +139,15 @@ pub fn attach(_child: &Child) -> Option<ProcessGuard> {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(unix)]
     use super::*;
+    #[cfg(unix)]
     use std::process::{Command, Stdio};
+    #[cfg(unix)]
     use std::time::Duration;
 
+    /// 仅 Unix 对照实验用（GAP-008）：等待 ms 后子进程是否仍存活。
+    #[cfg(unix)]
     fn alive_after(child: &mut Child, ms: u64) -> bool {
         std::thread::sleep(Duration::from_millis(ms));
         matches!(child.try_wait(), Ok(None))
@@ -192,7 +197,10 @@ mod tests {
         let _ = dead_child.kill();
         let _ = dead_child.wait();
 
-        assert!(ok_alive, "experimental child should be alive (no PDEATHSIG)");
+        assert!(
+            ok_alive,
+            "experimental child should be alive (no PDEATHSIG)"
+        );
         assert!(!dead_alive, "control child should be killed by PDEATHSIG");
     }
 }
