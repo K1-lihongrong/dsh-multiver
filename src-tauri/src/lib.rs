@@ -11,6 +11,7 @@ mod maintenance;
 #[cfg(unix)]
 mod procreg;
 mod runtime;
+mod sizecache;
 mod updater;
 mod versions;
 mod window;
@@ -124,6 +125,8 @@ pub fn run() {
             commands::set_use_official_home,
             commands::get_official_home,
             commands::scan_version_size,
+            commands::scan_all_sizes,
+            commands::scan_version_size_streaming,
             commands::run_maintenance,
             commands::set_auto_maintenance,
             commands::scan_isolated_size,

@@ -1474,7 +1474,7 @@ fn cmd_info(version: &str, json: bool) -> i32 {
     let Some(info) = list.iter().find(|v| v.version == version) else {
         return info_fail(json, &format!("版本 {} 未安装", version));
     };
-    let size = versions::version_size_detail(&ctx.dirs.versions, version);
+    let size = cached_version_size(&ctx, version);
     // 非隔离时 DSH_HOME 可能是共享 home 或官方 ~/.dsh，界面/脚本都需要看到实际值
     let home = crate::commands::resolve_home(&ctx.cfg, &ctx.dirs, version);
 
@@ -1515,6 +1515,31 @@ fn cmd_info(version: &str, json: bool) -> i32 {
         );
     }
     0
+}
+
+/// v0.2.13：占用扫描走缓存（与 GUI 同口径）。命中直接返回，未命中现扫并写缓存。
+fn cached_version_size(ctx: &Ctx, version: &str) -> versions::SizeInfo {
+    let list = versions::list(
+        &ctx.dirs.versions,
+        ctx.cfg.default_version.as_deref(),
+        &ctx.cfg.isolated_versions,
+    );
+    let mut vms: Vec<(String, u64)> = Vec::new();
+    for it in &list {
+        let p = ctx.dirs.versions.join(&it.version);
+        vms.push((it.version.clone(), crate::sizecache::dir_mtime(&p)));
+    }
+    let fp = crate::sizecache::fingerprint(&vms, crate::sizecache::dir_mtime(&ctx.dirs.store));
+    if let Some(map) = crate::sizecache::load(&ctx.dirs.root, &fp) {
+        if let Some(hit) = map.get(version) {
+            return hit.clone();
+        }
+    }
+    let info = versions::version_size_detail(&ctx.dirs.versions, version);
+    let mut map = crate::sizecache::load(&ctx.dirs.root, &fp).unwrap_or_default();
+    map.insert(version.to_string(), info.clone());
+    let _ = crate::sizecache::save(&ctx.dirs.root, &fp, &map);
+    info
 }
 
 fn info_fail(json: bool, msg: &str) -> i32 {

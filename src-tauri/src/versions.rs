@@ -1,4 +1,4 @@
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::path::Path;
 use std::process::Command;
 
@@ -733,7 +733,7 @@ pub fn dir_size(path: &Path) -> u64 {
 }
 
 /// 版本占用的详细信息：逻辑总量 + 与 pnpm store 共享（硬链接）的部分。
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SizeInfo {
     /// 逻辑总大小（所有文件按自身大小累加，硬链接会重复计）
     pub total: u64,
@@ -779,13 +779,27 @@ fn file_nlink(_path: &Path) -> u32 {
     1
 }
 
+/// 进度回调：参数为（已完成文件数, 总文件数）。每 200 个文件触发一次。
+pub type ScanProgress = dyn Fn(u64, u64) + Send + Sync;
+
 /// 递归统计目录：总量 + 共享(硬链接)部分。用于"占用大小"展示复用情况。
 fn dir_size_detail(path: &Path, acc: &mut SizeInfo) {
+    dir_size_detail_with_progress(path, acc, None, &mut 0);
+}
+
+/// 递归统计目录（带进度回调）。on_progress 为 None 时不回调。
+/// done 为跨文件累加的已完成数（含子目录）；每 PROGRESS_EVERY 个文件回调一次。
+fn dir_size_detail_with_progress(
+    path: &Path,
+    acc: &mut SizeInfo,
+    on_progress: Option<&ScanProgress>,
+    done: &mut u64,
+) {
     if let Ok(entries) = std::fs::read_dir(path) {
         for entry in entries.flatten() {
             let p = entry.path();
             if p.is_dir() {
-                dir_size_detail(&p, acc);
+                dir_size_detail_with_progress(&p, acc, on_progress, done);
             } else if let Ok(meta) = entry.metadata() {
                 let len = meta.len();
                 acc.total += len;
@@ -793,9 +807,65 @@ fn dir_size_detail(path: &Path, acc: &mut SizeInfo) {
                     acc.shared_size += len;
                     acc.shared_count += 1;
                 }
+                *done += 1;
+                if let Some(cb) = on_progress {
+                    if (*done).is_multiple_of(PROGRESS_EVERY) {
+                        cb(*done, 0);
+                    }
+                }
             }
         }
     }
+}
+
+/// 进度回调间隔（每多少个文件回调一次）。
+const PROGRESS_EVERY: u64 = 200;
+
+/// 第一段：只读目录项 size，不 open 文件，快速出总量。
+/// 返回 (总字节数, 文件数)。文件数用于第二段算进度百分比。
+pub fn version_size_total(versions_dir: &Path, version: &str) -> (u64, u64) {
+    let mut bytes = 0u64;
+    let mut count = 0u64;
+    dir_size_count(&versions_dir.join(version), &mut bytes, &mut count);
+    (bytes, count)
+}
+
+/// 递归统计目录：总字节数 + 文件数。不 open 文件。
+fn dir_size_count(path: &Path, bytes: &mut u64, count: &mut u64) {
+    if let Ok(entries) = std::fs::read_dir(path) {
+        for entry in entries.flatten() {
+            let p = entry.path();
+            if p.is_dir() {
+                dir_size_count(&p, bytes, count);
+            } else if let Ok(meta) = entry.metadata() {
+                *bytes += meta.len();
+                *count += 1;
+            }
+        }
+    }
+}
+
+/// 第二段：逐文件读 nlink（带进度回调），返回完整占用详情。
+pub fn version_size_detail_with_progress(
+    versions_dir: &Path,
+    version: &str,
+    on_progress: &ScanProgress,
+) -> SizeInfo {
+    let mut info = SizeInfo {
+        total: 0,
+        shared_size: 0,
+        shared_count: 0,
+        exclusive_size: 0,
+    };
+    let mut done = 0u64;
+    dir_size_detail_with_progress(
+        &versions_dir.join(version),
+        &mut info,
+        Some(on_progress),
+        &mut done,
+    );
+    info.exclusive_size = info.total.saturating_sub(info.shared_size);
+    info
 }
 
 /// 整个版本目录的占用详情（含共享/独占）。用于"扫描占用"。

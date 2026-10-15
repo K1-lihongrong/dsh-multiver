@@ -6,7 +6,7 @@
 use crate::config::{Config, Dirs};
 use crate::logging;
 use crate::window;
-use crate::{actions, cli, config, envcheck, launcher, maintenance, runtime, versions};
+use crate::{actions, cli, config, envcheck, launcher, maintenance, runtime, sizecache, versions};
 use crate::{lock_procs, manager_dir, ProcMap, NEXT_GEN};
 use serde::Serialize;
 use std::path::{Path, PathBuf};
@@ -972,6 +972,7 @@ pub(crate) fn get_official_home() -> Option<String> {
 }
 
 /// 扫描整个版本目录的占用（含依赖 + 隔离 home），返回总量 + 共享/独占详情。
+/// v0.2.13：先查缓存，命中直接返回；未命中现扫并写缓存。
 #[tauri::command]
 pub(crate) async fn scan_version_size(
     app: tauri::AppHandle,
@@ -979,15 +980,270 @@ pub(crate) async fn scan_version_size(
 ) -> Result<versions::SizeInfo, String> {
     let mdir = manager_dir(&app);
     let cfg = Config::load(&mdir);
-    let dirs = Dirs::new(cfg.resolve_root(&mdir));
+    let root = cfg.resolve_root(&mdir);
+    let dirs = Dirs::new(root.clone());
     let versions_dir = dirs.versions.clone();
+    let store = dirs.store.clone();
     let v = version.clone();
     let info = tauri::async_runtime::spawn_blocking(move || {
-        versions::version_size_detail(&versions_dir, &v)
+        // 指纹：当前版本列表 + store mtime
+        let list = versions::list(
+            &versions_dir,
+            cfg.default_version.as_deref(),
+            &cfg.isolated_versions,
+        );
+        let mut vms: Vec<(String, u64)> = Vec::new();
+        for it in &list {
+            let p = versions_dir.join(&it.version);
+            vms.push((it.version.clone(), sizecache::dir_mtime(&p)));
+        }
+        let fp = sizecache::fingerprint(&vms, sizecache::dir_mtime(&store));
+        if let Some(map) = sizecache::load(&root, &fp) {
+            if let Some(hit) = map.get(&v) {
+                return hit.clone();
+            }
+        }
+        let info = versions::version_size_detail(&versions_dir, &v);
+        // 写缓存：先读现有（同指纹），合并该版本结果
+        let mut map = sizecache::load(&root, &fp).unwrap_or_default();
+        map.insert(v.clone(), info.clone());
+        let _ = sizecache::save(&root, &fp, &map);
+        info
     })
     .await
     .map_err(|e| format!("扫描失败: {}", e))?;
     Ok(info)
+}
+
+/// v0.2.13：扫描全部已安装版本的占用（两段式 + 进度事件）。
+/// 不返回结果；进度与结果通过事件 "scan-size-progress" 推送。
+#[tauri::command]
+pub(crate) async fn scan_all_sizes(app: tauri::AppHandle) -> Result<(), String> {
+    use tauri::Emitter;
+    let mdir = manager_dir(&app);
+    let cfg = Config::load(&mdir);
+    let root = cfg.resolve_root(&mdir);
+    let dirs = Dirs::new(root.clone());
+    let versions_dir = dirs.versions.clone();
+    let store = dirs.store.clone();
+    let default_version = cfg.default_version.clone();
+    let isolated = cfg.isolated_versions.clone();
+    let app2 = app.clone();
+
+    tauri::async_runtime::spawn_blocking(move || {
+        let list = versions::list(&versions_dir, default_version.as_deref(), &isolated);
+        let names: Vec<String> = list.iter().map(|it| it.version.clone()).collect();
+        let total = names.len();
+
+        // 指纹
+        let mut vms: Vec<(String, u64)> = Vec::new();
+        for n in &names {
+            let p = versions_dir.join(n);
+            vms.push((n.clone(), sizecache::dir_mtime(&p)));
+        }
+        let fp = sizecache::fingerprint(&vms, sizecache::dir_mtime(&store));
+
+        // 加载缓存（指纹一致才有效）。逐版本查：命中即用，缺的才扫。
+        let cached = sizecache::load(&root, &fp).unwrap_or_default();
+
+        // 第一段：秒出总量 + 文件数。已缓存的版本直接出完整结果，不再进第二段。
+        let mut need_scan: Vec<String> = Vec::new();
+        for (i, n) in names.iter().enumerate() {
+            if let Some(hit) = cached.get(n) {
+                // 命中：直接推完整结果（秒开）
+                let _ = app2.emit(
+                    "scan-size-progress",
+                    serde_json::json!({
+                        "version": n,
+                        "stage": "detail",
+                        "index": i + 1,
+                        "total": total,
+                        "done": 0,
+                        "fileTotal": 0,
+                        "info": hit,
+                    }),
+                );
+                continue;
+            }
+            let (bytes, file_count) = versions::version_size_total(&versions_dir, n);
+            let info = versions::SizeInfo {
+                total: bytes,
+                shared_size: 0,
+                shared_count: 0,
+                exclusive_size: bytes,
+            };
+            let _ = app2.emit(
+                "scan-size-progress",
+                serde_json::json!({
+                    "version": n,
+                    "stage": "total",
+                    "index": i + 1,
+                    "total": total,
+                    "done": 0,
+                    "fileTotal": file_count,
+                    "info": info,
+                }),
+            );
+            need_scan.push(n.clone());
+        }
+
+        // 第二段：只扫未命中缓存的版本，逐文件补精确
+        let mut result = cached;
+        for (i, n) in names.iter().enumerate() {
+            if !need_scan.contains(n) {
+                continue;
+            }
+            let app3 = app2.clone();
+            let vname = n.clone();
+            let idx = i + 1;
+            // 文件总数（第一段已数过）
+            let (_, file_total) = versions::version_size_total(&versions_dir, n);
+            let cb = move |done: u64, _tot: u64| {
+                let _ = app3.emit(
+                    "scan-size-progress",
+                    serde_json::json!({
+                        "version": vname,
+                        "stage": "detail",
+                        "index": idx,
+                        "total": total,
+                        "done": done,
+                        "fileTotal": file_total,
+                        "info": serde_json::Value::Null,
+                    }),
+                );
+            };
+            let info = versions::version_size_detail_with_progress(&versions_dir, n, &cb);
+            let _ = app2.emit(
+                "scan-size-progress",
+                serde_json::json!({
+                    "version": n,
+                    "stage": "detail",
+                    "index": idx,
+                    "total": total,
+                    "done": file_total,
+                    "fileTotal": file_total,
+                    "info": info,
+                }),
+            );
+            result.insert(n.clone(), info);
+        }
+        let _ = sizecache::save(&root, &fp, &result);
+    })
+    .await
+    .map_err(|e| format!("扫描失败: {}", e))?;
+    Ok(())
+}
+
+/// v0.2.13：单版本扫描（两段式 + 进度事件）。
+/// 先 emit 总量（stage="total"），再逐文件补精确（stage="detail"），扫完 emit 完整 info。
+/// 命令本身不返回结果；前端靠事件更新。命中缓存则直接 emit 结果。
+#[tauri::command]
+pub(crate) async fn scan_version_size_streaming(
+    app: tauri::AppHandle,
+    version: String,
+) -> Result<(), String> {
+    use tauri::Emitter;
+    let mdir = manager_dir(&app);
+    let cfg = Config::load(&mdir);
+    let root = cfg.resolve_root(&mdir);
+    let dirs = Dirs::new(root.clone());
+    let versions_dir = dirs.versions.clone();
+    let store = dirs.store.clone();
+    let v = version.clone();
+    let app2 = app.clone();
+
+    tauri::async_runtime::spawn_blocking(move || {
+        // 指纹
+        let list = versions::list(
+            &versions_dir,
+            cfg.default_version.as_deref(),
+            &cfg.isolated_versions,
+        );
+        let mut vms: Vec<(String, u64)> = Vec::new();
+        for it in &list {
+            let p = versions_dir.join(&it.version);
+            vms.push((it.version.clone(), sizecache::dir_mtime(&p)));
+        }
+        let fp = sizecache::fingerprint(&vms, sizecache::dir_mtime(&store));
+
+        // 缓存命中：直接推结果
+        if let Some(map) = sizecache::load(&root, &fp) {
+            if let Some(hit) = map.get(&v) {
+                let _ = app2.emit(
+                    "scan-size-progress",
+                    serde_json::json!({
+                        "version": &v,
+                        "stage": "detail",
+                        "index": 1,
+                        "total": 1,
+                        "done": 0,
+                        "fileTotal": 0,
+                        "info": hit,
+                    }),
+                );
+                return;
+            }
+        }
+
+        // 第一段：总量 + 文件数
+        let (bytes, file_count) = versions::version_size_total(&versions_dir, &v);
+        let first = versions::SizeInfo {
+            total: bytes,
+            shared_size: 0,
+            shared_count: 0,
+            exclusive_size: bytes,
+        };
+        let _ = app2.emit(
+            "scan-size-progress",
+            serde_json::json!({
+                "version": &v,
+                "stage": "total",
+                "index": 1,
+                "total": 1,
+                "done": 0,
+                "fileTotal": file_count,
+                "info": first,
+            }),
+        );
+
+        // 第二段：逐文件补精确
+        let app3 = app2.clone();
+        let vname = v.clone();
+        let cb = move |done: u64, _tot: u64| {
+            let _ = app3.emit(
+                "scan-size-progress",
+                serde_json::json!({
+                    "version": vname,
+                    "stage": "detail",
+                    "index": 1,
+                    "total": 1,
+                    "done": done,
+                    "fileTotal": file_count,
+                    "info": serde_json::Value::Null,
+                }),
+            );
+        };
+        let info = versions::version_size_detail_with_progress(&versions_dir, &v, &cb);
+        let _ = app2.emit(
+            "scan-size-progress",
+            serde_json::json!({
+                "version": &v,
+                "stage": "detail",
+                "index": 1,
+                "total": 1,
+                "done": file_count,
+                "fileTotal": file_count,
+                "info": info,
+            }),
+        );
+        // 写缓存
+        let mut map = sizecache::load(&root, &fp).unwrap_or_default();
+        map.insert(v.clone(), info);
+        let _ = sizecache::save(&root, &fp, &map);
+    })
+    .await
+    .map_err(|e| format!("扫描失败: {}", e))?;
+    Ok(())
 }
 
 #[tauri::command]
