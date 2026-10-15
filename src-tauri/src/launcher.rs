@@ -295,6 +295,40 @@ pub(crate) fn diagnose(err_text: &str) -> Option<&'static str> {
     if t.contains("EACCES") || t.contains("EPERM") {
         return Some("权限不足。请把数据根目录改到一个有写权限的位置，或以管理员身份运行。");
     }
+    // 7. profile 已存在（初始化冲突）—— dsh 源码 profile-boot
+    if t.contains("already exists") && t.contains("profile") {
+        return Some(
+            "该 profile 已存在（可能之前初始化过）。可换个未用过的 profile 名，\
+或去掉 --from-default-profile 直接使用现有 profile。",
+        );
+    }
+    // 8. desktop profile 由 Electron 应用独占 —— dsh 源码 bin.js
+    if t.contains("managed exclusively by the Electron application") {
+        return Some(
+            "desktop profile 由桌面应用独占，命令行不能直接引导。\
+请改用 web 或 tui profile。",
+        );
+    }
+    // 9. 插件版本与 DSH 运行时不兼容 —— dsh 源码 plugin
+    if t.contains("allow-version") && t.contains("accept-risk") {
+        return Some(
+            "插件版本与当前 DSH 运行时不兼容。若确认风险可接受，\
+按提示运行 dsh plugin ... allow-version <包>@<版本> --accept-risk；否则换装兼容版本。",
+        );
+    }
+    // 10. git 源插件 build 被 pnpm 拦截 —— dsh 源码 plugin
+    if t.contains("prepare script, which pnpm blocks") {
+        return Some(
+            "该 git 插件安装时需构建（prepare 脚本），被 pnpm 默认拦截。\
+请把 pnpm 提示的 key 加到该 profile 的 pnpm-workspace.yaml 的 allowBuilds 下，再重试。",
+        );
+    }
+    // 11. 缺 profile 参数 —— dsh 源码 bin.js
+    if t.contains("--profile <name> is required") {
+        return Some(
+            "启动时缺少 profile 参数。请指定要引导的 profile，如 dsh web 或 dsh --profile web。",
+        );
+    }
     None
 }
 
@@ -891,13 +925,25 @@ mod tests {
 
     #[test]
     fn diagnose_matches_all_known_patterns() {
-        // 6 类模式各命中一次
+        // 11 类模式各命中一次
         assert!(diagnose("cannot resolve profile bundle \"@a/b\"").is_some());
         assert!(diagnose("TypeError: import.meta.main is undefined").is_some());
         assert!(diagnose("Error: listen EADDRINUSE :::9323").is_some());
         assert!(diagnose("Error: connect ETIMEDOUT 1.2.3.4:443").is_some());
         assert!(diagnose("Error: ENOSPC: no space left on device").is_some());
         assert!(diagnose("Error: EACCES: permission denied").is_some());
+        // 新增 5 条（dsh 源码调研）
+        assert!(diagnose("dsh: profile \"web\" already exists at /x").is_some());
+        assert!(diagnose(
+            "error: profile \"desktop\" is managed exclusively by the Electron application"
+        )
+        .is_some());
+        assert!(diagnose("dsh: to accept the risk, run: dsh plugin --profile web allow-version x@1 --accept-risk").is_some());
+        assert!(diagnose(
+            "dsh: git-hosted plugins build on install via their prepare script, which pnpm blocks"
+        )
+        .is_some());
+        assert!(diagnose("error: --profile <name> is required").is_some());
     }
 
     #[test]
