@@ -1046,6 +1046,31 @@ pub(crate) async fn scan_all_sizes(app: tauri::AppHandle) -> Result<(), String> 
         // 加载缓存（指纹一致才有效）。逐版本查：命中即用，缺的才扫。
         let cached = sizecache::load(&root, &fp).unwrap_or_default();
 
+        // 全部命中缓存：先发"复用"提示，再逐版本带节奏地推出（每个间隔 80ms）。
+        // 让用户看到"逐个出现"的过程，而非同帧刷完。
+        let all_cached = !names.is_empty() && names.iter().all(|n| cached.contains_key(n));
+        if all_cached {
+            let _ = app2.emit("scan-size-progress", serde_json::json!({ "reused": true }));
+            for (i, n) in names.iter().enumerate() {
+                if let Some(hit) = cached.get(n) {
+                    let _ = app2.emit(
+                        "scan-size-progress",
+                        serde_json::json!({
+                            "version": n,
+                            "stage": "detail",
+                            "index": i + 1,
+                            "total": total,
+                            "done": 0,
+                            "fileTotal": 0,
+                            "info": hit,
+                        }),
+                    );
+                }
+                std::thread::sleep(std::time::Duration::from_millis(80));
+            }
+            return;
+        }
+
         // 第一段：秒出总量 + 文件数。已缓存的版本直接出完整结果，不再进第二段。
         let mut need_scan: Vec<String> = Vec::new();
         for (i, n) in names.iter().enumerate() {

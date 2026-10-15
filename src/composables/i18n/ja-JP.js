@@ -100,6 +100,7 @@ export default {
     "installed.scanAll": "すべての使用量をスキャン",
     "installed.scanningAll": "スキャン中…",
     "installed.scanProgress": "バージョン {i}/{n} をスキャン中（{v}）",
+    "installed.scanReused": "前回のスキャン結果を再利用しました",
     "installed.isolateTip": "分離を有効化（このバージョン専用のデータディレクトリ）",
     "installed.starting": "DSH {v} を起動中です。しばらくお待ちください...",
     "installed.uninstallTitle": "バージョンのアンインストール",

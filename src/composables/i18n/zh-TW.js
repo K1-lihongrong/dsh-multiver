@@ -100,6 +100,7 @@ export default {
     "installed.scanAll": "掃描全部佔用",
     "installed.scanningAll": "掃描全部…",
     "installed.scanProgress": "正在掃描第 {i}/{n} 個版本（{v}）",
+    "installed.scanReused": "已复用上次掃描結果",
     "installed.isolateTip": "開啟隔離（該版本使用獨立資料目錄）",
     "installed.starting": "正在啟動 DSH {v}，請稍候...",
     "installed.uninstallTitle": "解除安裝版本",

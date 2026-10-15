@@ -18,7 +18,7 @@ const emit = defineEmits(["refresh", "open-url"]);
 
 const { notify } = useToast();
 const { warnSharedHomeEnabled } = useSharedHomeWarn();
-const { verSizes, scanning, scanningVer, progress, scanAll, scanOne, flashVersions } = useSizeScan();
+const { verSizes, scanning, scanningVer, progress, reused, scanAll, scanOne, flashVersions } = useSizeScan();
 
 /// 版本级进度百分比（0-100）
 const verPercent = (p) => (p && p.total ? Math.round((p.index / p.total) * 100) : 0);
@@ -196,6 +196,10 @@ function toggleInstalledNote(v) {
       <div class="scan-bar scan-bar-file"><div class="scan-bar-fill file" :style="{ width: filePercent(progress) + '%' }"></div></div>
     </div>
 
+    <transition name="reused-fade">
+      <div class="reused-hint" v-if="reused">{{ t("installed.scanReused") }}</div>
+    </transition>
+
     <div v-if="!installed.length" class="empty">
       {{ t("installed.empty") }}
     </div>
@@ -327,5 +331,13 @@ function toggleInstalledNote(v) {
   100% { background: transparent; }
 }
 .ver-item.item-flash { animation: scan-flash .6s ease-out; }
+
+/* 全部命中缓存时的"已复用"提示 */
+.reused-hint {
+  font-size: 12px; color: var(--accent); padding: 2px 0 8px;
+}
+.reused-fade-enter-active, .reused-fade-leave-active { transition: opacity .3s ease; }
+.reused-fade-enter-from, .reused-fade-leave-to { opacity: 0; }
+
 /* .btn / .badge 等公共样式见 src/styles/common.css（main.js 引入），此处不再重复 */
 </style>

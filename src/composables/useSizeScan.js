@@ -34,14 +34,23 @@ export function useSizeScan() {
   const scanning = ref(false); // 是否正在"扫描全部"
   const scanningVer = ref(null); // 正在扫描的单版本
   const progress = ref(null);  // { version, index, total, done, fileTotal }
+  const reused = ref(false);   // 是否刚发生"全部命中缓存"
 
   let unlisten = null;
+  let reusedTimer = null;
 
   async function ensureListener() {
     if (unlisten) return;
     unlisten = await listen("scan-size-progress", (e) => {
       const p = e.payload;
       if (!p) return;
+      // 全部命中缓存：显示"已复用上次扫描"提示（2s 后渐隐）
+      if (p.reused) {
+        reused.value = true;
+        if (reusedTimer) clearTimeout(reusedTimer);
+        reusedTimer = setTimeout(() => { reused.value = false; }, 2000);
+        return;
+      }
       // 该版本扫完（带完整 info）：写结果 + 闪烁
       if (p.info) {
         verSizes.value = { ...verSizes.value, [p.version]: p.info };
@@ -86,5 +95,5 @@ export function useSizeScan() {
     if (unlisten) { unlisten(); unlisten = null; }
   });
 
-  return { verSizes, scanning, scanningVer, progress, scanAll, scanOne, flashVersions };
+  return { verSizes, scanning, scanningVer, progress, reused, scanAll, scanOne, flashVersions };
 }

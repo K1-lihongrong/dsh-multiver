@@ -100,6 +100,7 @@ export default {
     "installed.scanAll": "Scan all sizes",
     "installed.scanningAll": "Scanning all…",
     "installed.scanProgress": "Scanning version {i}/{n} ({v})",
+    "installed.scanReused": "Reused last scan result",
     "installed.isolateTip": "Isolate (this version gets its own data directory)",
     "installed.starting": "Starting DSH {v}, please wait...",
     "installed.uninstallTitle": "Uninstall version",
