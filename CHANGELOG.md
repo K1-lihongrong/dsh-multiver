@@ -15,6 +15,11 @@
 - **CI 加 lint 门禁**：`ci.yml` 增 `cargo clippy -- -D warnings` + `cargo fmt --check`。
 - **`useI18n.js` 拆分**：958 → 91 行；4 语言词条拆到 `src/composables/i18n/*.js`（词条逐条核对一致，4 语言渲染验证通过）。
 
+### 增强
+- **故障报错解析增强（GAP-015）**：dsh 启动失败时，识别已知故障模式并在错误提示末尾追加「诊断建议」：
+  profile bundle 缺失（共享 home 不兼容）/ Node 版本过低 / 端口占用 / 网络不通 / 磁盘满 / 权限不足。
+  纯函数 `launcher::diagnose`，新增 4 个单测覆盖。
+
 ---
 
 ## [0.2.11] - 2026-10-14

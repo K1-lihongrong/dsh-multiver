@@ -221,6 +221,7 @@ pub fn spawn_web_hidden(
 
 /// 从会话日志里提取最近的 `[err]` 行（dsh 启动失败时的真实错误），用于拼进错误提示。
 /// 只取末尾最多 `max_lines` 行、总长不超过 ~800 字符，避免提示过长。
+/// 若识别出已知故障模式，会在末尾追加「诊断建议」（见 `diagnose`）。
 pub(crate) fn read_recent_errors(session_path: &Path, max_lines: usize) -> String {
     let content = match std::fs::read_to_string(session_path) {
         Ok(c) => c,
@@ -240,7 +241,57 @@ pub(crate) fn read_recent_errors(session_path: &Path, max_lines: usize) -> Strin
     if joined.chars().count() > 800 {
         joined = joined.chars().take(800).collect::<String>() + " …";
     }
+    if let Some(advice) = diagnose(&joined) {
+        joined.push_str("\n\n【诊断建议】");
+        joined.push_str(advice);
+    }
     joined
+}
+
+/// 识别 dsh 启动失败日志里的**已知故障模式**，返回可操作建议。
+/// 纯函数（无 IO），便于单测。识别不到返回 `None`。
+///
+/// 返回的字符串**不含**「诊断建议」前缀，由调用方拼接。
+pub(crate) fn diagnose(err_text: &str) -> Option<&'static str> {
+    let t = err_text;
+    // 1. profile bundle 缺失：共享 home 的 profile 要求某版本没有的插件
+    if t.contains("cannot resolve profile bundle") {
+        return Some(
+            "该版本与共享 home 的 profile 不兼容（共享 home 里配置了此版本没有的插件）。\
+建议：给该版本开启「数据隔离」，使用独立 home；或在该版本下重装所需插件。",
+        );
+    }
+    // 2. Node 版本过低：dsh 依赖 import.meta.main，旧版 22.x 不支持
+    //    （表现为无输出 / exit 0；此处以显式文本为准）
+    if t.contains("import.meta.main") {
+        return Some(
+            "当前 Node 版本过低。dsh 需要 Node.js 22.19+ 或 24+，\
+请升级 Node 后重试（可在环境检查里查看详情）。",
+        );
+    }
+    // 3. 端口占用
+    if t.contains("EADDRINUSE") {
+        return Some("端口被占用。可稍后重试，或关闭占用该端口的程序。");
+    }
+    // 4. 网络 / registry 不通
+    if t.contains("ETIMEDOUT")
+        || t.contains("ENOTFOUND")
+        || t.contains("ECONNREFUSED")
+        || t.contains("fetch failed")
+    {
+        return Some(
+            "网络或 npm 源不可达。请检查网络/代理；安装时可在弹窗里换一个 npm 源（如阿里云 npmmirror）重试。",
+        );
+    }
+    // 5. 磁盘满
+    if t.contains("ENOSPC") {
+        return Some("磁盘空间不足。请清理磁盘后重试。");
+    }
+    // 6. 权限不足
+    if t.contains("EACCES") || t.contains("EPERM") {
+        return Some("权限不足。请把数据根目录改到一个有写权限的位置，或以管理员身份运行。");
+    }
+    None
 }
 
 /// 在日志目录里找该版本**最新**的会话日志，提取其 `[err]` 行。
@@ -804,5 +855,50 @@ mod tests {
         let p = tmp_session("[out] dsh web: http://x\n");
         assert_eq!(read_recent_errors(&p, 6), "");
         let _ = std::fs::remove_file(&p);
+    }
+
+    #[test]
+    fn read_recent_errors_appends_diagnosis_on_known_pattern() {
+        // GAP-015：识别 profile bundle 缺失并追加诊断建议
+        let p = tmp_session(
+            "[err] Error: dsh: cannot resolve profile bundle \"@x/y\" from the dsh installation\n",
+        );
+        let got = read_recent_errors(&p, 6);
+        assert!(got.contains("cannot resolve profile bundle"), "got={}", got);
+        assert!(got.contains("【诊断建议】"), "应追加诊断建议: {}", got);
+        assert!(got.contains("数据隔离"), "建议应提到数据隔离: {}", got);
+        let _ = std::fs::remove_file(&p);
+    }
+
+    #[test]
+    fn read_recent_errors_no_diagnosis_on_unknown_pattern() {
+        let p = tmp_session("[err] some totally unknown failure xyz\n");
+        let got = read_recent_errors(&p, 6);
+        assert!(got.contains("unknown failure"), "got={}", got);
+        assert!(
+            !got.contains("【诊断建议】"),
+            "未知错误不应追加建议: {}",
+            got
+        );
+        let _ = std::fs::remove_file(&p);
+    }
+
+    // ── diagnose：已知故障模式识别 ──
+
+    #[test]
+    fn diagnose_matches_all_known_patterns() {
+        // 6 类模式各命中一次
+        assert!(diagnose("cannot resolve profile bundle \"@a/b\"").is_some());
+        assert!(diagnose("TypeError: import.meta.main is undefined").is_some());
+        assert!(diagnose("Error: listen EADDRINUSE :::9323").is_some());
+        assert!(diagnose("Error: connect ETIMEDOUT 1.2.3.4:443").is_some());
+        assert!(diagnose("Error: ENOSPC: no space left on device").is_some());
+        assert!(diagnose("Error: EACCES: permission denied").is_some());
+    }
+
+    #[test]
+    fn diagnose_returns_none_for_unknown() {
+        assert!(diagnose("").is_none());
+        assert!(diagnose("some random error").is_none());
     }
 }
