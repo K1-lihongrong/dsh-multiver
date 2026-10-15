@@ -235,13 +235,17 @@ pub(crate) fn read_recent_errors(session_path: &Path, max_lines: usize) -> Strin
     if errs.is_empty() {
         return String::new();
     }
-    // 取末尾 max_lines 行
+    // 诊断用**完整**错误文本（诊断关键词可能出现在早于末尾 max_lines 的行，
+    // 如 profile bundle 错误在栈顶、末尾只是调用栈）。先算，再截断显示。
+    let full_text = errs.join("\n");
+    let advice = diagnose(&full_text);
+    // 取末尾 max_lines 行用于显示
     let start = errs.len().saturating_sub(max_lines);
     let mut joined = errs[start..].join("\n");
     if joined.chars().count() > 800 {
         joined = joined.chars().take(800).collect::<String>() + " …";
     }
-    if let Some(advice) = diagnose(&joined) {
+    if let Some(advice) = advice {
         joined.push_str("\n\n【诊断建议】");
         joined.push_str(advice);
     }
@@ -900,5 +904,30 @@ mod tests {
     fn diagnose_returns_none_for_unknown() {
         assert!(diagnose("").is_none());
         assert!(diagnose("some random error").is_none());
+    }
+
+    #[test]
+    fn read_recent_errors_diagnoses_when_keyword_before_last_lines() {
+        // 关键词在栈顶（早于末尾 max_lines 行），末尾只是调用栈。
+        // 诊断应用完整文本，不能被 max_lines 截断掉关键词。
+        let content = "\
+[err] Error: dsh: cannot resolve profile bundle \"@a/b\" from the dsh installation\n\
+[err]     at resolveBundleDir (x.js:1)\n\
+[err]     at loadProfileDirectory (x.js:2)\n\
+[err]     at loadProfile (x.js:3)\n\
+[err]     at prepareProfile (x.js:4)\n\
+[err]     at composeProfile (x.js:5)\n\
+[err]     at runProfile (x.js:6)\n\
+[err]     at async runCli (x.js:7)\n";
+        let p = tmp_session(content);
+        // 只显示末尾 3 行，但诊断应命中（关键词在第 1 行）
+        let got = read_recent_errors(&p, 3);
+        assert!(
+            !got.contains("cannot resolve"),
+            "显示应只末尾 3 行: {}",
+            got
+        );
+        assert!(got.contains("【诊断建议】"), "诊断应命中完整文本: {}", got);
+        let _ = std::fs::remove_file(&p);
     }
 }
