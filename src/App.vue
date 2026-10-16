@@ -26,8 +26,13 @@ const runtimeDismissed = ref(false);   // 本次会话内已忽略
 const guideOpen = ref(false);          // 「去官网安装」综合说明对话框
 
 async function refresh() {
-  state.value = await invoke("get_state");
-  installed.value = await invoke("list_installed");
+  // 两个 invoke 相互独立 → 并行，省一次往返
+  const [s, inst] = await Promise.all([
+    invoke("get_state"),
+    invoke("list_installed"),
+  ]);
+  state.value = s;
+  installed.value = inst;
 }
 
 /// 调 EnvCheck 组件跑一次环境检查（安装前用），返回是否通过。
@@ -95,29 +100,35 @@ function onUnhandledRejection(e) {
 onMounted(async () => {
   window.addEventListener("error", onWindowError);
   window.addEventListener("unhandledrejection", onUnhandledRejection);
+  const t0 = window.__BOOT_T0 || 0;
   await refresh();
+  const t1 = performance.now();
   unlistenCrash = await listen("launch-crashed", (e) => {
     const p = e.payload || {};
     notify(p.message || t("app.launchCrashed", { v: p.version }));
   });
-  await runEnvCheck();
-  checkRuntime();   // v0.2.9 运行时横幅检测（缺运行时且未忽略才显示）
+  // 环境检查由 <EnvCheck> 自己的 onMounted 触发，这里不再重复调用（否则启动时跑两遍）。
+  // 运行时横幅改由 EnvCheck 的 runtime-status 事件驱动（见 onRuntimeStatus），不再单独调 runtime_status。
   // 更新检查放最后，且不 await 阻塞（网络慢时不影响界面可用）
   checkUpdate();
+  // 启动计时打点（落盘 logs/frontend.log，供排查启动耗时）
+  const boot = performance.now() - t0;
+  const refreshMs = t1 - t0;
+  invoke("log_frontend", {
+    msg: "[boot] 首屏=" + boot.toFixed(0) + "ms (refresh=" + refreshMs.toFixed(0) + "ms)",
+  }).catch(() => {});
 });
 
-/// 检测运行时是否缺失；缺且用户未忽略 → 显示横幅。
-async function checkRuntime() {
-  try {
-    const s = await invoke("runtime_status");
-    const missing =
-      (!s.system_node_ok && !s.bundled_node_ok) ||
-      (!s.system_pnpm_ok && !s.bundled_pnpm_ok);
-    // 用户已在配置里忽略则不显示
-    if (missing && !(state.value && state.value.runtime_prompt_dismissed)) {
-      runtimeNeeds.value = true;
-    }
-  } catch (_) { /* 静默 */ }
+/// 运行时状态（由 EnvCheck 的 runtime-status 事件传入）：缺运行时且用户未忽略 → 显示横幅。
+function onRuntimeStatus(s) {
+  if (!s) return;
+  const missing =
+    (!s.system_node_ok && !s.bundled_node_ok) ||
+    (!s.system_pnpm_ok && !s.bundled_pnpm_ok);
+  // 用户已在配置里忽略则不显示
+  if (missing && !(state.value && state.value.runtime_prompt_dismissed)) {
+    runtimeNeeds.value = true;
+  }
 }
 
 /// 横幅里点「准备便携版」→ 转到环境检查面板的按钮（那里有进度条）。
@@ -189,7 +200,7 @@ onUnmounted(() => {
       </span>
     </div>
 
-    <EnvCheck ref="envCheckRef" @open-url="openUrl" @error="notify" @guide="openGuide" />
+    <EnvCheck ref="envCheckRef" @open-url="openUrl" @error="notify" @guide="openGuide" @runtime-status="onRuntimeStatus" />
 
     <InstalledList
       :installed="installed"

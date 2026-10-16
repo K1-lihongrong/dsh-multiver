@@ -41,6 +41,12 @@ pub(crate) fn lock_procs(procs: &ProcMap) -> std::sync::MutexGuard<'_, ProcMapIn
 /// 全局单调递增的代次计数器（用于区分同名窗口的不同实例）
 pub(crate) static NEXT_GEN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
 
+/// 进程启动时刻（run() 第一行）。用于启动耗时打点（v0.2.13）。
+pub(crate) static PROC_START: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+
+/// 窗口就绪耗时（毫秒）：进程启动 → Tauri setup 进入（含 WebView2 初始化 + 窗口创建）。
+pub(crate) static WIN_READY_MS: std::sync::OnceLock<u128> = std::sync::OnceLock::new();
+
 /// 管理器自身所在目录（config.json 的存放处）
 pub(crate) fn manager_dir(_app: &tauri::AppHandle) -> PathBuf {
     manager_dir_plain()
@@ -61,6 +67,8 @@ pub(crate) fn manager_dir_plain() -> PathBuf {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // 进程启动计时起点（v0.2.13 启动耗时打点）
+    PROC_START.set(std::time::Instant::now()).ok();
     // ── 无头 CLI 模式 ──
     // 带任一 CLI 参数则不初始化 GUI，执行后按退出码退出。
     // 分流必须早于 tauri::Builder，避免白白起一个 GUI 进程。
@@ -124,9 +132,8 @@ pub fn run() {
             commands::set_isolated,
             commands::set_use_official_home,
             commands::get_official_home,
-            commands::scan_version_size,
-            commands::scan_all_sizes,
-            commands::scan_version_size_streaming,
+            commands::scan_versions,
+            commands::cancel_scan,
             commands::run_maintenance,
             commands::set_auto_maintenance,
             commands::scan_isolated_size,
@@ -143,6 +150,10 @@ pub fn run() {
         ])
         .setup(move |app| {
             use tauri::Manager;
+            // 窗口就绪打点：进程启动 → 此处（含 WebView2 初始化 + 窗口创建）
+            if let Some(t) = PROC_START.get() {
+                WIN_READY_MS.set(t.elapsed().as_millis()).ok();
+            }
             // 注册各 AUMID 的任务栏图标（IconUri）。进程级 AUMID 已在 run() 开头设过。
             window::register_aumid_icons();
             // 主窗口（管理器）显式使用管理器自己的图标（exe 内嵌图标 = bundle.icon 的 icon.ico），

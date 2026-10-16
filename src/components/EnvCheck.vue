@@ -6,7 +6,7 @@ import { t } from "../composables/useI18n.js";
 
 // 环境自检面板：自己调 check_env、自己管状态。
 // 父组件通过 ref 调用 run()（安装前检查）；错误经 open-url 事件交给父组件打开链接。
-const emit = defineEmits(["open-url", "error"]);
+const emit = defineEmits(["open-url", "error", "runtime-status"]);
 
 const checks = ref([]);
 const checked = ref(false);
@@ -32,11 +32,14 @@ function needsRuntime() {
 }
 
 /// 运行环境检查，返回是否通过（致命项全 ok）。
-async function run() {
+/// full：是否做 npm 源连通（网络）检查。首次启动 false（快），重查/安装前 true。
+async function run(full = true) {
   loading.value = true;
   try {
-    checks.value = await invoke("check_env");
+    checks.value = await invoke("check_env", { full });
     rtStatus.value = await invoke("runtime_status");
+    // 把运行时状态交给父组件（避免父组件再单独调一次 runtime_status）
+    emit("runtime-status", rtStatus.value);
     checked.value = true;
     passed.value = checks.value.filter((c) => c.critical).every((c) => c.ok);
     return passed.value;
@@ -84,7 +87,7 @@ onMounted(async () => {
     progDone.value = p.done || 0;
     progTotal.value = p.total || null;
   });
-  await run();
+  await run(false); // 首次启动：跳过网络检查，加快首屏
 });
 
 onUnmounted(() => {
@@ -113,7 +116,7 @@ defineExpose({ run, prepareRuntime });
         class="btn small"
         @click="emit('guide')"
       >{{ t("env.installGuide") }}</button>
-      <button class="btn small" @click="run" :disabled="loading">{{ t("env.recheck") }}</button>
+      <button class="btn small" @click="run(true)" :disabled="loading">{{ t("env.recheck") }}</button>
     </div>
     <ul class="env-list" v-if="checks.length">
       <li
