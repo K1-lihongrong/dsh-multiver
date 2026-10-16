@@ -8,4 +8,7 @@ import App from "./App.vue";
 applyStored();
 applyStoredLang();
 
+// 启动计时起点（供 App.vue 打点，落盘到 logs/frontend.log）
+window.__BOOT_T0 = performance.now();
+
 createApp(App).mount("#app");

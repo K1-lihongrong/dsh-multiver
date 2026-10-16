@@ -862,8 +862,8 @@ fn cmd_doctor(json: bool) -> i32 {
                   else { format!("{} 个：{}（可跑 --clean 清理）", orphans.len(), orphans.join(", ")) },
     }));
 
-    // 6) 环境检查（Node / pnpm / 磁盘 / npm 源等）
-    let env_items = crate::envcheck::run_all(&ctx.dirs.root);
+    // 6) 环境检查（Node / pnpm / 磁盘 / npm 源等）—— CLI 为显式命令，跑完整检查
+    let env_items = crate::envcheck::run_all(&ctx.dirs.root, true);
     for it in &env_items {
         if it.critical && !it.ok {
             fatal = true;
@@ -1474,7 +1474,7 @@ fn cmd_info(version: &str, json: bool) -> i32 {
     let Some(info) = list.iter().find(|v| v.version == version) else {
         return info_fail(json, &format!("版本 {} 未安装", version));
     };
-    let size = versions::version_size_detail(&ctx.dirs.versions, version);
+    let size = cached_version_size(&ctx, version);
     // 非隔离时 DSH_HOME 可能是共享 home 或官方 ~/.dsh，界面/脚本都需要看到实际值
     let home = crate::commands::resolve_home(&ctx.cfg, &ctx.dirs, version);
 
@@ -1517,6 +1517,22 @@ fn cmd_info(version: &str, json: bool) -> i32 {
     0
 }
 
+/// v0.2.13：占用扫描走缓存（与 GUI 同口径，版本级）。命中直接返回，未命中现扫并写缓存。
+fn cached_version_size(ctx: &Ctx, version: &str) -> versions::SizeInfo {
+    let store_mtime = crate::sizecache::dir_mtime(&ctx.dirs.store);
+    let dir_mtime = crate::sizecache::dir_mtime(&ctx.dirs.versions.join(version));
+    let mut cache = crate::sizecache::load(&ctx.dirs.root);
+    if crate::sizecache::is_valid(&cache, version, dir_mtime, store_mtime) {
+        if let Some(info) = crate::sizecache::get_info(&cache, version) {
+            return info;
+        }
+    }
+    let info = versions::version_size_detail(&ctx.dirs.versions, version);
+    crate::sizecache::put(&mut cache, version, dir_mtime, store_mtime, info.clone());
+    let _ = crate::sizecache::save(&ctx.dirs.root, &cache);
+    info
+}
+
 fn info_fail(json: bool, msg: &str) -> i32 {
     if json {
         println!(
@@ -1550,7 +1566,7 @@ fn cmd_versions(json: bool) -> i32 {
 /// `--env`：环境检查。有致命项失败 → 退出码 1（便于脚本 if 判断）。
 fn cmd_env(json: bool) -> i32 {
     let ctx = load_ctx();
-    let items = crate::envcheck::run_all(&ctx.dirs.root);
+    let items = crate::envcheck::run_all(&ctx.dirs.root, true);
     let fatal_fail = items.iter().any(|i| i.critical && !i.ok);
     if json {
         println!("{}", json_str(&items));

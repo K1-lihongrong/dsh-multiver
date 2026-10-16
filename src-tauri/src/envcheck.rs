@@ -441,24 +441,29 @@ pub fn check_registry(root: &Path) -> CheckItem {
 /// v0.2.11 性能优化：**并行执行**。
 /// 这些检查主要是**进程启动 + 网络等待**（node --version、pnpm view 等），
 /// 串行约 4.3s，并行后取最慢一项的耗时。结果顺序保持不变。
-pub fn run_all(root: &Path) -> Vec<CheckItem> {
+pub fn run_all(root: &Path, include_registry: bool) -> Vec<CheckItem> {
     std::thread::scope(|s| {
         let h_node = s.spawn(|| check_node(root));
         let h_pnpm = s.spawn(|| check_pnpm(root));
         let h_writable = s.spawn(|| check_writable(root));
         let h_disk = s.spawn(|| check_disk(root));
-        let h_registry = s.spawn(|| check_registry(root));
-        vec![
+        let h_registry = if include_registry {
+            Some(s.spawn(|| check_registry(root)))
+        } else {
+            None
+        };
+        let mut items = vec![
             h_node.join().unwrap_or_else(|_| panic_item("Node.js")),
             h_pnpm.join().unwrap_or_else(|_| panic_item("pnpm")),
             h_writable
                 .join()
                 .unwrap_or_else(|_| panic_item("根目录可写")),
             h_disk.join().unwrap_or_else(|_| panic_item("磁盘空间")),
-            h_registry
-                .join()
-                .unwrap_or_else(|_| panic_item("npm 源连通")),
-        ]
+        ];
+        if let Some(h) = h_registry {
+            items.push(h.join().unwrap_or_else(|_| panic_item("npm 源连通")));
+        }
+        items
     })
 }
 

@@ -4,6 +4,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { ask } from "@tauri-apps/plugin-dialog";
 import { useToast } from "../composables/useToast.js";
 import { useSharedHomeWarn } from "../composables/useSharedHomeWarn.js";
+import { useSizeScan } from "../composables/useSizeScan.js";
 import IsolatedMenu from "./IsolatedMenu.vue";
 import NotesPanel from "./NotesPanel.vue";
 import { t } from "../composables/useI18n.js";
@@ -17,11 +18,21 @@ const emit = defineEmits(["refresh", "open-url"]);
 
 const { notify } = useToast();
 const { warnSharedHomeEnabled } = useSharedHomeWarn();
+const { verSizes, scanning, queue, current, progress, single, cachedSet, fadingOut, runScan, cancelScan, flashVersions } = useSizeScan();
+
+/// 版本级进度百分比（0-100）
+const verPercent = (p) => (p && p.total ? Math.round((p.index / p.total) * 100) : 0);
+/// 文件级进度百分比（0-100）
+const filePercent = (p) => (p && p.fileTotal ? Math.min(100, Math.round((p.done / p.fileTotal) * 100)) : 0);
+/// 该版本是否在待扫队列里（含正在扫的）
+const inQueue = (v) => queue.value.includes(v);
+/// 该版本是否正在扫描
+const isScanningVer = (v) => current.value === v;
+/// 取消中（已请求、尚未停）
+const cancelling = ref(false);
 
 const runningVersion = ref(""); // 正在启动的版本号
 const uninstalling = ref("");   // 正在卸载的版本号
-const scanningVer = ref(null);  // 正在扫描"整版本占用"的版本号
-const verSizes = ref({});       // 版本号 -> { total, shared_size, shared_count, exclusive_size }
 const installedNoteVer = ref(null); // 当前展开更新说明的版本号
 
 // ---- 批量操作 ----
@@ -54,14 +65,21 @@ function fmtSize(bytes) {
   return (bytes / 1024 / 1024 / 1024).toFixed(2) + " GB";
 }
 
-// ---- 单版本操作 ----
+// ---- 扫描操作 ----
+/// 单版本扫描
 async function scanVersionSize(v) {
-  scanningVer.value = v;
-  try {
-    const info = await invoke("scan_version_size", { version: v });
-    verSizes.value = { ...verSizes.value, [v]: info };
-  } catch (e) { notify("" + e); }
-  finally { scanningVer.value = null; }
+  try { await runScan([v]); } catch (e) { notify("" + e); }
+}
+
+/// 扫描全部版本
+async function scanAllSizes() {
+  try { await runScan(props.installed.map((x) => x.version)); } catch (e) { notify("" + e); }
+}
+
+/// 取消扫描
+async function cancelScanNow() {
+  cancelling.value = true;
+  try { await cancelScan(); } finally { cancelling.value = false; }
 }
 
 /// 运行非隔离（共享 home）版本前的提示。返回 false 表示用户取消。
@@ -174,6 +192,31 @@ function toggleInstalledNote(v) {
     <div class="panel-head">
       <h2>{{ t("installed.title") }}</h2>
       <span class="count" v-if="installed.length">{{ installed.length }}</span>
+      <button
+        v-if="installed.length && (!scanning || single)"
+        class="btn small scan-all-btn"
+        @click="scanAllSizes"
+        :disabled="scanning || batchBusy"
+      >{{ t("installed.scanAll") }}</button>
+      <button
+        v-else-if="scanning && !single"
+        class="btn small scan-all-btn cancel"
+        @click="cancelScanNow"
+        :disabled="cancelling"
+      >{{ cancelling ? t("installed.scanCancelling") : t("installed.scanCancel") }}</button>
+    </div>
+
+    <div class="scan-progress-wrap" v-if="scanning && !single && progress">
+      <div class="scan-progress-label">
+        <span>{{ t("installed.scanProgress", { i: progress.index, n: progress.total }) }}</span>
+        <span v-if="progress.stage === 'counting'" class="scan-pct">{{ t("installed.scanCounting") }}</span>
+        <span v-else-if="progress.fileTotal" class="scan-pct">{{ filePercent(progress) }}%</span>
+      </div>
+      <div class="scan-bar"><div class="scan-bar-fill" :style="{ width: verPercent(progress) + '%' }"></div></div>
+      <div class="scan-bar scan-bar-file">
+        <div v-if="progress.stage === 'counting'" class="scan-bar-indeterminate"></div>
+        <div v-else class="scan-bar-fill file" :style="{ width: filePercent(progress) + '%' }"></div>
+      </div>
     </div>
 
     <div v-if="!installed.length" class="empty">
@@ -181,7 +224,13 @@ function toggleInstalledNote(v) {
     </div>
 
     <ul class="ver-list" v-else>
-      <li v-for="v in installed" :key="v.version" class="ver-item" :class="{ 'item-selected': isSelected(v.version) }">
+      <li v-for="v in installed" :key="v.version" class="ver-item"
+        :class="{
+          'item-selected': isSelected(v.version),
+          'item-scanning': isScanningVer(v.version),
+          'item-queued': scanning && inQueue(v.version) && !isScanningVer(v.version),
+          'item-flash': flashVersions.has(v.version),
+        }">
         <input type="checkbox" class="sel-box" :checked="isSelected(v.version)" :disabled="batchBusy" @change="toggleSelect(v.version)" />
         <div class="ver-main">
           <span class="ver-num ver-num-clickable" :title="t('installed.clickNotes')" @click="toggleInstalledNote(v.version)">
@@ -194,8 +243,17 @@ function toggleInstalledNote(v) {
           <span class="ver-meta" v-if="verSizes[v.version] != null">
             {{ t("installed.usage") }} {{ fmtSize(verSizes[v.version].total) }}
             <template v-if="verSizes[v.version].shared_count">
-              ({{ t("installed.reused") }} {{ fmtSize(verSizes[v.version].shared_size) }} / {{ t("installed.exclusive") }} {{ fmtSize(verSizes[v.version].exclusive_size) }})
+              ({{ t("installed.reused") }} {{ fmtSize(verSizes[v.version].shared_size) }} / {{ fmtSize(verSizes[v.version].exclusive_size) }})
             </template>
+          </span>
+          <span class="badge badge-cached" v-if="cachedSet.has(v.version)" :class="{ 'cached-fade': fadingOut }">{{ t("installed.scanCached") }}</span>
+          <!-- 单版本扫描：行内文件级进度条 -->
+          <span class="ver-inline-progress" v-if="isScanningVer(v.version) && progress">
+            <span class="ver-inline-bar">
+              <span v-if="progress.stage === 'counting'" class="scan-bar-indeterminate"></span>
+              <span v-else class="ver-inline-fill" :style="{ width: filePercent(progress) + '%' }"></span>
+            </span>
+            <span class="ver-inline-pct">{{ progress.stage === 'counting' ? t("installed.scanCounting") : filePercent(progress) + '%' }}</span>
           </span>
         </div>
         <div class="ver-actions">
@@ -203,8 +261,8 @@ function toggleInstalledNote(v) {
           <button class="btn" @click="openInBrowser(v.version)" :disabled="isBlocked(v.version)" :title="t('installed.openBrowserTip')">{{ t("installed.openBrowser") }}</button>
           <button class="btn" @click="setDefault(v.version)" :disabled="v.is_default || isBlocked(v.version)">{{ t("installed.setDefault") }}</button>
           <button class="btn" @click="createShortcut(v.version)" :disabled="isBlocked(v.version)" :title="t('installed.shortcutTip')">{{ t("installed.shortcut") }}</button>
-          <button class="btn" @click="scanVersionSize(v.version)" :disabled="scanningVer === v.version || isBlocked(v.version)" :title="t('installed.scanTip')">
-            {{ scanningVer === v.version ? t("installed.scanning") : (verSizes[v.version] != null ? t("installed.rescanSize") : t("installed.scanSize")) }}
+          <button class="btn" @click="scanVersionSize(v.version)" :disabled="scanning || isBlocked(v.version)" :title="t('installed.scanTip')">
+            {{ isScanningVer(v.version) ? t("installed.scanning") : (verSizes[v.version] != null ? t("installed.rescanSize") : t("installed.scanSize")) }}
           </button>
           <IsolatedMenu
             v-if="v.isolated"
@@ -219,7 +277,7 @@ function toggleInstalledNote(v) {
             :disabled="isBlocked(v.version)"
             :title="t('installed.isolateTip')"
           >{{ t("installed.isolate") }}</button>
-          <button class="btn danger" @click="uninstall(v.version)" :disabled="!!uninstalling || batchBusy">{{ uninstalling === v.version ? t("installed.uninstalling") : t("installed.uninstall") }}</button>
+          <button class="btn danger" @click="uninstall(v.version)" :disabled="!!uninstalling || batchBusy || (scanning && inQueue(v.version))">{{ uninstalling === v.version ? t("installed.uninstalling") : t("installed.uninstall") }}</button>
         </div>
         <NotesPanel
           v-if="installedNoteVer === v.version"
@@ -280,5 +338,66 @@ function toggleInstalledNote(v) {
 }
 .batch-select-all { display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--text-3); cursor: pointer; }
 .batch-count { font-size: 13px; color: var(--accent); font-weight: 600; }
+.scan-all-btn { margin-left: auto; }
+.scan-progress-wrap { padding: 6px 0 10px; }
+.scan-progress-label { font-size: 12px; color: var(--text-3); margin-bottom: 5px; display: flex; justify-content: space-between; align-items: center; }
+.scan-pct { color: var(--accent); font-weight: 600; font-variant-numeric: tabular-nums; }
+.scan-bar { height: 6px; background: var(--surface-2); border-radius: 3px; overflow: hidden; margin-bottom: 3px; }
+.scan-bar-file { height: 4px; }
+.scan-bar-fill { height: 100%; background: var(--accent); border-radius: 3px; transition: width .2s ease; }
+.scan-bar-fill.file { background: var(--accent); opacity: .55; }
+
+/* 正在扫描的版本行：呼吸灯边框 */
+@keyframes scan-breathe {
+  0%, 100% { border-color: var(--accent); box-shadow: 0 0 0 0 rgba(79, 110, 247, 0); }
+  50% { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(79, 110, 247, .20); }
+}
+.ver-item.item-scanning { animation: scan-breathe 1.4s ease-in-out infinite; }
+
+/* 刚扫完的版本行：短暂闪烁（背景绿 → 透明） */
+@keyframes scan-flash {
+  0% { background-color: rgba(34, 197, 94, .45); }
+  100% { background-color: rgba(34, 197, 94, 0); }
+}
+.ver-item.item-flash { animation: scan-flash 1.2s ease-out; }
+
+/* 待扫版本：浅灰，表示"在队列里" */
+.ver-item.item-queued { background: var(--surface-2); opacity: .6; }
+
+/* 取消按钮：警示色 */
+.scan-all-btn.cancel { color: var(--danger, #e5484d); border-color: var(--danger, #e5484d); }
+
+/* 不确定进度条（第一段"正在统计"）：左右滑动的光带 */
+.scan-bar-indeterminate {
+  height: 100%; width: 40%;
+  background: linear-gradient(90deg, transparent, var(--accent), transparent);
+  animation: scan-indeterminate 1.1s ease-in-out infinite;
+}
+@keyframes scan-indeterminate {
+  0% { transform: translateX(-120%); }
+  100% { transform: translateX(320%); }
+}
+
+/* "已复用缓存"标签 */
+.badge-cached {
+  background: rgba(34, 197, 94, .16); color: #22a55a;
+  font-size: 11px; padding: 1px 7px; border-radius: 9px;
+  transition: opacity 1.2s ease;
+}
+.badge-cached.cached-fade { opacity: 0; }
+
+/* 单版本扫描：行内进度条 */
+.ver-inline-progress { display: inline-flex; align-items: center; gap: 6px; }
+.ver-inline-bar {
+  display: inline-block; width: 80px; height: 5px;
+  background: var(--surface-2); border-radius: 3px; overflow: hidden;
+  position: relative;
+}
+.ver-inline-fill {
+  display: block; height: 100%; background: var(--accent);
+  border-radius: 3px; transition: width .2s ease;
+}
+.ver-inline-pct { font-size: 11px; color: var(--accent); font-variant-numeric: tabular-nums; }
+
 /* .btn / .badge 等公共样式见 src/styles/common.css（main.js 引入），此处不再重复 */
 </style>
