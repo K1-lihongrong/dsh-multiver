@@ -301,7 +301,7 @@ pub fn run() {
             if let tauri::RunEvent::ExitRequested { .. } = event {
                 // 退出时兜底清理所有 dsh 子进程，避免残留
                 let mut map = lock_procs(&procs);
-                for (_, (_, _, child, _job)) in map.iter_mut() {
+                for (_, _, child, _job) in map.values_mut() {
                     // Unix：正常退出能跑到这里，注销登记（避免下次启动误清）
                     #[cfg(unix)]
                     {

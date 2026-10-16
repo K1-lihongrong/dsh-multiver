@@ -133,6 +133,7 @@ fn with_registry_lock<T>(root: &Path, f: impl FnOnce() -> T) -> T {
     let _ = std::fs::create_dir_all(&dir);
     let lock_file = std::fs::OpenOptions::new()
         .create(true)
+        .truncate(false) // 锁文件不截断（仅用于 flock，内容无意义）
         .write(true)
         .open(lock_path(root));
 
