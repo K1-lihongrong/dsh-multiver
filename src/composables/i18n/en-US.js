@@ -103,6 +103,7 @@ export default {
     "installed.scanCancel": "Cancel scan",
     "installed.scanCancelling": "Stopping…",
     "installed.scanCounting": "Counting…",
+    "installed.scanCountingN": "{n} files counted",
     "installed.scanCached": "Reused cache",
     "installed.scanReused": "Reused last scan result",
     "installed.isolateTip": "Isolate (this version gets its own data directory)",

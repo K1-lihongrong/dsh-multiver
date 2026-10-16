@@ -103,6 +103,7 @@ export default {
     "installed.scanCancel": "スキャンをキャンセル",
     "installed.scanCancelling": "停止中…",
     "installed.scanCounting": "集計中…",
+    "installed.scanCountingN": "{n} ファイル集計済み",
     "installed.scanCached": "キャッシュ再利用",
     "installed.scanReused": "前回のスキャン結果を再利用しました",
     "installed.isolateTip": "分離を有効化（このバージョン専用のデータディレクトリ）",

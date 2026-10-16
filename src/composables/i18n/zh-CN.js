@@ -103,6 +103,7 @@ export default {
     "installed.scanCancel": "取消扫描",
     "installed.scanCancelling": "正在停止…",
     "installed.scanCounting": "正在统计…",
+    "installed.scanCountingN": "已统计 {n} 个文件",
     "installed.scanCached": "已复用缓存",
     "installed.scanReused": "已复用上次扫描结果",
     "installed.isolateTip": "开启隔离（该版本使用独立数据目录）",

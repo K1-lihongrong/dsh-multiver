@@ -209,7 +209,7 @@ function toggleInstalledNote(v) {
     <div class="scan-progress-wrap" v-if="scanning && !single && progress">
       <div class="scan-progress-label">
         <span>{{ t("installed.scanProgress", { i: progress.index, n: progress.total }) }}</span>
-        <span v-if="progress.stage === 'counting'" class="scan-pct">{{ t("installed.scanCounting") }}</span>
+        <span v-if="progress.stage === 'counting'" class="scan-pct">{{ progress.done ? t("installed.scanCountingN", { n: progress.done }) : t("installed.scanCounting") }}</span>
         <span v-else-if="progress.fileTotal" class="scan-pct">{{ filePercent(progress) }}%</span>
       </div>
       <div class="scan-bar"><div class="scan-bar-fill" :style="{ width: verPercent(progress) + '%' }"></div></div>
@@ -253,7 +253,7 @@ function toggleInstalledNote(v) {
               <span v-if="progress.stage === 'counting'" class="scan-bar-indeterminate"></span>
               <span v-else class="ver-inline-fill" :style="{ width: filePercent(progress) + '%' }"></span>
             </span>
-            <span class="ver-inline-pct">{{ progress.stage === 'counting' ? t("installed.scanCounting") : filePercent(progress) + '%' }}</span>
+            <span class="ver-inline-pct">{{ progress.stage === 'counting' ? (progress.done ? t("installed.scanCountingN", { n: progress.done }) : t("installed.scanCounting")) : filePercent(progress) + '%' }}</span>
           </span>
         </div>
         <div class="ver-actions">
@@ -367,11 +367,13 @@ function toggleInstalledNote(v) {
 /* 取消按钮：警示色 */
 .scan-all-btn.cancel { color: var(--danger, #e5484d); border-color: var(--danger, #e5484d); }
 
-/* 不确定进度条（第一段"正在统计"）：左右滑动的光带 */
+/* 不确定进度条（第一段"正在统计"）：实色块左右滑动（比渐变光带更明显，避免"卡住"错觉） */
 .scan-bar-indeterminate {
+  display: block; /* 关键：行内用 <span>，不加此项则忽略 width/height，滑块不显示 */
   height: 100%; width: 40%;
-  background: linear-gradient(90deg, transparent, var(--accent), transparent);
-  animation: scan-indeterminate 1.1s ease-in-out infinite;
+  background: var(--accent);
+  border-radius: 3px;
+  animation: scan-indeterminate 1s ease-in-out infinite;
 }
 @keyframes scan-indeterminate {
   0% { transform: translateX(-120%); }
