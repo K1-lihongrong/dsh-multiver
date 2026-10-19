@@ -15,6 +15,30 @@ use std::sync::atomic::AtomicBool;
 /// v0.2.13：扫描取消标志。scan_versions 开头清零，cancel_scan 置位。
 pub(crate) static SCAN_CANCEL: AtomicBool = AtomicBool::new(false);
 
+/// v0.2.14：供前端查询是否处于"启动模式"（命令行带 --launch-version）。
+/// 前端 onMounted 主动查，比事件可靠（setup emit 时前端可能还没监听）。
+#[tauri::command]
+pub(crate) fn get_launch_mode() -> Option<String> {
+    crate::LAUNCH_MODE.get().cloned()
+}
+
+/// v0.2.14：前端渲染出"启动态"后调用，显示主窗口。
+/// （启动模式下 setup 里先 hide 主窗口，避免闪现主界面；前端就绪后由此命令 show。）
+#[tauri::command]
+pub(crate) fn show_main_window(app: tauri::AppHandle) {
+    use tauri::Manager;
+    if let Some(main) = app.get_webview_window("main") {
+        let _ = main.show();
+    }
+}
+
+/// v0.2.14：查询某版本是否已有内嵌窗口在开。
+/// 前端 run() 先查——已开则直接聚焦（不进启动态），避免"杀掉重开"的误导。
+#[tauri::command]
+pub(crate) fn is_version_open(procs: tauri::State<'_, ProcMap>, version: String) -> bool {
+    lock_procs(procs.inner()).contains_key(&version)
+}
+
 /// 「路径设置」里额外展示的目录项（默认收起，点"展开"才显示）。
 #[derive(Serialize)]
 pub(crate) struct ExtraDir {
@@ -438,6 +462,36 @@ pub(crate) async fn launch_window(
         return Err(format!("版本 {} 未安装", version));
     }
     let home = resolve_home(&cfg, &dirs, &version);
+
+    // v0.2.14：该版本窗口已开 → 直接聚焦，不重启（幂等，避免误点导致"杀掉重开"）。
+    // 在起 dsh 进程之前判断，避免白起一个进程。
+    {
+        let existing = lock_procs(&procs)
+            .get(&version)
+            .map(|(label, _, _, _)| label.clone());
+        if let Some(lbl) = existing {
+            if let Some(win) = app.get_webview_window(&lbl) {
+                let _ = win.show();
+                let _ = win.unminimize();
+                let _ = win.set_focus();
+                return Ok(format!("已聚焦 DSH {} 的窗口", version));
+            }
+        }
+    }
+
+    // v0.2.14：启动进度事件（前端"启动态"据此更新文案）。
+    // dsh 启动期间静默、不打印输出，无法细分；两个粗阶段：
+    //   preparing —— 即将起进程（本函数开始的短暂窗口）
+    //   waiting   —— 进程已起、正在等 dsh 打印 URL（最慢，最坏 90s）
+    // 这里直接发 waiting：spawn_blocking 内部即"起进程 + 等 URL"，属"等待"。
+    // （preparing 由前端进入启动态时自行设定，无需后端再发。）
+    {
+        use tauri::Emitter;
+        let _ = app.emit(
+            "launch-progress",
+            serde_json::json!({ "version": version, "stage": "waiting" }),
+        );
+    }
 
     // 阻塞部分（起进程 + 等端口/URL，最多 90s，见 launcher 的超时常量）丢到后台线程，避免冻结界面
     let vdir2 = vdir.clone();

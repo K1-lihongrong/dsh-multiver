@@ -9,12 +9,63 @@ import PathSettings from "./components/PathSettings.vue";
 import InstalledList from "./components/InstalledList.vue";
 import RemoteList from "./components/RemoteList.vue";
 import RuntimeGuide from "./components/RuntimeGuide.vue";
+import launchPlaceholder from "./assets/launch-placeholder.svg";
+
+// v0.2.14：main.js 挂载前已查启动模式，作为初始 prop 传入 → 第一帧即启动态（不闪主界面）
+const props = defineProps({
+  launchMode: { type: String, default: "" },
+});
 
 const state = ref(null);
 const installed = ref([]);
 // 更新提醒（C1）：查到有新版则显示横幅；可关闭（本次会话内不再提示）
 const updateInfo = ref(null);
 const updateDismissed = ref(false);
+
+// ── v0.2.14 启动态（快捷方式启动 / 运行按钮共用）──
+// launching：是否显示启动态；launchVersion：启动的版本号；launchStage：preparing/waiting/error
+const launching = ref(!!props.launchMode);
+const launchVersion = ref(props.launchMode || "");
+const launchStage = ref("preparing");
+const launchError = ref("");
+let unlistenProgress = null;
+let unlistenModeStart = null;
+
+/// 进入启动态（运行按钮 / 事件兜底）。
+function enterLaunch(version) {
+  launching.value = true;
+  launchVersion.value = version || "";
+  launchStage.value = "preparing";
+  launchError.value = "";
+}
+
+/// 运行按钮触发启动态（父组件监听 InstalledList 的 launch 事件）
+function onLaunch(payload) {
+  enterLaunch(payload.version);
+}
+/// 运行结束：成功→恢复主界面；失败→启动态显示错误
+async function onLaunchDone(payload) {
+  if (payload.ok) {
+    launching.value = false;
+    // 运行按钮场景：启动前跳过了 refresh（若首屏即启动模式），恢复主界面前补数据
+    if (!installed.value.length) {
+      try { await refresh(); } catch (_) {}
+    }
+  } else {
+    launchStage.value = "error";
+    launchError.value = payload.error || "";
+  }
+}
+/// 启动态里点「返回」：关闭启动态回主界面
+function cancelLaunch() {
+  launching.value = false;
+  launchStage.value = "preparing";
+  launchError.value = "";
+}
+/// 启动态里点「查看日志」：打开日志目录
+function openLaunchLogs() {
+  openDir("logs");
+}
 // toast（通知）由 useToast 提供（模块级单例，与拆出的组件共享）
 const { toast, toastExpanded, notify, dismissToast, toggleToast } = useToast();
 const envCheckRef = ref(null);  // <EnvCheck> 组件引用（安装前调 run()）
@@ -101,12 +152,30 @@ onMounted(async () => {
   window.addEventListener("error", onWindowError);
   window.addEventListener("unhandledrejection", onUnhandledRejection);
   const t0 = window.__BOOT_T0 || 0;
-  await refresh();
+
+  // ── v0.2.14 启动态 ──
+  // 启动模式已在 main.js 挂载前查过（作为 prop），首帧就是启动态——这里不再重复查。
+  // 事件监听后台注册（不阻塞首屏）：launch-mode-start 仅用于极端兜底（正常走 prop）。
+  listen("launch-mode-start", (e) => {
+    const p = e.payload || {};
+    enterLaunch(p.version);
+  }).then((u) => { unlistenModeStart = u; }).catch(() => {});
+  listen("launch-progress", (e) => {
+    const p = e.payload || {};
+    if (p.stage) launchStage.value = p.stage;
+  }).then((u) => { unlistenProgress = u; }).catch(() => {});
+
+  // 启动模式：用户看的是加载页，不需要版本列表——跳过 refresh（省 ~1s）。
+  // 非启动模式：正常加载主界面数据。
+  if (!props.launchMode) {
+    await refresh();
+  }
   const t1 = performance.now();
-  unlistenCrash = await listen("launch-crashed", (e) => {
+  // 崩溃事件监听同样不进关键路径（后台注册）
+  listen("launch-crashed", (e) => {
     const p = e.payload || {};
     notify(p.message || t("app.launchCrashed", { v: p.version }));
-  });
+  }).then((u) => { unlistenCrash = u; }).catch(() => {});
   // 环境检查由 <EnvCheck> 自己的 onMounted 触发，这里不再重复调用（否则启动时跑两遍）。
   // 运行时横幅改由 EnvCheck 的 runtime-status 事件驱动（见 onRuntimeStatus），不再单独调 runtime_status。
   // 更新检查放最后，且不 await 阻塞（网络慢时不影响界面可用）
@@ -155,11 +224,33 @@ onUnmounted(() => {
   window.removeEventListener("error", onWindowError);
   window.removeEventListener("unhandledrejection", onUnhandledRejection);
   if (unlistenCrash) unlistenCrash();
+  if (unlistenModeStart) unlistenModeStart();
+  if (unlistenProgress) unlistenProgress();
 });
 </script>
 
 <template>
 <div class="app">
+  <!-- v0.2.14 启动态覆盖层（窗口内容区整体切换） -->
+  <div class="launch-overlay" v-if="launching">
+    <img class="launch-img" :src="launchPlaceholder" alt="" />
+    <div class="launch-version" v-if="launchVersion">{{ launchVersion }}</div>
+    <template v-if="launchStage === 'error'">
+      <div class="launch-status error">{{ t("launch.failed") }}</div>
+      <div class="launch-error-text">{{ launchError }}</div>
+      <div class="launch-actions">
+        <button class="btn primary" @click="cancelLaunch">{{ t("launch.back") }}</button>
+        <button class="btn" @click="openLaunchLogs">{{ t("launch.viewLogs") }}</button>
+      </div>
+    </template>
+    <template v-else>
+      <div class="launch-status">
+        {{ launchStage === 'waiting' ? t("launch.waiting") : t("launch.starting") }}
+      </div>
+      <div class="launch-spinner"></div>
+    </template>
+  </div>
+
   <header class="topbar">
     <div class="brand">
       <span class="dot"></span>
@@ -206,6 +297,8 @@ onUnmounted(() => {
       :installed="installed"
       @refresh="refresh"
       @open-url="openUrl"
+      @launch="onLaunch"
+      @launch-done="onLaunchDone"
     />
 
     <RemoteList
@@ -246,7 +339,7 @@ onUnmounted(() => {
 
 <!-- 全局公共样式见 src/styles/common.css（main.js 引入）；此处仅布局专属 -->
 <style>
-.app { height: 100%; display: flex; flex-direction: column; }
+.app { height: 100%; display: flex; flex-direction: column; position: relative; }
 
 .topbar {
   padding: 16px 22px;
@@ -325,4 +418,30 @@ onUnmounted(() => {
 .toast-close:hover { color: var(--toast-text); }
 .fade-enter-active, .fade-leave-active { transition: opacity .25s; }
 .fade-enter-from, .fade-leave-to { opacity: 0; }
+
+/* ── v0.2.14 启动态覆盖层 ── */
+.launch-overlay {
+  position: absolute; inset: 0; z-index: 200;
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 14px; background: var(--panel-bg);
+}
+.launch-img { width: 200px; height: auto; opacity: .9; user-select: none; }
+.launch-version {
+  font-size: 14px; color: var(--text-3); font-weight: 600;
+  letter-spacing: .4px; font-variant-numeric: tabular-nums;
+}
+.launch-status { font-size: 15px; color: var(--text); }
+.launch-status.error { color: var(--danger, #e5484d); font-weight: 600; }
+.launch-error-text {
+  max-width: 70%; max-height: 30vh; overflow-y: auto; font-size: 12px;
+  color: var(--text-muted); white-space: pre-wrap; word-break: break-all;
+  background: var(--surface-2); padding: 10px 14px; border-radius: 8px;
+}
+.launch-actions { display: flex; gap: 10px; margin-top: 6px; }
+.launch-spinner {
+  width: 30px; height: 30px; border-radius: 50%;
+  border: 3px solid var(--surface-3); border-top-color: var(--accent);
+  animation: launch-spin .8s linear infinite;
+}
+@keyframes launch-spin { to { transform: rotate(360deg); } }
 </style>

@@ -7,6 +7,7 @@ import { useSharedHomeWarn } from "../composables/useSharedHomeWarn.js";
 import { useSizeScan } from "../composables/useSizeScan.js";
 import IsolatedMenu from "./IsolatedMenu.vue";
 import NotesPanel from "./NotesPanel.vue";
+import SharedHomeDialog from "./SharedHomeDialog.vue";
 import { t } from "../composables/useI18n.js";
 
 // 已安装版本列表（含批量操作、占用扫描、隔离、更新说明）。
@@ -14,10 +15,10 @@ import { t } from "../composables/useI18n.js";
 const props = defineProps({
   installed: { type: Array, default: () => [] },
 });
-const emit = defineEmits(["refresh", "open-url"]);
+const emit = defineEmits(["refresh", "open-url", "launch", "launch-done"]);
 
 const { notify } = useToast();
-const { warnSharedHomeEnabled } = useSharedHomeWarn();
+const { warnSharedHomeEnabled, setWarnSharedHome } = useSharedHomeWarn();
 const { verSizes, scanning, queue, current, progress, single, cachedSet, fadingOut, runScan, cancelScan, flashVersions } = useSizeScan();
 
 /// 版本级进度百分比（0-100）
@@ -30,6 +31,27 @@ const inQueue = (v) => queue.value.includes(v);
 const isScanningVer = (v) => current.value === v;
 /// 取消中（已请求、尚未停）
 const cancelling = ref(false);
+
+// 共享 home 确认对话框（v0.2.14：自定义对话框，含"我知道了"）
+const sharedHomeDialogVer = ref("");   // 非空 = 显示对话框
+let sharedHomeResolve = null;          // 对话框结果的 Promise resolve
+
+function sharedHomeDialog(v) {
+  return new Promise((resolve) => {
+    sharedHomeDialogVer.value = v;
+    sharedHomeResolve = resolve;
+  });
+}
+function onSharedHomeChoice(choice) {
+  sharedHomeDialogVer.value = "";
+  if (choice === "dont-ask") {
+    // "我知道了" = 本次运行 + 以后不再提示
+    setWarnSharedHome(false);
+  }
+  const r = sharedHomeResolve;
+  sharedHomeResolve = null;
+  if (r) r(choice !== "cancel");
+}
 
 const runningVersion = ref(""); // 正在启动的版本号
 const uninstalling = ref("");   // 正在卸载的版本号
@@ -83,23 +105,43 @@ async function cancelScanNow() {
 }
 
 /// 运行非隔离（共享 home）版本前的提示。返回 false 表示用户取消。
+/// 弹自定义对话框（含"我知道了"=本次运行 + 以后不再提示）。
 async function confirmSharedHome(v) {
   if (!warnSharedHomeEnabled.value) return true;
   const ver = props.installed.find((x) => x.version === v);
   if (!ver || ver.isolated) return true; // 隔离版本无此风险
-  return await ask(
-    t("installed.sharedHomeConfirm", { v }),
-    { title: t("installed.sharedHomeTitle"), kind: "warning" }
-  );
+  return await sharedHomeDialog(v);
 }
 
 async function run(v) {
   if (!(await confirmSharedHome(v))) return;
   if (runningVersion.value) return;
   runningVersion.value = v;
-  notify(t("installed.starting", { v }));
-  try { notify(await invoke("run_version", { version: v })); }
-  catch (e) { notify("" + e); }
+
+  // v0.2.14：该版本窗口已开 → 直接聚焦（不进启动态，避免一闪）。
+  // 预查询多一次 IPC（~10-50ms），但换来"已开场景不闪启动态"的干净体验。
+  try {
+    if (await invoke("is_version_open", { version: v })) {
+      const msg = await invoke("run_version", { version: v });
+      notify(msg);
+      runningVersion.value = "";
+      return;
+    }
+  } catch (_) { /* 查询失败则照常启动 */ }
+
+  // 未开 → 切启动态（父组件显示覆盖层）。
+  emit("launch", { version: v });
+  const t0 = performance.now();
+  try {
+    const msg = await invoke("run_version", { version: v });
+    const ms = (performance.now() - t0).toFixed(0);
+    emit("launch-done", { version: v, ok: true });
+    notify(msg);
+    invoke("log_frontend", { msg: "[launch] 运行 " + v + " 耗时=" + ms + "ms" }).catch(() => {});
+  } catch (e) {
+    emit("launch-done", { version: v, ok: false, error: "" + e });
+    notify("" + e);
+  }
   finally { runningVersion.value = ""; }
 }
 
@@ -306,6 +348,15 @@ function toggleInstalledNote(v) {
         </button>
       </template>
     </div>
+
+    <!-- v0.2.14：共享 home 确认对话框（含"我知道了"） -->
+    <SharedHomeDialog
+      v-if="sharedHomeDialogVer"
+      :version="sharedHomeDialogVer"
+      @continue="onSharedHomeChoice('continue')"
+      @continue-dont-ask="onSharedHomeChoice('dont-ask')"
+      @cancel="onSharedHomeChoice('cancel')"
+    />
   </section>
 </template>
 

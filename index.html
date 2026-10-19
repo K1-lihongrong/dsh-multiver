@@ -5,9 +5,25 @@
     <link rel="icon" type="image/svg+xml" href="/vite.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>DSH 版本管理器</title>
+    <style>
+      /* v0.2.14：Vue 挂载前的静态骨架（约 60ms）。
+         main.js 挂载前要查启动模式，这期间避免纯白/纯黑闪烁。 */
+      html, body { height: 100%; margin: 0; }
+      body { background: #24282e; }
+      #boot-skeleton {
+        height: 100%; display: flex; align-items: center; justify-content: center;
+        color: #9ca3af; font: 13px system-ui, sans-serif;
+      }
+      /* 浅色主题（跟随系统） */
+      @media (prefers-color-scheme: light) {
+        body { background: #f5f6f8; }
+        #boot-skeleton { color: #6b7280; }
+      }
+    </style>
   </head>
 
   <body>
+    <div id="boot-skeleton">正在启动…</div>
     <div id="app"></div>
     <script type="module" src="/src/main.js"></script>
   </body>

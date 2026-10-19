@@ -47,6 +47,10 @@ pub(crate) static PROC_START: std::sync::OnceLock<std::time::Instant> = std::syn
 /// 窗口就绪耗时（毫秒）：进程启动 → Tauri setup 进入（含 WebView2 初始化 + 窗口创建）。
 pub(crate) static WIN_READY_MS: std::sync::OnceLock<u128> = std::sync::OnceLock::new();
 
+/// 启动模式（v0.2.14）：命令行带 --launch-version 时，记录待启动的版本号。
+/// 前端 onMounted 主动查（比事件可靠——setup 里 emit 时前端可能还没监听）。
+pub(crate) static LAUNCH_MODE: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+
 /// 管理器自身所在目录（config.json 的存放处）
 pub(crate) fn manager_dir(_app: &tauri::AppHandle) -> PathBuf {
     manager_dir_plain()
@@ -100,6 +104,13 @@ pub fn run() {
         std::process::exit(0);
     }
 
+    // v0.2.14：启动模式必须在窗口/前端创建**之前**记录。
+    // Tauri 在 setup 前就建了主窗口、前端可能早于 setup 完成 onMounted，
+    // 故在此（run 开头）就 set，确保前端 get_launch_mode 一定查得到。
+    if let Some(version) = window::parse_launch_version(&std::env::args().collect::<Vec<_>>()) {
+        let _ = LAUNCH_MODE.set(version);
+    }
+
     // 进程级 AUMID 必须在任何窗口创建之前设置（Tauri 在 setup 回调前就建了主窗口）。
     // 否则任务栏会退化为"找指向本 exe 的快捷方式取图标"，被桌面 dsh 快捷方式污染。
     window::set_process_aumid();
@@ -147,6 +158,9 @@ pub fn run() {
             commands::export_backup,
             commands::preview_import,
             commands::apply_import,
+            commands::get_launch_mode,
+            commands::show_main_window,
+            commands::is_version_open,
         ])
         .setup(move |app| {
             use tauri::Manager;
@@ -169,11 +183,18 @@ pub fn run() {
             if let Some(version) =
                 window::parse_launch_version(&std::env::args().collect::<Vec<_>>())
             {
-                // 注意：不能立刻 close 主窗口——若此时尚无其他窗口，Tauri 会认为
+                // v0.2.14：不隐藏主窗口——窗口始终可见，WebView2 持续渲染（hide→show 会有 ~900ms 恢复开销）。
+                // 前端首帧即"启动态"（main.js 挂载前先查 get_launch_mode，作为初始 prop），不闪主界面。
+                // 注意：不能 close 主窗口——若此时尚无其他窗口，Tauri 会认为
                 // "所有窗口已关闭" 而直接退出事件循环，导致异步创建 dsh 窗口来不及执行。
-                // 因此先**隐藏**主窗口（保持进程存活），待 dsh 窗口建好后再关闭它。
-                if let Some(main) = app.get_webview_window("main") {
-                    let _ = main.hide();
+                // 启动模式已在 run() 开头记录（LAUNCH_MODE），此处只需通知前端
+                // 通知前端进入启动态（若前端已就绪，立即响应；未就绪则靠 get_launch_mode 兜底）
+                {
+                    use tauri::Emitter;
+                    let _ = app.emit(
+                        "launch-mode-start",
+                        serde_json::json!({ "version": version.clone() }),
+                    );
                 }
                 // launch_window 是 async 的；setup 是同步闭包，用 async_runtime 起任务
                 let app_handle = app.handle().clone();

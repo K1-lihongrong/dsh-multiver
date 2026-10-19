@@ -41,3 +41,8 @@ state/
 .wsl-*.sh
 .wsl-*.ps1
 docs/screenshots/theme/
+
+# Playwright E2E 产物
+test-results/
+playwright-report/
+blob-report/
