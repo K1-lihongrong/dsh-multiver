@@ -450,12 +450,23 @@ pub(crate) fn resolve_home(cfg: &Config, dirs: &Dirs, version: &str) -> PathBuf 
 pub(crate) fn ds_list_plugins(
     app: tauri::AppHandle,
     version: String,
-) -> Result<Vec<crate::dsplugins::DsProfile>, String> {
+) -> Result<crate::dsplugins::DsPluginList, String> {
     let mdir = manager_dir(&app);
     let cfg = Config::load(&mdir);
     let dirs = Dirs::new(cfg.resolve_root(&mdir));
     let home = resolve_home(&cfg, &dirs, &version);
-    Ok(crate::dsplugins::list_profiles(&home))
+    let home_kind = if cfg.isolated_versions.iter().any(|v| v == &version) {
+        "isolated"
+    } else if cfg.use_official_dsh_home && official_dsh_home().is_some() {
+        "official"
+    } else {
+        "shared"
+    };
+    Ok(crate::dsplugins::DsPluginList {
+        dsh_home: home.to_string_lossy().to_string(),
+        home_kind: home_kind.to_string(),
+        profiles: crate::dsplugins::list_profiles(&home),
+    })
 }
 
 /// dsh 插件安装/卸载（双向桥 B1）。

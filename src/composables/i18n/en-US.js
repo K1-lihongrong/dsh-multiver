@@ -251,4 +251,9 @@ export default {
     "dsplugins.close": "Close",
     "dsplugins.installed": "Installed {p}",
     "dsplugins.removed": "Removed {p}",
+
+    "dsplugins.refresh": "Refresh",
+    "dsplugins.homeIsolated": "Isolated",
+    "dsplugins.homeOfficial": "Official (~/.dsh)",
+    "dsplugins.homeShared": "Manager shared",
 };

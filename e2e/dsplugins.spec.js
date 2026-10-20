@@ -7,16 +7,20 @@ test("点「插件」→ 展开面板（列 profile 与插件）", async ({ page
   await mockTauri(page, {
     installed: [makeVersion("0.2.0-rc.1", { isolated: true })],
     extra: {
-      ds_list_plugins: [
-        {
-          name: "web",
-          path: "D:/dsh/profiles/web",
-          plugins: [
-            { name: "@deepseek-ai/dsh-base", version: "0.2.1", is_bundle: true },
-            { name: "my-plugin", version: "1.0.0", is_bundle: false },
-          ],
-        },
-      ],
+      ds_list_plugins: {
+        dsh_home: "D:/dsh",
+        home_kind: "shared",
+        profiles: [
+          {
+            name: "web",
+            path: "D:/dsh/profiles/web",
+            plugins: [
+              { name: "@deepseek-ai/dsh-base", version: "0.2.1", is_bundle: true },
+              { name: "my-plugin", version: "1.0.0", is_bundle: false },
+            ],
+          },
+        ],
+      },
     },
   });
   await page.goto("/");
@@ -29,11 +33,11 @@ test("点「插件」→ 展开面板（列 profile 与插件）", async ({ page
 test("无 profile 时显示提示", async ({ page }) => {
   await mockTauri(page, {
     installed: [makeVersion("0.2.0-rc.1", { isolated: true })],
-    extra: { ds_list_plugins: [] },
+    extra: { ds_list_plugins: { dsh_home: "D:/dsh", home_kind: "shared", profiles: [] } },
   });
   await page.goto("/");
   await page.getByRole("button", { name: "插件", exact: true }).click();
-  await expect(page.locator(".dp-empty")).toContainText("profile");
+  await expect(page.locator(".dp-state-empty")).toBeVisible();
 });
 
 test("输入包名点安装 → 调 ds_plugin_action", async ({ page }) => {
@@ -42,7 +46,7 @@ test("输入包名点安装 → 调 ds_plugin_action", async ({ page }) => {
   await mockTauri(page, {
     installed: [makeVersion("0.2.0-rc.1", { isolated: true })],
     extra: {
-      ds_list_plugins: [{ name: "web", path: "D:/p", plugins: [] }],
+      ds_list_plugins: { dsh_home: "D:/dsh", home_kind: "shared", profiles: [{ name: "web", path: "D:/p", plugins: [] }] },
       ds_plugin_action: "(args) => { window.__recordCall(args); return Promise.resolve('已安装 ' + args.package); }",
     },
   });

@@ -251,4 +251,9 @@ export default {
     "dsplugins.close": "閉じる",
     "dsplugins.installed": "{p} をインストールしました",
     "dsplugins.removed": "{p} を削除しました",
+
+    "dsplugins.refresh": "更新",
+    "dsplugins.homeIsolated": "隔離",
+    "dsplugins.homeOfficial": "公式 (~/.dsh)",
+    "dsplugins.homeShared": "マネージャー共有",
 };

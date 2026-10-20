@@ -28,6 +28,16 @@ pub struct DsProfile {
     pub plugins: Vec<DsPlugin>,
 }
 
+/// 插件列表 + 当前 DSH_HOME 信息（让用户明确插件装在哪）。
+#[derive(Debug, Clone, Serialize)]
+pub struct DsPluginList {
+    /// 实际使用的 DSH_HOME 路径
+    pub dsh_home: String,
+    /// 来源："isolated"（隔离）| "official"（复用官方 ~/.dsh）| "shared"（管理器共享）
+    pub home_kind: String,
+    pub profiles: Vec<DsProfile>,
+}
+
 /// profile 目录：`<DSH_HOME>/profiles`。
 pub fn profiles_dir(dsh_home: &Path) -> PathBuf {
     dsh_home.join("profiles")
@@ -91,7 +101,10 @@ fn read_profile(name: &str, path: &Path) -> DsProfile {
 
             // 3) bundles 里未出现在 dependencies 的（dsh 默认 profile 的 dependencies 常为空）
             //    版本从 <profile>/node_modules/<pkg>/package.json 或 <profiles>/node_modules/<pkg> 读。
-            let parent_nm = path.parent().map(|p| p.join("node_modules")).unwrap_or_default();
+            let parent_nm = path
+                .parent()
+                .map(|p| p.join("node_modules"))
+                .unwrap_or_default();
             for b in &bundles {
                 if seen.contains(b) {
                     continue;
@@ -120,7 +133,9 @@ fn read_profile(name: &str, path: &Path) -> DsProfile {
 fn read_pkg_version(pkg_dir: &Path) -> Option<String> {
     let text = std::fs::read_to_string(pkg_dir.join("package.json")).ok()?;
     let v: serde_json::Value = serde_json::from_str(&text).ok()?;
-    v.get("version").and_then(|x| x.as_str()).map(|s| s.to_string())
+    v.get("version")
+        .and_then(|x| x.as_str())
+        .map(|s| s.to_string())
 }
 
 /// dsh CLI 路径（`<版本目录>/node_modules/.bin/dsh[.cmd]`）。
@@ -205,20 +220,38 @@ mod tests {
         )
         .unwrap();
         // 模拟 <profiles>/node_modules/@scope/a/package.json
-        let nm = tmp.parent().unwrap().join(format!("nm-{}", std::process::id()));
+        let nm = tmp
+            .parent()
+            .unwrap()
+            .join(format!("nm-{}", std::process::id()));
         let pkg = nm.join("@scope").join("a");
         std::fs::create_dir_all(&pkg).unwrap();
         std::fs::write(pkg.join("package.json"), r#"{"version":"1.2.3"}"#).unwrap();
         // 把 profile 放到 <nm 父>/profiles/web 结构下
-        let profdir = nm.parent().unwrap().join(format!("prof-{}", std::process::id()));
+        let profdir = nm
+            .parent()
+            .unwrap()
+            .join(format!("prof-{}", std::process::id()));
         std::fs::create_dir_all(profdir.join("profiles")).unwrap();
         let web = profdir.join("profiles").join("web");
         std::fs::rename(&tmp, &web).unwrap();
-        std::fs::create_dir_all(profdir.join("profiles").join("node_modules").join("@scope")).unwrap();
-        let _ = std::fs::rename(&pkg, profdir.join("profiles").join("node_modules").join("@scope").join("a"));
+        std::fs::create_dir_all(profdir.join("profiles").join("node_modules").join("@scope"))
+            .unwrap();
+        let _ = std::fs::rename(
+            &pkg,
+            profdir
+                .join("profiles")
+                .join("node_modules")
+                .join("@scope")
+                .join("a"),
+        );
 
         let p = read_profile("web", &web);
-        let a = p.plugins.iter().find(|x| x.name == "@scope/a").expect("bundle 应被列出");
+        let a = p
+            .plugins
+            .iter()
+            .find(|x| x.name == "@scope/a")
+            .expect("bundle 应被列出");
         assert!(a.is_bundle);
         assert_eq!(a.version, "1.2.3");
         let _ = std::fs::remove_dir_all(&profdir);

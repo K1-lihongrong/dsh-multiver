@@ -251,4 +251,9 @@ export default {
     "dsplugins.close": "關閉",
     "dsplugins.installed": "已安裝 {p}",
     "dsplugins.removed": "已解除安裝 {p}",
+
+    "dsplugins.refresh": "重新整理",
+    "dsplugins.homeIsolated": "隔離",
+    "dsplugins.homeOfficial": "複用官方",
+    "dsplugins.homeShared": "管理器共用",
 };
