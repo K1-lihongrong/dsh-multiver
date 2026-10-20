@@ -3,6 +3,7 @@ mod backup;
 mod cli;
 mod commands;
 mod config;
+mod dsplugins;
 mod envcheck;
 mod jobobj;
 mod launcher;
@@ -161,6 +162,9 @@ pub fn run() {
             commands::get_launch_mode,
             commands::show_main_window,
             commands::is_version_open,
+            commands::ds_list_plugins,
+            commands::ds_plugin_action,
+            commands::ds_open_profile_dir,
         ])
         .setup(move |app| {
             use tauri::Manager;

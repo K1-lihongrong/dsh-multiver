@@ -23,9 +23,16 @@
   - `commands/`：`version.rs`（list/which/info/versions/install/uninstall）、`default.rs`（set-default）、`store.rs`（maintenance/clean/doctor）、`env.rs`（env）、`misc.rs`（其余）。
   - 单文件 ≤400 行，职责清晰。
 
+### 新增（双向桥 B1）
+- **dsh 插件管理面板**：已安装版本的「插件」按钮 → 展开面板，管理该版本 dsh profile 的插件。
+  - 列 profile 与插件（包名 + 版本，标 bundle）；安装/卸载（调 `dsh plugin --profile <p> add/remove`）；打开 profile 目录。
+  - 新增后端模块 `dsplugins.rs` + 命令 `ds_list_plugins` / `ds_plugin_action` / `ds_open_profile_dir`。
+  - 4 语言文案。
+
 ### 文档
 - 新增 [CLI 迁移指南](docs/CLI迁移指南-v0.3.0.md)（旧→新对照 + 脚本迁移示例）。
-- 使用手册、README、CUCKOO.md 同步更新为新语法。
+- 新增 [dsh 双向桥交接文档](docs/dsh双向桥-交接文档.md)（B2-B4 交 dsh）。
+- 使用手册、README、CUCKOO.md 同步更新。
 
 ### 新增
 - **启动加载页**：快捷方式启动 / 运行按钮时立即显示加载页。

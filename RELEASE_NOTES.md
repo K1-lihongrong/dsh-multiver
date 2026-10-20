@@ -25,6 +25,13 @@ dsh-multiver --set-default 0.1.7  →  dsh-multiver set-default 0.1.7
   - `commands/`：`version` / `default` / `store` / `env` / `misc`。
   - 单文件 ≤400 行，职责清晰，便于维护。
 
+### 🔌 dsh 插件管理（双向桥 B1）
+
+已安装版本的「插件」按钮 → 管理该版本的 dsh 插件（list / install / remove），通过 dsh 自带 CLI 执行。
+
+- 前提：该版本已在 dsh 里启动过（才有 profile 目录）。
+- 双向桥的 dsh 侧（B2-B4）已交接给 dsh 开发方，见 [交接文档](https://github.com/K1-lihongrong/dsh-multiver/blob/main/docs/dsh双向桥-交接文档.md)。
+
 ### 说明
 
 - 这是**大版本**（语义化版本规范：破坏性变更）。

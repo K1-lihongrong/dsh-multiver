@@ -7,6 +7,7 @@ import { useSharedHomeWarn } from "../composables/useSharedHomeWarn.js";
 import { useSizeScan } from "../composables/useSizeScan.js";
 import IsolatedMenu from "./IsolatedMenu.vue";
 import NotesPanel from "./NotesPanel.vue";
+import DsPluginPanel from "./DsPluginPanel.vue";
 import SharedHomeDialog from "./SharedHomeDialog.vue";
 import { t } from "../composables/useI18n.js";
 
@@ -56,6 +57,7 @@ function onSharedHomeChoice(choice) {
 const runningVersion = ref(""); // 正在启动的版本号
 const uninstalling = ref("");   // 正在卸载的版本号
 const installedNoteVer = ref(null); // 当前展开更新说明的版本号
+const pluginPanelVer = ref(null);   // 当前展开 dsh 插件面板的版本号
 
 // ---- 批量操作 ----
 const selected = ref(new Set());
@@ -303,6 +305,7 @@ function toggleInstalledNote(v) {
           <button class="btn" @click="openInBrowser(v.version)" :disabled="isBlocked(v.version)" :title="t('installed.openBrowserTip')">{{ t("installed.openBrowser") }}</button>
           <button class="btn" @click="setDefault(v.version)" :disabled="v.is_default || isBlocked(v.version)">{{ t("installed.setDefault") }}</button>
           <button class="btn" @click="createShortcut(v.version)" :disabled="isBlocked(v.version)" :title="t('installed.shortcutTip')">{{ t("installed.shortcut") }}</button>
+          <button class="btn" @click="pluginPanelVer = pluginPanelVer === v.version ? null : v.version" :disabled="isBlocked(v.version)">{{ t("dsplugins.button") }}</button>
           <button class="btn" @click="scanVersionSize(v.version)" :disabled="scanning || isBlocked(v.version)" :title="t('installed.scanTip')">
             {{ isScanningVer(v.version) ? t("installed.scanning") : (verSizes[v.version] != null ? t("installed.rescanSize") : t("installed.scanSize")) }}
           </button>
@@ -321,6 +324,11 @@ function toggleInstalledNote(v) {
           >{{ t("installed.isolate") }}</button>
           <button class="btn danger" @click="uninstall(v.version)" :disabled="!!uninstalling || batchBusy || (scanning && inQueue(v.version))">{{ uninstalling === v.version ? t("installed.uninstalling") : t("installed.uninstall") }}</button>
         </div>
+        <DsPluginPanel
+          v-if="pluginPanelVer === v.version"
+          :version="v.version"
+          @close="pluginPanelVer = null"
+        />
         <NotesPanel
           v-if="installedNoteVer === v.version"
           :version="v.version"
