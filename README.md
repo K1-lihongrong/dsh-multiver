@@ -132,21 +132,22 @@ dsh web
 
 ### 命令行模式（CLI）
 
-v0.1.8 起支持**无头 CLI** —— 带任一 CLI 参数时不启动图形界面，执行完按退出码退出（成功 `0` / 失败 `1`）：
+v0.3.0 起为**子命令风格** —— 带任一 CLI 子命令时不启动图形界面，执行完按退出码退出（成功 `0` / 失败 `1`）：
 
 ```bash
-dsh-multiver.exe --list                                    # 列出已安装版本
-dsh-multiver.exe --install <版本> [--registry <url>]       # 无头安装
-dsh-multiver.exe --uninstall <版本>                        # 无头卸载
-dsh-multiver.exe --set-default <版本>                      # 设默认版本
-dsh-multiver.exe --maintenance [--cleanup|--prune]         # 无头维护
-dsh-multiver.exe --install <版本> --dry-run                 # 只预览，不执行
-dsh-multiver.exe --help                                    # 帮助
+dsh-multiver.exe list                                    # 列出已安装版本
+dsh-multiver.exe install <版本> [--registry <url>]       # 无头安装
+dsh-multiver.exe uninstall <版本>                        # 无头卸载
+dsh-multiver.exe set-default <版本>                      # 设默认版本
+dsh-multiver.exe maintenance [--cleanup|--prune]         # 无头维护
+dsh-multiver.exe install <版本> --dry-run                # 只预览，不执行
+dsh-multiver.exe help                                    # 帮助
 ```
 
-- `--list` 一行一个版本号（默认版本以 `* ` 前缀标记），输出可直接管道
+- `list` 一行一个版本号（默认版本以 `* ` 前缀标记），输出可直接管道
 - 安装进度走 stderr，stdout 保持干净
 - 破坏性命令**无交互确认**，请确保参数正确
+- **从 v0.2.x 升级**：旧 `--flag` 语法已移除，见 [CLI 迁移指南](docs/CLI迁移指南-v0.3.0.md)
 
 详见 [使用手册 · 命令行模式](docs/使用手册.md#八命令行模式cli)。
 

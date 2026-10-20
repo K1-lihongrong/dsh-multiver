@@ -237,7 +237,7 @@ fn node_fallback_or_fail(root: &Path, detail: String) -> CheckItem {
         "Node.js",
         format!("{}，且未准备便携 Node", detail),
         true,
-        "可运行 dsh-multiver --setup-runtime 自动下载便携 Node，或到 Node.js 官网下载 LTS 版（22.19+ / 24+）安装。",
+        "可运行 dsh-multiver setup-runtime 自动下载便携 Node，或到 Node.js 官网下载 LTS 版（22.19+ / 24+）安装。",
         "env.node.hint_missing",
         "https://nodejs.org/zh-cn/download",
     )
@@ -262,7 +262,7 @@ pub fn check_pnpm(root: &Path) -> CheckItem {
                 "pnpm",
                 "未找到 pnpm 命令，且未准备便携 pnpm".to_string(),
                 true,
-                "可运行 dsh-multiver --setup-runtime 自动下载便携 pnpm，或先安装 Node 后运行 npm install -g pnpm。",
+                "可运行 dsh-multiver setup-runtime 自动下载便携 pnpm，或先安装 Node 后运行 npm install -g pnpm。",
                 "env.pnpm.hint_missing",
                 "https://pnpm.io/zh/installation",
             )

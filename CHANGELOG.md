@@ -7,7 +7,25 @@
 
 ---
 
-## [0.2.14] - 2026-10-19
+## [0.3.0] - 2026-10-20
+
+> **破坏性变更**：CLI 从 `--flag` 风格改为子命令风格。旧语法已移除，迁移见 [CLI 迁移指南](docs/CLI迁移指南-v0.3.0.md)。
+
+### 破坏性变更
+- **CLI 子命令风格**：`--list` → `list`，`--install X` → `install X` 等（全部 21 个命令）。
+  - 修饰符语法不变：`--json` / `--dry-run` / `--force` / `--registry <url>` / `--off`。
+  - GUI 启动不变（不带子命令）。
+  - 内部参数 `--launch-version` / `--debug-progress` 不变。
+
+### 重构
+- **拆分 `cli.rs`（1750 行）→ `cli/` 模块**：
+  - `mod.rs`（入口 + 命令枚举 + 上下文）、`parse.rs`（解析）、`output.rs`（输出辅助）、`help.rs`（帮助）、`console.rs`（控制台接入）。
+  - `commands/`：`version.rs`（list/which/info/versions/install/uninstall）、`default.rs`（set-default）、`store.rs`（maintenance/clean/doctor）、`env.rs`（env）、`misc.rs`（其余）。
+  - 单文件 ≤400 行，职责清晰。
+
+### 文档
+- 新增 [CLI 迁移指南](docs/CLI迁移指南-v0.3.0.md)（旧→新对照 + 脚本迁移示例）。
+- 使用手册、README、CUCKOO.md 同步更新为新语法。
 
 ### 新增
 - **启动加载页**：快捷方式启动 / 运行按钮时立即显示加载页。
