@@ -9,10 +9,10 @@ test("快捷方式启动：首帧即显示启动态（不闪主界面）", async
     installed: [makeVersion("0.2.0-rc.1")],
   });
   await page.goto("/");
-  // 启动态覆盖层可见
-  await expect(page.locator(".launch-overlay")).toBeVisible();
-  await expect(page.locator(".launch-version")).toHaveText("0.2.0-rc.1");
-  await expect(page.locator(".launch-spinner")).toBeVisible();
+  // 启动页可见（v0.2.14 新组件类名 .splash）
+  await expect(page.locator(".splash")).toBeVisible();
+  await expect(page.locator(".splash-version")).toHaveText("0.2.0-rc.1");
+  await expect(page.locator(".splash-dots")).toBeVisible();
 });
 
 test("快捷方式启动：静态骨架在 Vue 挂载后移除", async ({ page }) => {
@@ -24,7 +24,7 @@ test("快捷方式启动：静态骨架在 Vue 挂载后移除", async ({ page }
 test("普通启动：不显示启动态", async ({ page }) => {
   await mockTauri(page, { launchMode: null, installed: [makeVersion("0.2.0-rc.1")] });
   await page.goto("/");
-  await expect(page.locator(".launch-overlay")).toHaveCount(0);
+  await expect(page.locator(".splash")).toHaveCount(0);
   await expect(page.locator(".brand h1")).toBeVisible();
 });
 
@@ -41,8 +41,8 @@ test("运行按钮：点击后切启动态", async ({ page }) => {
   await page.goto("/");
   // 点「运行」
   await page.getByRole("button", { name: "运行", exact: true }).click();
-  // 启动态出现
-  await expect(page.locator(".launch-overlay")).toBeVisible();
+  // 启动页出现
+  await expect(page.locator(".splash")).toBeVisible();
   // 500ms 后消失（恢复主界面）
-  await expect(page.locator(".launch-overlay")).toHaveCount(0, { timeout: 3000 });
+  await expect(page.locator(".splash")).toHaveCount(0, { timeout: 3000 });
 });

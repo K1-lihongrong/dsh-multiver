@@ -24,5 +24,5 @@ test("启动态文案随语言切换", async ({ page }) => {
   await mockTauri(page, { launchMode: "0.2.0-rc.1" });
   await page.goto("/");
   // 启动态显示，文案含"启动"
-  await expect(page.locator(".launch-status")).toContainText("启动");
+  await expect(page.locator(".splash-status")).toContainText("启动");
 });

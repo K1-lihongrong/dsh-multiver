@@ -50,6 +50,11 @@ export function setTheme(mode) {
   apply(mode);
 }
 
+/// 当前实际是否暗色（供组件用；响应 themeMode + 系统偏好）
+export function isDark() {
+  return resolve(themeMode.value) === "dark";
+}
+
 /// 首屏前调用：读偏好 + 应用（防闪烁）
 export function applyStored() {
   const mode = stored();

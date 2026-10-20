@@ -25,7 +25,7 @@ test("点「取消」→ 对话框关闭、不启动", async ({ page }) => {
   await page.getByRole("button", { name: "取消" }).click();
   await expect(page.locator(".modal-mask")).toHaveCount(0);
   // 没进启动态
-  await expect(page.locator(".launch-overlay")).toHaveCount(0);
+  await expect(page.locator(".splash")).toHaveCount(0);
 });
 
 test("点「我知道了」→ 对话框关闭 + 不再提示", async ({ page }) => {

@@ -9,7 +9,7 @@ import PathSettings from "./components/PathSettings.vue";
 import InstalledList from "./components/InstalledList.vue";
 import RemoteList from "./components/RemoteList.vue";
 import RuntimeGuide from "./components/RuntimeGuide.vue";
-import launchPlaceholder from "./assets/launch-placeholder.svg";
+import LaunchScreen from "./components/LaunchScreen.vue";
 
 // v0.2.14：main.js 挂载前已查启动模式，作为初始 prop 传入 → 第一帧即启动态（不闪主界面）
 const props = defineProps({
@@ -231,25 +231,15 @@ onUnmounted(() => {
 
 <template>
 <div class="app">
-  <!-- v0.2.14 启动态覆盖层（窗口内容区整体切换） -->
-  <div class="launch-overlay" v-if="launching">
-    <img class="launch-img" :src="launchPlaceholder" alt="" />
-    <div class="launch-version" v-if="launchVersion">{{ launchVersion }}</div>
-    <template v-if="launchStage === 'error'">
-      <div class="launch-status error">{{ t("launch.failed") }}</div>
-      <div class="launch-error-text">{{ launchError }}</div>
-      <div class="launch-actions">
-        <button class="btn primary" @click="cancelLaunch">{{ t("launch.back") }}</button>
-        <button class="btn" @click="openLaunchLogs">{{ t("launch.viewLogs") }}</button>
-      </div>
-    </template>
-    <template v-else>
-      <div class="launch-status">
-        {{ launchStage === 'waiting' ? t("launch.waiting") : t("launch.starting") }}
-      </div>
-      <div class="launch-spinner"></div>
-    </template>
-  </div>
+  <!-- v0.2.14 启动加载页 -->
+  <LaunchScreen
+    v-if="launching"
+    :version="launchVersion"
+    :stage="launchStage"
+    :error-text="launchError"
+    @back="cancelLaunch"
+    @view-logs="openLaunchLogs"
+  />
 
   <header class="topbar">
     <div class="brand">
@@ -418,30 +408,4 @@ onUnmounted(() => {
 .toast-close:hover { color: var(--toast-text); }
 .fade-enter-active, .fade-leave-active { transition: opacity .25s; }
 .fade-enter-from, .fade-leave-to { opacity: 0; }
-
-/* ── v0.2.14 启动态覆盖层 ── */
-.launch-overlay {
-  position: absolute; inset: 0; z-index: 200;
-  display: flex; flex-direction: column; align-items: center; justify-content: center;
-  gap: 14px; background: var(--panel-bg);
-}
-.launch-img { width: 200px; height: auto; opacity: .9; user-select: none; }
-.launch-version {
-  font-size: 14px; color: var(--text-3); font-weight: 600;
-  letter-spacing: .4px; font-variant-numeric: tabular-nums;
-}
-.launch-status { font-size: 15px; color: var(--text); }
-.launch-status.error { color: var(--danger, #e5484d); font-weight: 600; }
-.launch-error-text {
-  max-width: 70%; max-height: 30vh; overflow-y: auto; font-size: 12px;
-  color: var(--text-muted); white-space: pre-wrap; word-break: break-all;
-  background: var(--surface-2); padding: 10px 14px; border-radius: 8px;
-}
-.launch-actions { display: flex; gap: 10px; margin-top: 6px; }
-.launch-spinner {
-  width: 30px; height: 30px; border-radius: 50%;
-  border: 3px solid var(--surface-3); border-top-color: var(--accent);
-  animation: launch-spin .8s linear infinite;
-}
-@keyframes launch-spin { to { transform: rotate(360deg); } }
 </style>
