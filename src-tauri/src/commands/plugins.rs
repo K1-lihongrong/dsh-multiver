@@ -50,9 +50,12 @@ pub(crate) fn ds_plugin_action(
     let home = crate::paths::resolve_home(&cfg, &dirs, &version);
     let bin = crate::dsplugins::dsh_bin(&vdir)
         .ok_or_else(|| format!("版本 {} 缺少 dsh 入口", version))?;
+    // 先校验包名：防止把 pnpm 选项或 shell 特殊字符透传进去（B1-05）。
+    crate::dsplugins::validate_package_spec(&package)?;
+    let package = package.trim();
     let args: Vec<&str> = match action.as_str() {
-        "add" => vec!["add", &package],
-        "remove" => vec!["remove", &package],
+        "add" => vec!["add", package],
+        "remove" => vec!["remove", package],
         _ => return Err(format!("未知操作：{}", action)),
     };
     let (ok, out) = crate::dsplugins::run_dsh_plugin(&bin, &home, &profile, &args);

@@ -3,24 +3,20 @@ import { mockTauri, makeVersion } from "./helpers.js";
 
 // v0.3.0 双向桥 B1：dsh 插件管理面板。
 
-test("点「插件」→ 展开面板（列 profile 与插件）", async ({ page }) => {
+const PROFILE = {
+  name: "web",
+  path: "D:/dsh/profiles/web",
+  plugins: [
+    { name: "@deepseek-ai/dsh-base", version: "0.2.1", is_bundle: true, source: "bundle", origin: "official" },
+    { name: "my-plugin", version: "1.0.0", is_bundle: false, source: "user", origin: "third_party" },
+  ],
+};
+
+test("点「插件」→ 展开面板（列 profile 与插件 + 来源/归属标签）", async ({ page }) => {
   await mockTauri(page, {
     installed: [makeVersion("0.2.0-rc.1", { isolated: true })],
     extra: {
-      ds_list_plugins: {
-        dsh_home: "D:/dsh",
-        home_kind: "shared",
-        profiles: [
-          {
-            name: "web",
-            path: "D:/dsh/profiles/web",
-            plugins: [
-              { name: "@deepseek-ai/dsh-base", version: "0.2.1", is_bundle: true },
-              { name: "my-plugin", version: "1.0.0", is_bundle: false },
-            ],
-          },
-        ],
-      },
+      ds_list_plugins: { dsh_home: "D:/dsh", home_kind: "shared", profiles: [PROFILE] },
     },
   });
   await page.goto("/");
@@ -28,6 +24,11 @@ test("点「插件」→ 展开面板（列 profile 与插件）", async ({ page
   await expect(page.locator(".ds-plugin-panel")).toBeVisible();
   await expect(page.getByText("@deepseek-ai/dsh-base")).toBeVisible();
   await expect(page.getByText("my-plugin")).toBeVisible();
+  // 双维度标签：官方/内置 + 第三方/用户安装
+  await expect(page.locator(".dp-badge-official")).toBeVisible();
+  await expect(page.locator(".dp-badge-bundle")).toBeVisible();
+  await expect(page.locator(".dp-badge-third")).toBeVisible();
+  await expect(page.locator(".dp-badge-user")).toBeVisible();
 });
 
 test("无 profile 时显示提示", async ({ page }) => {
@@ -60,4 +61,37 @@ test("输入包名点安装 → 调 ds_plugin_action", async ({ page }) => {
   expect(flat).toContain("test-pkg");
   expect(flat).toContain('"action":"add"');
   expect(flat).toContain('"profile":"web"');
+});
+
+test("内置 bundle 的卸载按钮禁用", async ({ page }) => {
+  await mockTauri(page, {
+    installed: [makeVersion("0.2.0-rc.1", { isolated: true })],
+    extra: { ds_list_plugins: { dsh_home: "D:/dsh", home_kind: "shared", profiles: [PROFILE] } },
+  });
+  await page.goto("/");
+  await page.getByRole("button", { name: "插件", exact: true }).click();
+  const bundleRow = page.locator(".dp-item", { hasText: "@deepseek-ai/dsh-base" });
+  await expect(bundleRow.getByRole("button", { name: "卸载" })).toBeDisabled();
+});
+
+test("卸载用户插件 → 二次确认后调 ds_plugin_action(remove)", async ({ page }) => {
+  const calls = [];
+  await page.exposeFunction("__recordRemove", (x) => calls.push(x));
+  await mockTauri(page, {
+    installed: [makeVersion("0.2.0-rc.1", { isolated: true })],
+    extra: {
+      ds_list_plugins: { dsh_home: "D:/dsh", home_kind: "shared", profiles: [PROFILE] },
+      ds_plugin_action: "(args) => { window.__recordRemove(args); return Promise.resolve('ok'); }",
+      // Tauri 对话框插件：ask() 走 plugin:dialog|message，返回 "Yes" 视为确认
+      "plugin:dialog|message": "Yes",
+    },
+  });
+  await page.goto("/");
+  await page.getByRole("button", { name: "插件", exact: true }).click();
+  const row = page.locator(".dp-item", { hasText: "my-plugin" });
+  await row.getByRole("button", { name: "卸载" }).click();
+  await page.waitForTimeout(500);
+  const flat = JSON.stringify(calls);
+  expect(flat).toContain('"action":"remove"');
+  expect(flat).toContain("my-plugin");
 });

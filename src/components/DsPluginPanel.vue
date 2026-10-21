@@ -1,6 +1,7 @@
 <script setup>
 import { ref, computed, onMounted } from "vue";
 import { invoke } from "@tauri-apps/api/core";
+import { ask } from "@tauri-apps/plugin-dialog";
 import { t } from "../composables/useI18n.js";
 import { useToast } from "../composables/useToast.js";
 
@@ -27,6 +28,15 @@ const homeKindLabel = computed(() => {
 });
 const homeKindClass = computed(() => "kind-" + homeKind.value);
 
+// v0.3.0 B1 增强：来源（内置/用户安装）与归属（官方/第三方）两个独立维度。
+// 后端已给出 source/origin；这里保留按旧字段兜底的推导，兼容旧数据与 E2E mock。
+const srcOf = (pl) => pl.source || (pl.is_bundle ? "bundle" : "user");
+const orgOf = (pl) =>
+  pl.origin || (pl.name && pl.name.startsWith("@deepseek-ai/") ? "official" : "third_party");
+const isBundle = (pl) => srcOf(pl) === "bundle";
+const srcLabel = (pl) => t(srcOf(pl) === "bundle" ? "dsplugins.sourceBundle" : "dsplugins.sourceUser");
+const orgLabel = (pl) => t(orgOf(pl) === "official" ? "dsplugins.originOfficial" : "dsplugins.originThirdParty");
+
 async function load() {
   loading.value = true;
   try {
@@ -46,9 +56,22 @@ async function load() {
 
 const currentProfile = () => profiles.value.find((p) => p.name === activeProfile.value);
 
-async function doAction(action, pkg) {
+async function doAction(action, pkg, bundle) {
   const name = (pkg || "").trim();
   if (!name) return;
+  // 内置 bundle 不属于 dependencies，卸载会失败/无效，直接拦下。
+  if (action === "remove" && bundle) {
+    notify(t("dsplugins.bundleLocked"));
+    return;
+  }
+  // 卸载是破坏性操作：先二次确认（与项目其他卸载操作一致）。
+  if (action === "remove") {
+    const ok = await ask(t("dsplugins.removeConfirm", { p: name }), {
+      title: t("dsplugins.remove"),
+      kind: "warning",
+    });
+    if (!ok) return;
+  }
   busy.value = true;
   try {
     const out = await invoke("ds_plugin_action", {
@@ -142,9 +165,15 @@ onMounted(load);
               <code class="dp-item-name">{{ pl.name }}</code>
               <span class="dp-item-ver" v-if="pl.version">v{{ pl.version }}</span>
             </div>
-            <span class="dp-badge" v-if="pl.is_bundle">{{ t("dsplugins.bundle") }}</span>
+            <span class="dp-badge" :class="orgOf(pl) === 'official' ? 'dp-badge-official' : 'dp-badge-third'">{{ orgLabel(pl) }}</span>
+            <span class="dp-badge" :class="isBundle(pl) ? 'dp-badge-bundle' : 'dp-badge-user'">{{ srcLabel(pl) }}</span>
           </div>
-          <button class="dp-btn dp-btn-danger dp-btn-sm" @click="doAction('remove', pl.name)" :disabled="busy">
+          <button
+            class="dp-btn dp-btn-danger dp-btn-sm"
+            @click="doAction('remove', pl.name, isBundle(pl))"
+            :disabled="busy || isBundle(pl)"
+            :title="isBundle(pl) ? t('dsplugins.bundleLocked') : ''"
+          >
             {{ t("dsplugins.remove") }}
           </button>
         </li>
@@ -285,4 +314,10 @@ onMounted(load);
   background: var(--accent-weak); color: var(--accent); border: 1px solid var(--accent-border);
   font-weight: 500;
 }
+/* 归属：官方 / 第三方 */
+.dp-badge-official { background: rgba(48, 164, 108, 0.12); color: #2f9e63; border-color: rgba(48, 164, 108, 0.35); }
+.dp-badge-third { background: rgba(245, 197, 66, 0.16); color: #a17a08; border-color: rgba(245, 197, 66, 0.45); }
+/* 来源：内置 / 用户安装 */
+.dp-badge-bundle { background: var(--surface-3); color: var(--text-3); border-color: var(--panel-border); }
+.dp-badge-user { background: var(--accent-weak); color: var(--accent); border-color: var(--accent-border); }
 </style>
