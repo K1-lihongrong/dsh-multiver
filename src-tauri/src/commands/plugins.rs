@@ -188,6 +188,21 @@ pub(crate) fn ds_open_plugin_logs(
     }
 }
 
+/// 插件操作结果（安装对话框「完成」页用：name 为新装/变更的依赖名；卸载为 None）。
+#[derive(serde::Serialize)]
+pub(crate) struct DsActionResult {
+    pub output: String,
+    pub name: Option<String>,
+}
+
+fn read_dep_map(profile_dir: &std::path::Path) -> serde_json::Map<String, serde_json::Value> {
+    std::fs::read_to_string(profile_dir.join("package.json"))
+        .ok()
+        .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
+        .and_then(|v| v.get("dependencies").and_then(|d| d.as_object()).cloned())
+        .unwrap_or_default()
+}
+
 /// dsh 插件安装/卸载（双向桥 B1）。
 ///
 /// action: "add" | "remove"；package: npm 包名。
@@ -203,7 +218,7 @@ pub(crate) async fn ds_plugin_action(
     action: String,
     package: String,
     registry: Option<String>,
-) -> Result<String, String> {
+) -> Result<DsActionResult, String> {
     // 与官方安装对话框对齐：add 允许「包名 / GitHub 地址 / 本地目录」，remove 只允许包名。
     crate::dsplugins::validate_profile_name(&profile)?;
     match action.as_str() {
@@ -215,6 +230,9 @@ pub(crate) async fn ds_plugin_action(
         crate::dsplugins::validate_registry_url(url)?;
     }
     let (cli, home) = resolve_dsh(&app, &version)?;
+    let pdir = crate::dsplugins::profiles_dir(&home).join(&profile);
+    let before = read_dep_map(&pdir);
+    let is_add = action == "add";
     let package = package.trim().to_string();
     let args: Vec<String> = match action.as_str() {
         "add" => {
@@ -231,7 +249,7 @@ pub(crate) async fn ds_plugin_action(
     let app2 = app.clone();
     let version2 = version.clone();
     let profile2 = profile.clone();
-    tauri::async_runtime::spawn_blocking(move || {
+    let result: Result<String, String> = tauri::async_runtime::spawn_blocking(move || {
         use tauri::Emitter;
         let args_ref: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
         let res = crate::dsplugins::run_dsh_plugin(
@@ -264,7 +282,18 @@ pub(crate) async fn ds_plugin_action(
         }
     })
     .await
-    .map_err(|e| format!("插件操作执行失败：{e}"))?
+    .map_err(|e| format!("插件操作执行失败：{e}"))?;
+    let output = result?;
+    let name = if is_add {
+        let after = read_dep_map(&pdir);
+        after
+            .iter()
+            .find(|(k, v)| before.get(*k) != Some(*v))
+            .map(|(k, _)| k.clone())
+    } else {
+        None
+    };
+    Ok(DsActionResult { output, name })
 }
 
 /// 初始化一个 profile（B1-07）：调 `dsh plugin --profile <p> list`，

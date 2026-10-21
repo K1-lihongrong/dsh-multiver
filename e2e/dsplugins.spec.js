@@ -1,4 +1,4 @@
-import { test, expect } from "@playwright/test";
+﻿import { test, expect } from "@playwright/test";
 import { mockTauri, makeVersion } from "./helpers.js";
 
 // v0.3.0 双向桥 B1：dsh 插件管理面板。
@@ -45,9 +45,10 @@ test("安装失败且带官方诊断 → 显示 allow-version 指引（对齐官
   await page.getByRole("button", { name: /添加插件/ }).click();
   await page.locator(".dp-modal-input").first().fill("x");
   await page.locator(".dp-modal").getByRole("button", { name: "安装", exact: true }).click();
+  await page.locator(".dp-modal").getByRole("button", { name: "确认安装", exact: true }).click();
   await page.waitForTimeout(400);
-  await expect(page.locator(".toast")).toContainText("版本不兼容");
-  await expect(page.locator(".toast")).toContainText("诊断日志");
+  await expect(page.locator(".dp-modal")).toContainText("版本不兼容");
+  await expect(page.locator(".dp-modal")).toContainText("诊断日志");
 });
 
 
@@ -95,6 +96,7 @@ test("输入包名点安装 → 调 ds_plugin_action", async ({ page }) => {
   await page.getByRole("button", { name: /添加插件/ }).click();
   await page.locator(".dp-modal-input").first().fill("test-pkg");
   await page.locator(".dp-modal").getByRole("button", { name: "安装", exact: true }).click();
+  await page.locator(".dp-modal").getByRole("button", { name: "确认安装", exact: true }).click();
   await page.waitForTimeout(400);
   const flat = JSON.stringify(calls);
   expect(flat).toContain("test-pkg");
@@ -180,8 +182,9 @@ test("安装失败 → 显示错误提示（B1-09）", async ({ page }) => {
   await page.getByRole("button", { name: /添加插件/ }).click();
   await page.locator(".dp-modal-input").first().fill("bad-pkg");
   await page.locator(".dp-modal").getByRole("button", { name: "安装", exact: true }).click();
+  await page.locator(".dp-modal").getByRole("button", { name: "确认安装", exact: true }).click();
   await page.waitForTimeout(400);
-  await expect(page.locator(".toast")).toContainText("模拟安装失败");
+  await expect(page.locator(".dp-modal")).toContainText("模拟安装失败");
 });
 
 test("打开 profile 目录 → 调 ds_open_profile_dir（B1-09）", async ({ page }) => {
@@ -272,6 +275,7 @@ test("安装对话框选择镜像源 → registry 透传（对齐官方安装源
   await page.locator(".dp-modal-input").first().fill("test-pkg");
   await page.locator(".dp-modal select").selectOption("mirror");
   await page.locator(".dp-modal").getByRole("button", { name: "安装", exact: true }).click();
+  await page.locator(".dp-modal").getByRole("button", { name: "确认安装", exact: true }).click();
   await page.waitForTimeout(400);
   const flat = JSON.stringify(calls);
   expect(flat).toContain("registry.npmmirror.com");
