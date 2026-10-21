@@ -2,7 +2,30 @@
 
 use crate::cli::load_ctx;
 use crate::cli::output::{info_fail, json_str, out_result};
+use crate::runtime::RuntimeProgress;
 use crate::versions;
+
+/// 便携运行时下载的进度回调：TTY 下单行刷新「阶段 + 已下载 / 总量 (百分比)」。
+///
+/// `json` 模式下不输出（stdout 只能有 JSON）。Node 与 pnpm 两段下载共用此回调
+/// （原先两处逐字重复）。
+fn runtime_progress_cb(json: bool) -> impl Fn(RuntimeProgress) {
+    move |p| {
+        if json {
+            return;
+        }
+        match p.total {
+            Some(t) if t > 0 => eprint!(
+                "\r{}  {:.1} / {:.1} MB ({:.0}%)",
+                p.stage,
+                p.done as f64 / 1e6,
+                t as f64 / 1e6,
+                p.done as f64 * 100.0 / t as f64
+            ),
+            _ => eprint!("\r{}", p.stage),
+        }
+    }
+}
 
 /// `export [<文件>]`：导出配置 + 版本清单（JSON）。默认写到数据根目录。
 pub fn cmd_export(file: Option<&str>, json: bool) -> i32 {
@@ -354,21 +377,7 @@ pub fn cmd_setup_runtime(dry_run: bool, json: bool) -> i32 {
         if !json {
             eprintln!("正在下载便携 Node（约 30MB）…");
         }
-        let on_prog = |p: crate::runtime::RuntimeProgress| {
-            if json {
-                return;
-            }
-            match p.total {
-                Some(t) if t > 0 => eprint!(
-                    "\r{}  {:.1} / {:.1} MB ({:.0}%)",
-                    p.stage,
-                    p.done as f64 / 1e6,
-                    t as f64 / 1e6,
-                    p.done as f64 * 100.0 / t as f64
-                ),
-                _ => eprint!("\r{}", p.stage),
-            }
-        };
+        let on_prog = runtime_progress_cb(json);
         match crate::runtime::install_bundled_node(root, &on_prog) {
             Ok(dir) => {
                 node_ok = true;
@@ -393,21 +402,7 @@ pub fn cmd_setup_runtime(dry_run: bool, json: bool) -> i32 {
         if !json {
             eprintln!("正在下载便携 pnpm（约 22MB）…");
         }
-        let on_prog = |p: crate::runtime::RuntimeProgress| {
-            if json {
-                return;
-            }
-            match p.total {
-                Some(t) if t > 0 => eprint!(
-                    "\r{}  {:.1} / {:.1} MB ({:.0}%)",
-                    p.stage,
-                    p.done as f64 / 1e6,
-                    t as f64 / 1e6,
-                    p.done as f64 * 100.0 / t as f64
-                ),
-                _ => eprint!("\r{}", p.stage),
-            }
-        };
+        let on_prog = runtime_progress_cb(json);
         match crate::runtime::install_bundled_pnpm(root, &on_prog) {
             Ok(dir) => {
                 pnpm_ok = true;
