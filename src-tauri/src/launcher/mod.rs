@@ -19,5 +19,7 @@ pub(crate) use diagnose::{diagnose, latest_session_errors, read_recent_errors};
 pub use process::{kill_tree, port_in_use, spawn_web_console, spawn_web_hidden};
 #[allow(unused_imports)]
 pub use shortcut::create_desktop_shortcut;
+// 这两个函数本身是 #[cfg(windows)]，重导出也必须加同样的门，否则 Linux 编译报 E0432。
+#[cfg(windows)]
 #[allow(unused_imports)]
 pub(crate) use shortcut::{materialize_dsh_icon, register_aumid_icon};
