@@ -279,6 +279,15 @@ export default {
     "dsplugins.exampleSpec": "dsh-plugin-whale-pet",
 
     "dsplugins.install": "安装",
+    "dsplugins.checking": "正在检查插件…",
+    "dsplugins.inspectNotBundle": "「{p}」未声明 dsh.bundle，不是组合包插件，已拒绝安装（与官方一致）。",
+    "dsplugins.inspectNotFound": "找不到「{p}」：所有安装源都没有这个包。",
+    "dsplugins.inspectNetwork": "无法连接安装源检查「{p}」：请检查网络/代理或更换安装源。",
+    "dsplugins.inspectProblem": "无法安装「{p}」。",
+    "dsplugins.descriptionLabel": "描述",
+    "dsplugins.inspectGitNote": "Git 来源无法预检内容；将从 {p} 拉取。",
+    "dsplugins.probeRecommended": "已探测最快安装源（缓存 5 分钟）",
+
     "dsplugins.installDesc": "输入插件的包名、GitHub 仓库地址或本地目录路径。",
     "dsplugins.specPlaceholder": "例如 dsh-plugin-whale-pet",
     "dsplugins.guideTitle": "插件安装引导和示例",

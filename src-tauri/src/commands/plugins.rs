@@ -188,6 +188,266 @@ pub(crate) fn ds_open_plugin_logs(
     }
 }
 
+/// 安装前 inspect（B1-16，对齐官方 `pluginManager.inspect` 的可见行为）：
+/// npm 包 → `pnpm view` 读名称/版本/描述/`dsh.bundle`；本地目录 → 读 package.json；
+/// git URL → 只确认形式与主机（不抓取）。问题码：not-found / not-a-bundle / network。
+#[derive(serde::Serialize)]
+pub(crate) struct DsInspect {
+    pub kind: String,
+    pub name: Option<String>,
+    pub version: Option<String>,
+    pub description: Option<String>,
+    pub declares_bundle: bool,
+    pub problem: Option<String>,
+    pub detail: Option<String>,
+}
+
+fn inspect_path_spec(spec: &str, profile_dir: &std::path::Path) -> Option<DsInspect> {
+    let p = std::path::Path::new(spec);
+    let pkg = if p.join("package.json").exists() {
+        p.to_path_buf()
+    } else {
+        profile_dir.join(spec)
+    };
+    let text = std::fs::read_to_string(pkg.join("package.json")).ok()?;
+    let v: serde_json::Value = serde_json::from_str(&text).ok()?;
+    Some(DsInspect {
+        kind: "path".into(),
+        name: v
+            .get("name")
+            .and_then(|x| x.as_str())
+            .map(|s| s.to_string()),
+        version: v
+            .get("version")
+            .and_then(|x| x.as_str())
+            .map(|s| s.to_string()),
+        description: v
+            .get("description")
+            .and_then(|x| x.as_str())
+            .map(|s| s.to_string()),
+        declares_bundle: v.get("dsh").and_then(|d| d.get("bundle")).is_some(),
+        problem: None,
+        detail: None,
+    })
+}
+
+#[tauri::command]
+pub(crate) async fn ds_inspect_spec(
+    app: tauri::AppHandle,
+    version: String,
+    profile: String,
+    spec: String,
+    registry: Option<String>,
+) -> Result<DsInspect, String> {
+    crate::dsplugins::validate_profile_name(&profile)?;
+    crate::dsplugins::validate_install_spec(&spec)?;
+    if let Some(url) = &registry {
+        crate::dsplugins::validate_registry_url(url)?;
+    }
+    let (cli, home) = resolve_dsh(&app, &version)?;
+    let pdir = crate::dsplugins::profiles_dir(&home).join(&profile);
+    let s = spec.trim().to_string();
+    let lower = s.to_ascii_lowercase();
+    let is_url = lower.starts_with("http://")
+        || lower.starts_with("https://")
+        || lower.starts_with("git+")
+        || lower.starts_with("github:")
+        || lower.starts_with("file:")
+        || lower.starts_with("link:");
+    if is_url {
+        let host = s
+            .split_once("://")
+            .map(|(_, r)| r.split('/').next().unwrap_or(r).to_string())
+            .unwrap_or_else(|| s.clone());
+        return Ok(DsInspect {
+            kind: "git".into(),
+            name: None,
+            version: None,
+            description: None,
+            declares_bundle: false,
+            problem: None,
+            detail: Some(host),
+        });
+    }
+    let is_path = lower.starts_with("./")
+        || lower.starts_with("../")
+        || lower.starts_with(".\\")
+        || lower.starts_with("..\\")
+        || lower.starts_with('/')
+        || (s.len() > 2
+            && s.as_bytes()[1] == b':'
+            && (s.as_bytes()[2] == b'\\' || s.as_bytes()[2] == b'/'));
+    if is_path {
+        return match inspect_path_spec(&s, &pdir) {
+            Some(mut info) => {
+                if !info.declares_bundle {
+                    info.problem = Some("not-a-bundle".into());
+                }
+                Ok(info)
+            }
+            None => Ok(DsInspect {
+                kind: "path".into(),
+                name: None,
+                version: None,
+                description: None,
+                declares_bundle: false,
+                problem: Some("not-found".into()),
+                detail: Some(s),
+            }),
+        };
+    }
+
+    // npm 包：用官方 CLI 的 pnpm view（与安装使用同一注册表/代理/认证配置）
+    let mut args: Vec<String> = vec![
+        "view".into(),
+        s.clone(),
+        "name".into(),
+        "version".into(),
+        "description".into(),
+        "dsh".into(),
+        "--json".into(),
+    ];
+    if let Some(url) = &registry {
+        args.push(format!("--registry={}", url.trim()));
+    }
+    let profile2 = profile.clone();
+    let res = tauri::async_runtime::spawn_blocking(move || {
+        let args_ref: Vec<&str> = args.iter().map(|a| a.as_str()).collect();
+        crate::dsplugins::run_dsh_plugin(
+            &cli.bin,
+            cli.js.as_deref(),
+            &home,
+            &profile2,
+            &args_ref,
+            crate::dsplugins::PLUGIN_TIMEOUT,
+            |_| {},
+        )
+    })
+    .await
+    .map_err(|e| format!("inspect 执行失败：{e}"))?;
+
+    let value = serde_json::from_str::<serde_json::Value>(res.output.trim()).ok();
+    let Some(v) = value else {
+        let problem = if res.output.contains("404") || res.output.contains("not found") {
+            "not-found"
+        } else {
+            "network"
+        };
+        return Ok(DsInspect {
+            kind: "npm".into(),
+            name: Some(s.clone()),
+            version: None,
+            description: None,
+            declares_bundle: false,
+            problem: Some(problem.into()),
+            detail: Some(res.output.chars().take(500).collect()),
+        });
+    };
+    let declares_bundle = v.get("dsh").and_then(|d| d.get("bundle")).is_some();
+    Ok(DsInspect {
+        kind: "npm".into(),
+        name: v
+            .get("name")
+            .and_then(|x| x.as_str())
+            .map(|x| x.to_string())
+            .or(Some(s.clone())),
+        version: v
+            .get("version")
+            .and_then(|x| x.as_str())
+            .map(|x| x.to_string()),
+        description: v
+            .get("description")
+            .and_then(|x| x.as_str())
+            .map(|x| x.to_string()),
+        declares_bundle,
+        problem: if declares_bundle {
+            None
+        } else {
+            Some("not-a-bundle".into())
+        },
+        detail: None,
+    })
+}
+
+/// 安装源探测（B1-17，对齐官方「首次使用时探测 npm 官方源与镜像，选最快」）。
+#[derive(serde::Serialize)]
+pub(crate) struct DsRegistryProbe {
+    pub kind: Option<String>,
+    pub url: Option<String>,
+    pub ms: Option<u64>,
+}
+
+type ProbeCacheEntry = (String, String, u64, std::time::Instant);
+
+#[tauri::command]
+pub(crate) async fn ds_probe_registries() -> Result<DsRegistryProbe, String> {
+    use std::sync::{Mutex, OnceLock};
+    use std::time::{Duration, Instant};
+    static CACHE: OnceLock<Mutex<Option<ProbeCacheEntry>>> = OnceLock::new();
+    let cache = CACHE.get_or_init(|| Mutex::new(None));
+    if let Ok(guard) = cache.lock() {
+        if let Some((kind, url, ms, at)) = guard.as_ref() {
+            if at.elapsed() < Duration::from_secs(300) {
+                return Ok(DsRegistryProbe {
+                    kind: Some(kind.clone()),
+                    url: Some(url.clone()),
+                    ms: Some(*ms),
+                });
+            }
+        }
+    }
+    let result = tauri::async_runtime::spawn_blocking(|| {
+        let candidates = [
+            ("official", "https://registry.npmjs.org/-/ping"),
+            ("mirror", "https://registry.npmmirror.com/-/ping"),
+        ];
+        let mut best: Option<(String, String, u64)> = None;
+        for (kind, url) in candidates {
+            let started = Instant::now();
+            let client = match reqwest::blocking::Client::builder()
+                .timeout(Duration::from_millis(1500))
+                .build()
+            {
+                Ok(c) => c,
+                Err(_) => continue,
+            };
+            let ok = client
+                .get(url)
+                .send()
+                .map(|r| r.status().is_success())
+                .unwrap_or(false);
+            if !ok {
+                continue;
+            }
+            let ms = started.elapsed().as_millis() as u64;
+            let base = url.trim_end_matches("/-/ping").to_string();
+            if best.as_ref().map(|(_, _, b)| ms < *b).unwrap_or(true) {
+                best = Some((kind.to_string(), base, ms));
+            }
+        }
+        best
+    })
+    .await
+    .map_err(|e| format!("探测安装源失败：{e}"))?;
+    match result {
+        Some((kind, url, ms)) => {
+            if let Ok(mut guard) = cache.lock() {
+                *guard = Some((kind.clone(), url.clone(), ms, Instant::now()));
+            }
+            Ok(DsRegistryProbe {
+                kind: Some(kind),
+                url: Some(url),
+                ms: Some(ms),
+            })
+        }
+        None => Ok(DsRegistryProbe {
+            kind: None,
+            url: None,
+            ms: None,
+        }),
+    }
+}
+
 /// 插件操作结果（安装对话框「完成」页用：name 为新装/变更的依赖名；卸载为 None）。
 #[derive(serde::Serialize)]
 pub(crate) struct DsActionResult {

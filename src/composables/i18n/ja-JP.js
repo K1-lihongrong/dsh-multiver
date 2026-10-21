@@ -279,6 +279,15 @@ export default {
     "dsplugins.exampleSpec": "dsh-plugin-whale-pet",
 
     "dsplugins.install": "インストール",
+    "dsplugins.checking": "プラグインを確認中…",
+    "dsplugins.inspectNotBundle": "「{p}」は dsh.bundle を宣言していないため、バンドルプラグインではないとしてインストールを拒否しました（公式と同じ）。",
+    "dsplugins.inspectNotFound": "「{p}」が見つかりません。どのインストール元にもありません。",
+    "dsplugins.inspectNetwork": "インストール元に接続できず「{p}」を確認できません。ネットワーク/プロキシを確認するか、インストール元を変更してください。",
+    "dsplugins.inspectProblem": "「{p}」をインストールできません。",
+    "dsplugins.descriptionLabel": "説明",
+    "dsplugins.inspectGitNote": "Git ソースは内容を事前確認できません。{p} から取得します。",
+    "dsplugins.probeRecommended": "最速のインストール元を検出しました（5 分キャッシュ）",
+
     "dsplugins.installDesc": "パッケージ名、GitHub リポジトリ URL、またはローカルディレクトリのパスを入力してください。",
     "dsplugins.specPlaceholder": "例: dsh-plugin-whale-pet",
     "dsplugins.guideTitle": "プラグイン導入ガイドと例",

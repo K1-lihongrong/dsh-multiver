@@ -279,6 +279,15 @@ export default {
     "dsplugins.exampleSpec": "dsh-plugin-whale-pet",
 
     "dsplugins.install": "Install",
+    "dsplugins.checking": "Checking plugin…",
+    "dsplugins.inspectNotBundle": "{p} does not declare dsh.bundle and is not a bundle plugin; install rejected (same as official).",
+    "dsplugins.inspectNotFound": "{p} was not found in any install source.",
+    "dsplugins.inspectNetwork": "Cannot reach an install source to inspect {p}; check network/proxy or change the source.",
+    "dsplugins.inspectProblem": "Cannot install {p}.",
+    "dsplugins.descriptionLabel": "Description",
+    "dsplugins.inspectGitNote": "Git sources cannot be inspected; it will be fetched from {p}.",
+    "dsplugins.probeRecommended": "Fastest install source probed (cached 5 min)",
+
     "dsplugins.installDesc": "Enter a package name, GitHub repository URL, or local directory path.",
     "dsplugins.specPlaceholder": "e.g. dsh-plugin-whale-pet",
     "dsplugins.guideTitle": "Plugin install guide and examples",
