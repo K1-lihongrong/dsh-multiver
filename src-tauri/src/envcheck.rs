@@ -117,9 +117,13 @@ fn run_version(program: &str) -> Option<String> {
     cmd.arg("--version");
     match cmd.output() {
         Ok(out) if out.status.success() => {
-            let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
+            let s = crate::console_decode::decode_console(&out.stdout)
+                .trim()
+                .to_string();
             if s.is_empty() {
-                let e = String::from_utf8_lossy(&out.stderr).trim().to_string();
+                let e = crate::console_decode::decode_console(&out.stderr)
+                    .trim()
+                    .to_string();
                 if e.is_empty() {
                     None
                 } else {
@@ -165,7 +169,9 @@ fn probe_import_meta_main() -> Option<bool> {
     cmd.arg("-e").arg("console.log(typeof import.meta.main)");
     match cmd.output() {
         Ok(out) if out.status.success() => {
-            let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
+            let s = crate::console_decode::decode_console(&out.stdout)
+                .trim()
+                .to_string();
             match s.as_str() {
                 "boolean" => Some(true),
                 "undefined" => Some(false),
@@ -393,7 +399,9 @@ pub fn check_registry(root: &Path) -> CheckItem {
     match cmd.output() {
         Ok(out) if out.status.success() => {
             // pnpm view 返回的是最新版本号；包成"可达（最新 X）"让用户明白查到了什么
-            let ver = String::from_utf8_lossy(&out.stdout).trim().to_string();
+            let ver = crate::console_decode::decode_console(&out.stdout)
+                .trim()
+                .to_string();
             let detail = if ver.is_empty() {
                 "可达".to_string()
             } else {
@@ -410,7 +418,9 @@ pub fn check_registry(root: &Path) -> CheckItem {
             }
         }
         Ok(out) => {
-            let e = String::from_utf8_lossy(&out.stderr).trim().to_string();
+            let e = crate::console_decode::decode_console(&out.stderr)
+                .trim()
+                .to_string();
             fail_item(
                 "npm 源连通",
                 if e.is_empty() { "无法访问 npm 源".to_string() } else { e.lines().next().unwrap_or("").to_string() },

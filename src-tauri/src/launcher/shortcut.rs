@@ -93,7 +93,7 @@ pub fn create_desktop_shortcut(exe_path: &Path, version: &str) -> Result<String,
     if out.status.success() {
         Ok(lnk_path.to_string_lossy().to_string())
     } else {
-        let e = String::from_utf8_lossy(&out.stderr);
+        let e = crate::console_decode::decode_console(&out.stderr);
         Err(format!("创建快捷方式失败: {}", e.trim()))
     }
 }
@@ -273,7 +273,7 @@ fn desktop_from_registry() -> Option<PathBuf> {
     if !out.status.success() {
         return None;
     }
-    let text = String::from_utf8_lossy(&out.stdout);
+    let text = crate::console_decode::decode_console(&out.stdout);
     // 输出形如：    Desktop    REG_SZ    D:\Users\ALING\Desktop
     for line in text.lines() {
         let line = line.trim();
@@ -298,7 +298,9 @@ fn desktop_dir() -> Option<PathBuf> {
     // 1) XDG 标准：xdg-user-dir 会读 ~/.config/user-dirs.dirs
     if let Ok(out) = Command::new("xdg-user-dir").arg("DESKTOP").output() {
         if out.status.success() {
-            let p = String::from_utf8_lossy(&out.stdout).trim().to_string();
+            let p = crate::console_decode::decode_console(&out.stdout)
+                .trim()
+                .to_string();
             if !p.is_empty() && Path::new(&p).exists() {
                 return Some(PathBuf::from(p));
             }
