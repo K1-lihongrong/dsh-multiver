@@ -86,6 +86,15 @@ pub fn get_info(cache: &Cache, version: &str) -> Option<SizeInfo> {
     cache.get(version).map(|e| e.info.clone())
 }
 
+/// 清理掉「版本已不存在」的缓存条目，保持缓存只含当前实际安装的版本。
+///
+/// 背景（D13）：缓存原先只写不删，卸载的版本会留下永远无法命中的死条目
+/// （`is_valid` 因 dir_mtime 对不上而恒为 false，不影响正确性，但让文件语义变成"日志"而非"缓存"）。
+/// 在 `load` 之后调用一次，即可保证写回时不含死条目。
+pub fn prune(cache: &mut Cache, exists: impl Fn(&str) -> bool) {
+    cache.retain(|version, _| exists(version));
+}
+
 /// 目录 mtime（秒）。读不到返回 0。
 pub fn dir_mtime(p: &Path) -> u64 {
     std::fs::metadata(p)
@@ -170,6 +179,31 @@ mod tests {
         // 只有 2.0 的目录变了
         assert!(is_valid(&c, "1.0", 100, 200));
         assert!(!is_valid(&c, "2.0", 301, 200));
+    }
+
+    /// D13：prune 应清除版本已不存在的条目，保留仍存在的。
+    #[test]
+    fn prune_drops_missing_versions() {
+        let mut c = HashMap::new();
+        put(&mut c, "1.0", 100, 200, sample());
+        put(&mut c, "2.0", 300, 200, sample());
+        put(&mut c, "9.9", 400, 200, sample());
+
+        // 只有 1.0 和 2.0 还装着
+        prune(&mut c, |v| v == "1.0" || v == "2.0");
+
+        assert_eq!(c.len(), 2);
+        assert!(c.contains_key("1.0"));
+        assert!(c.contains_key("2.0"));
+        assert!(!c.contains_key("9.9"), "已卸载版本的条目应被清除");
+    }
+
+    #[test]
+    fn prune_all_when_nothing_installed() {
+        let mut c = HashMap::new();
+        put(&mut c, "1.0", 100, 200, sample());
+        prune(&mut c, |_| false);
+        assert!(c.is_empty());
     }
 
     #[test]

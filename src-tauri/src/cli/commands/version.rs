@@ -274,6 +274,8 @@ fn cached_version_size(ctx: &Ctx, version: &str) -> versions::SizeInfo {
     let store_mtime = crate::sizecache::dir_mtime(&ctx.dirs.store);
     let dir_mtime = crate::sizecache::dir_mtime(&ctx.dirs.versions.join(version));
     let mut cache = crate::sizecache::load(&ctx.dirs.root);
+    // D13：清掉已卸载版本留下的死条目
+    crate::sizecache::prune(&mut cache, |v| ctx.dirs.versions.join(v).exists());
     if crate::sizecache::is_valid(&cache, version, dir_mtime, store_mtime) {
         if let Some(info) = crate::sizecache::get_info(&cache, version) {
             return info;
