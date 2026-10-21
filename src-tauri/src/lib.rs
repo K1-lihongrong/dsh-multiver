@@ -166,6 +166,7 @@ pub fn run() {
             commands::is_version_open,
             commands::ds_list_plugins,
             commands::ds_plugin_action,
+            commands::ds_init_profile,
             commands::ds_open_profile_dir,
         ])
         .setup(move |app| {

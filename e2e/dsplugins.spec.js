@@ -95,3 +95,35 @@ test("卸载用户插件 → 二次确认后调 ds_plugin_action(remove)", async
   expect(flat).toContain('"action":"remove"');
   expect(flat).toContain("my-plugin");
 });
+
+test("无 profile 时可初始化 profile（B1-07）", async ({ page }) => {
+  const calls = [];
+  await page.exposeFunction("__recordInit", (x) => calls.push(x));
+  await mockTauri(page, {
+    installed: [makeVersion("0.2.0-rc.1", { isolated: true })],
+    extra: {
+      ds_list_plugins: { dsh_home: "D:/dsh", home_kind: "shared", profiles: [] },
+      ds_init_profile: "(args) => { window.__recordInit(args); return Promise.resolve('ok'); }",
+    },
+  });
+  await page.goto("/");
+  await page.getByRole("button", { name: "插件", exact: true }).click();
+  await page.getByPlaceholder(/profile 名/).fill("web");
+  await page.getByRole("button", { name: "初始化 profile", exact: true }).click();
+  await page.waitForTimeout(500);
+  const flat = JSON.stringify(calls);
+  expect(flat).toContain('"profile":"web"');
+  expect(flat).toContain('"version":"0.2.0-rc.1"');
+});
+
+test("搜索过滤插件（B1-10）", async ({ page }) => {
+  await mockTauri(page, {
+    installed: [makeVersion("0.2.0-rc.1", { isolated: true })],
+    extra: { ds_list_plugins: { dsh_home: "D:/dsh", home_kind: "shared", profiles: [PROFILE] } },
+  });
+  await page.goto("/");
+  await page.getByRole("button", { name: "插件", exact: true }).click();
+  await page.getByPlaceholder("搜索插件…").fill("my-plugin");
+  await expect(page.locator(".dp-item", { hasText: "my-plugin" })).toBeVisible();
+  await expect(page.locator(".dp-item", { hasText: "@deepseek-ai/dsh-base" })).toHaveCount(0);
+});
