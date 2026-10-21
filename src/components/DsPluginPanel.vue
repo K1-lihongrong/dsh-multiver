@@ -35,14 +35,26 @@ const homeKindLabel = computed(() => {
 });
 const homeKindClass = computed(() => "kind-" + homeKind.value);
 
-// v0.3.0 B1 增强：来源（内置/用户安装）与归属（官方/第三方）两个独立维度。
-// 后端已给出 source/origin；这里保留按旧字段兜底的推导，兼容旧数据与 E2E mock。
+// v0.3.0 B1：与 dsh 官方插件页语义对齐（官方「随 DSH 提供 / 已安装」两个状态）。
+// 说明：外部 CLI 拿不到官方 listBundles 的 official/availability 信息，
+// 这里只标注「随 DSH 提供」（profile 的 dsh.profile.bundles）与「已安装」（dependencies）；
+// 不再用 npm scope 猜「官方/第三方」——那与官方语义不一致（见 docs/插件面板-取消设计.md §15）。
 const srcOf = (pl) => pl.source || (pl.is_bundle ? "bundle" : "user");
-const orgOf = (pl) =>
-  pl.origin || (pl.name && pl.name.startsWith("@deepseek-ai/") ? "official" : "third_party");
 const isBundle = (pl) => srcOf(pl) === "bundle";
 const srcLabel = (pl) => t(srcOf(pl) === "bundle" ? "dsplugins.sourceBundle" : "dsplugins.sourceUser");
-const orgLabel = (pl) => t(orgOf(pl) === "official" ? "dsplugins.originOfficial" : "dsplugins.originThirdParty");
+
+// 官方 CLI 的失败诊断对齐：把官方提示（allow-version / pnpm 缺失 / 诊断日志路径）转成本地化提示。
+function actionErrorText(e) {
+  const msg = String(e || "");
+  const extra = [];
+  if (msg.includes("allow-version") || msg.includes("incompatible-version")) {
+    extra.push(t("dsplugins.incompatibleHint"));
+  }
+  if (msg.includes("pnpm was not found")) extra.push(t("dsplugins.pnpmMissingHint"));
+  const m = msg.match(/diagnostics:\s*(.+)/);
+  if (m) extra.push(t("dsplugins.diagnosticsHint", { p: m[1].trim() }));
+  return extra.length ? msg + "\n\n" + extra.join("\n") : msg;
+}
 
 async function load() {
   loading.value = true;
@@ -105,7 +117,7 @@ async function doAction(action, pkg, bundle) {
     if (logLines.value.length) showLog.value = true;
     await load();
   } catch (e) {
-    notify("" + e);
+    notify(actionErrorText(e));
     showLog.value = true;
   } finally {
     busy.value = false;
@@ -240,7 +252,6 @@ onUnmounted(() => {
                 :title="pl.spec ? t('dsplugins.specTip', { spec: pl.spec }) : ''"
               >v{{ pl.version }}</span>
             </div>
-            <span class="dp-badge" :class="orgOf(pl) === 'official' ? 'dp-badge-official' : 'dp-badge-third'">{{ orgLabel(pl) }}</span>
             <span class="dp-badge" :class="isBundle(pl) ? 'dp-badge-bundle' : 'dp-badge-user'">{{ srcLabel(pl) }}</span>
           </div>
           <button
@@ -398,10 +409,7 @@ onUnmounted(() => {
   background: var(--accent-weak); color: var(--accent); border: 1px solid var(--accent-border);
   font-weight: 500;
 }
-/* 归属：官方 / 第三方 */
-.dp-badge-official { background: rgba(48, 164, 108, 0.12); color: #2f9e63; border-color: rgba(48, 164, 108, 0.35); }
-.dp-badge-third { background: rgba(245, 197, 66, 0.16); color: #a17a08; border-color: rgba(245, 197, 66, 0.45); }
-/* 来源：内置 / 用户安装 */
+/* 来源：随 DSH 提供 / 已安装（与官方插件页语义对齐） */
 .dp-badge-bundle { background: var(--surface-3); color: var(--text-3); border-color: var(--panel-border); }
 .dp-badge-user { background: var(--accent-weak); color: var(--accent); border-color: var(--accent-border); }
 
