@@ -98,7 +98,7 @@ fn create_junction(link: &Path, target: &Path) -> std::io::Result<()> {
             Ok(())
         } else {
             Err(std::io::Error::other(
-                String::from_utf8_lossy(&out.stderr).to_string(),
+                crate::console_decode::decode_console(&out.stderr),
             ))
         }
     }

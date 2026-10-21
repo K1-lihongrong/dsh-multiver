@@ -3,6 +3,7 @@ mod backup;
 mod cli;
 mod commands;
 mod config;
+mod console_decode;
 mod dsplugins;
 mod envcheck;
 mod jobobj;

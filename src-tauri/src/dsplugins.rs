@@ -183,8 +183,8 @@ pub fn run_dsh_plugin(
 
     match cmd.output() {
         Ok(out) => {
-            let mut text = String::from_utf8_lossy(&out.stdout).to_string();
-            let err = String::from_utf8_lossy(&out.stderr);
+            let mut text = crate::console_decode::decode_console(&out.stdout);
+            let err = crate::console_decode::decode_console(&out.stderr);
             if !err.trim().is_empty() {
                 if !text.is_empty() {
                     text.push('\n');

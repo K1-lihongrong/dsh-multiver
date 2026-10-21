@@ -20,8 +20,8 @@ fn pnpm_command() -> Command {
 fn run(cmd: &mut Command) -> (bool, String, String) {
     match cmd.output() {
         Ok(out) => {
-            let stdout = String::from_utf8_lossy(&out.stdout).to_string();
-            let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+            let stdout = crate::console_decode::decode_console(&out.stdout);
+            let stderr = crate::console_decode::decode_console(&out.stderr);
             (out.status.success(), stdout, stderr)
         }
         Err(e) => (false, String::new(), e.to_string()),

@@ -156,6 +156,37 @@ pub(crate) fn extract_num(s: &str, key: &str) -> Option<u64> {
     digits.parse().ok()
 }
 
+/// 按字节把流切成行（保留不含换行符的原始字节）。
+///
+/// D16：不能用 `BufRead::lines()`——它按 UTF-8 解析，遇非法字节会**整行丢弃**，
+/// 中文 Windows 下 pnpm 的报错行会直接消失。这里只按 \n 切分，解码交给调用方。
+fn read_lines_bytes<R: std::io::Read>(mut reader: R) -> Vec<Vec<u8>> {
+    let mut buf = Vec::new();
+    let mut out = Vec::new();
+    let mut chunk = [0u8; 8192];
+    loop {
+        let n = match reader.read(&mut chunk) {
+            Ok(0) => break,
+            Ok(n) => n,
+            Err(_) => break,
+        };
+        for &b in &chunk[..n] {
+            if b == b'\n' {
+                if buf.last() == Some(&b'\r') {
+                    buf.pop();
+                }
+                out.push(std::mem::take(&mut buf));
+            } else {
+                buf.push(b);
+            }
+        }
+    }
+    if !buf.is_empty() {
+        out.push(buf);
+    }
+    out
+}
+
 /// 在 Windows 上调用 pnpm 需要走 cmd，否则可能找不到 .cmd
 #[cfg(windows)]
 fn pnpm_command() -> Command {
@@ -296,23 +327,21 @@ pub fn install(
     // 两个流都必须读（否则管道填满会假死），且都要解析进度。
     // on_progress 是 &dyn Fn（非 Send），只能在主线程调用——
     // 故两个读线程通过 channel 把「行」发回主线程，主线程统一解析 + 回调。
+    // D16：不能用 BufRead::lines()——它按 UTF-8 解析，遇到 GBK 字节会整行丢弃
+    // （中文 Windows 下 pnpm 的报错行直接消失）。改为按字节读到 \n，再用统一解码。
     let (tx, rx) = std::sync::mpsc::channel::<String>();
     let tx_out = tx.clone();
     let h_out = child.stdout.take().map(move |stdout| {
         std::thread::spawn(move || {
-            use std::io::BufRead;
-            let reader = std::io::BufReader::new(stdout);
-            for line in reader.lines().map_while(Result::ok) {
-                let _ = tx_out.send(line);
+            for line in read_lines_bytes(stdout) {
+                let _ = tx_out.send(crate::console_decode::decode_console(&line));
             }
         })
     });
     let h_err = child.stderr.take().map(move |stderr| {
         std::thread::spawn(move || {
-            use std::io::BufRead;
-            let reader = std::io::BufReader::new(stderr);
-            for line in reader.lines().map_while(Result::ok) {
-                let _ = tx.send(line);
+            for line in read_lines_bytes(stderr) {
+                let _ = tx.send(crate::console_decode::decode_console(&line));
             }
         })
     });
@@ -450,4 +479,46 @@ pub fn uninstall_fast(versions_dir: &Path, trash_dir: &Path, version: &str) -> (
 /// 查询某个版本是否有效
 pub fn exists(versions_dir: &Path, version: &str) -> bool {
     versions_dir.join(version).join("node_modules").exists()
+}
+
+#[cfg(test)]
+mod read_lines_bytes_tests {
+    use super::read_lines_bytes;
+
+    #[test]
+    fn splits_on_lf() {
+        let got = read_lines_bytes(&b"a\nb\nc"[..]);
+        assert_eq!(got, vec![b"a".to_vec(), b"b".to_vec(), b"c".to_vec()]);
+    }
+
+    #[test]
+    fn strips_crlf() {
+        let got = read_lines_bytes(&b"a\r\nb\r\n"[..]);
+        assert_eq!(got, vec![b"a".to_vec(), b"b".to_vec()]);
+    }
+
+    #[test]
+    fn keeps_trailing_line_without_newline() {
+        let got = read_lines_bytes(&b"a\nb"[..]);
+        assert_eq!(got, vec![b"a".to_vec(), b"b".to_vec()]);
+    }
+
+    #[test]
+    fn preserves_non_utf8_bytes() {
+        // GBK 的 "安装失败"，必须原样保留，不丢行
+        let raw: &[u8] = &[0xB0, 0xB2, 0xD7, 0xB0, 0xCA, 0xA7, 0xB0, 0xDC];
+        let got = read_lines_bytes(raw);
+        assert_eq!(got, vec![raw.to_vec()]);
+    }
+
+    #[test]
+    fn empty_input_yields_no_lines() {
+        assert!(read_lines_bytes(&b""[..]).is_empty());
+    }
+
+    #[test]
+    fn blank_line_is_kept() {
+        let got = read_lines_bytes(&b"a\n\nb"[..]);
+        assert_eq!(got, vec![b"a".to_vec(), Vec::new(), b"b".to_vec()]);
+    }
 }
