@@ -172,6 +172,7 @@ pub fn run() {
             commands::ds_exemption_action,
             commands::ds_approve_builds,
             commands::ds_open_plugin_logs,
+            commands::ds_check_updates,
         ])
         .setup(move |app| {
             use tauri::Manager;

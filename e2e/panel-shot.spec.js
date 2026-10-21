@@ -32,4 +32,8 @@ test("插件面板截图", async ({ page }) => {
   await page.getByRole("button", { name: "插件", exact: true }).click();
   await page.waitForTimeout(500);
   await page.screenshot({ path: "test-results/plugin-panel.png", fullPage: false });
+  // 官方风格安装对话框（对齐 dsh 插件页）
+  await page.getByRole("button", { name: /添加插件/ }).click();
+  await page.waitForTimeout(300);
+  await page.screenshot({ path: "test-results/plugin-install-dialog.png", fullPage: false });
 });

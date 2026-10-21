@@ -42,8 +42,9 @@ test("安装失败且带官方诊断 → 显示 allow-version 指引（对齐官
   });
   await page.goto("/");
   await page.getByRole("button", { name: "插件", exact: true }).click();
-  await page.getByPlaceholder(/npm 包名/).fill("x");
-  await page.locator(".ds-plugin-panel").getByRole("button", { name: "安装", exact: true }).click();
+  await page.getByRole("button", { name: /添加插件/ }).click();
+  await page.locator(".dp-modal-input").first().fill("x");
+  await page.locator(".dp-modal").getByRole("button", { name: "安装", exact: true }).click();
   await page.waitForTimeout(400);
   await expect(page.locator(".toast")).toContainText("版本不兼容");
   await expect(page.locator(".toast")).toContainText("诊断日志");
@@ -91,9 +92,9 @@ test("输入包名点安装 → 调 ds_plugin_action", async ({ page }) => {
   });
   await page.goto("/");
   await page.getByRole("button", { name: "插件", exact: true }).click();
-  await page.getByPlaceholder(/npm 包名/).fill("test-pkg");
-  // 「安装」在页面里有两个（可用版本列表 + 插件面板），限定在面板内
-  await page.locator(".ds-plugin-panel").getByRole("button", { name: "安装", exact: true }).click();
+  await page.getByRole("button", { name: /添加插件/ }).click();
+  await page.locator(".dp-modal-input").first().fill("test-pkg");
+  await page.locator(".dp-modal").getByRole("button", { name: "安装", exact: true }).click();
   await page.waitForTimeout(400);
   const flat = JSON.stringify(calls);
   expect(flat).toContain("test-pkg");
@@ -176,8 +177,9 @@ test("安装失败 → 显示错误提示（B1-09）", async ({ page }) => {
   });
   await page.goto("/");
   await page.getByRole("button", { name: "插件", exact: true }).click();
-  await page.getByPlaceholder(/npm 包名/).fill("bad-pkg");
-  await page.locator(".ds-plugin-panel").getByRole("button", { name: "安装", exact: true }).click();
+  await page.getByRole("button", { name: /添加插件/ }).click();
+  await page.locator(".dp-modal-input").first().fill("bad-pkg");
+  await page.locator(".dp-modal").getByRole("button", { name: "安装", exact: true }).click();
   await page.waitForTimeout(400);
   await expect(page.locator(".toast")).toContainText("模拟安装失败");
 });
@@ -252,4 +254,77 @@ test("显示版本豁免并可撤销（B1-12）", async ({ page }) => {
   const flatEx = JSON.stringify(calls);
   expect(flatEx).toContain('"action":"revoke"');
   expect(flatEx).toContain("pkg@1.0.0");
+});
+
+test("安装对话框选择镜像源 → registry 透传（对齐官方安装源）", async ({ page }) => {
+  const calls = [];
+  await page.exposeFunction("__recordRegistry", (x) => calls.push(x));
+  await mockTauri(page, {
+    installed: [makeVersion("0.2.0-rc.1", { isolated: true })],
+    extra: {
+      ds_list_plugins: { dsh_home: "D:/dsh", home_kind: "shared", profiles: [PROFILE] },
+      ds_plugin_action: "(args) => { window.__recordRegistry(args); return Promise.resolve('ok'); }",
+    },
+  });
+  await page.goto("/");
+  await page.getByRole("button", { name: "插件", exact: true }).click();
+  await page.getByRole("button", { name: /添加插件/ }).click();
+  await page.locator(".dp-modal-input").first().fill("test-pkg");
+  await page.locator(".dp-modal select").selectOption("mirror");
+  await page.locator(".dp-modal").getByRole("button", { name: "安装", exact: true }).click();
+  await page.waitForTimeout(400);
+  const flat = JSON.stringify(calls);
+  expect(flat).toContain("registry.npmmirror.com");
+});
+
+test("检查更新 → 显示新版本并可更新（B1-13）", async ({ page }) => {
+  const calls = [];
+  await page.exposeFunction("__recordUpdate", (x) => calls.push(x));
+  await mockTauri(page, {
+    installed: [makeVersion("0.2.0-rc.1", { isolated: true })],
+    extra: {
+      ds_list_plugins: { dsh_home: "D:/dsh", home_kind: "shared", profiles: [PROFILE] },
+      ds_check_updates: [{ name: "my-plugin", current: "1.0.0", latest: "2.0.0" }],
+      ds_plugin_action: "(args) => { window.__recordUpdate(args); return Promise.resolve('ok'); }",
+      "plugin:dialog|message": "Yes",
+    },
+  });
+  await page.goto("/");
+  await page.getByRole("button", { name: "插件", exact: true }).click();
+  await page.getByRole("button", { name: "检查更新", exact: true }).click();
+  await expect(page.locator(".dp-badge-update")).toContainText("2.0.0");
+  await page.getByRole("button", { name: "更新", exact: true }).click();
+  await page.waitForTimeout(500);
+  const flat = JSON.stringify(calls);
+  expect(flat).toContain('"action":"remove"');
+  expect(flat).toContain("my-plugin@2.0.0");
+});
+
+test("允许版本豁免（B1-14）", async ({ page }) => {
+  const calls = [];
+  await page.exposeFunction("__recordAllow", (x) => calls.push(x));
+  await mockTauri(page, {
+    installed: [makeVersion("0.2.0-rc.1", { isolated: true })],
+    extra: {
+      ds_list_plugins: { dsh_home: "D:/dsh", home_kind: "shared", profiles: [PROFILE] },
+      ds_profile_info: {
+        runtime_version: "0.2.0-rc.1",
+        exemptions: {},
+        pending_builds: [],
+        logs_dir: "D:/dsh/profiles/web/.plugin-manager/logs",
+      },
+      ds_exemption_action: "(args) => { window.__recordAllow(args); return Promise.resolve('ok'); }",
+    },
+  });
+  await page.goto("/");
+  await page.getByRole("button", { name: "插件", exact: true }).click();
+  await page.locator(".dp-exemptions summary").click();
+  await page.locator(".dp-allow-spec").fill("pkg@1.0.0");
+  await page.locator(".dp-allow-rt").fill("0.2.0-rc.1");
+  await page.locator(".dp-allow-risk input").check();
+  await page.getByRole("button", { name: "允许此版本", exact: true }).click();
+  await page.waitForTimeout(400);
+  const flat = JSON.stringify(calls);
+  expect(flat).toContain('"action":"allow"');
+  expect(flat).toContain("pkg@1.0.0");
 });

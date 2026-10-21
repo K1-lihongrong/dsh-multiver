@@ -52,6 +52,12 @@
   - 待决定构建脚本一键「允许并重试」（写 `pnpm-workspace.yaml` 的 `allowBuilds: true`）。
   - 打开 `.plugin-manager/logs` 诊断日志目录。
   - 新增命令 `ds_profile_info` / `ds_exemption_action` / `ds_approve_builds` / `ds_open_plugin_logs`。
+- **安装交互对齐官方（B1-15）**：
+  - 「添加插件」弹窗：包名 / GitHub 地址 / 本地目录三类 spec、可折叠安装引导、安装源选择（默认 pnpm / npm 官方 / 中国大陆镜像 / 自定义 URL）、信任提示。
+  - 后端改为 `node bin.js` 直接执行 dsh CLI（避免 `cmd /C` 二次转义，安全支持 URL/路径 spec）；安装源 URL 校验对齐官方（http(s)、无 userinfo、无 `#`）。
+- **更新检测与豁免允许（B1-13/B1-14）**：
+  - 「检查更新」：`dsh plugin --profile <p> outdated --json`，显示「有新版本」，更新按官方语义先卸载再安装。
+  - 版本豁免支持「允许此版本」（官方 `allow-version --accept-risk`，带风险确认）。
 
 ### 文档
 - 新增 [CLI 迁移指南](docs/CLI迁移指南-v0.3.0.md)（旧→新对照 + 脚本迁移示例）。
