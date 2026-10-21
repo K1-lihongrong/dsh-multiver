@@ -17,11 +17,24 @@
   - GUI 启动不变（不带子命令）。
   - 内部参数 `--launch-version` / `--debug-progress` 不变。
 
-### 重构
+### 重构（技术债拆分，均保持外部路径不变）
 - **拆分 `cli.rs`（1750 行）→ `cli/` 模块**：
   - `mod.rs`（入口 + 命令枚举 + 上下文）、`parse.rs`（解析）、`output.rs`（输出辅助）、`help.rs`（帮助）、`console.rs`（控制台接入）。
   - `commands/`：`version.rs`（list/which/info/versions/install/uninstall）、`default.rs`（set-default）、`store.rs`（maintenance/clean/doctor）、`env.rs`（env）、`misc.rs`（其余）。
-  - 单文件 ≤400 行，职责清晰。
+- **拆分 `commands.rs`（1687 行）→ `commands/` 12 文件**：按域分为 launch（462）/ scan（259）/ version（197）/ state（116）/ plugins（87）/ env（79）/ config_ops（67）/ isolated（63）/ update（54）/ backup（38）/ misc（47）/ mod（149）。`lib.rs` 的 42 条命令注册表零改动。
+- **拆分 `versions.rs`（1079 行）→ `versions/` 4 子模块**：install（453）/ size（242）/ list（114）/ isolated（131）/ mod（195）。
+- **拆分 `runtime.rs`（533 行）→ `runtime/` 3 文件**：bundled（321，便携 Node/pnpm）、webview2（147，WebView2 检测与引导）、mod（82，共用 `RuntimeProgress` 与 `download_to`）。
+- **拆分 `launcher.rs`（979 行）→ `launcher/` 3 子模块**：process（341，启动与进程）、diagnose（344，日志解析）、shortcut（318，桌面集成）。
+- **抽出 `paths.rs`（137 行）**：`path_bin_dir` / `forward_script_dir` / `regenerate_forward_script` / `official_dsh_home` / `resolve_home` 等纯路径函数，与 Tauri 无关。
+- 全部经 `mod.rs` 重导出，**`crate::模块::X` 路径不变，调用方零改动**。
+
+### 修复
+- **子进程输出编码（D16）**：中文 Windows 控制台代码页为 936（GBK），此前用 `String::from_utf8_lossy` 解码子进程输出，中文全部变成 U+FFFD 替换字符，错误信息不可读（如刷新版本列表报 `pnpm ����×��∫`）。
+  - 新增 `console_decode::decode_console`：先 UTF-8 严格解码（ASCII/UTF-8 零开销），失败按 GBK。
+  - 替换 13 处 `from_utf8_lossy` + 改写 `install.rs` 的按行读取（`BufRead::lines()` 遇 GBK 会整行丢弃）。
+  - 新增依赖 `encoding_rs 0.8.42`。
+- **缓存清理（D13）**：新增 `sizecache::prune`，在 `load` 后清理已卸载版本留下的死条目。
+- **进度回调去重（D15）**：`cmd_setup_runtime` 里 Node 与 pnpm 两段逐字重复的进度闭包，抽成 `runtime_progress_cb`。
 
 ### 新增（双向桥 B1）
 - **dsh 插件管理面板**：已安装版本的「插件」按钮 → 展开面板，管理该版本 dsh profile 的插件。
