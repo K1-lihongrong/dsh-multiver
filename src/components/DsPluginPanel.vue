@@ -20,7 +20,16 @@ const homeKind = ref("shared");
 const loading = ref(false);
 const busy = ref(false);
 const activeProfile = ref("");
-const newPkg = ref("");
+// B1-13/B1-14 + 官方安装对话框：安装弹窗 / 安装源 / 更新检查 / 版本豁免「允许」
+const showInstall = ref(false);
+const installSpec = ref("");
+const installRegistry = ref(""); // ""=默认（pnpm 配置）, official, mirror, custom
+const customRegistry = ref("");
+const installing = ref(false);
+const updates = ref({});
+const allowSpec = ref("");
+const allowRuntime = ref("");
+const allowRisk = ref(false);
 // B1-04/B1-08：进度输出（实时行）、搜索（B1-10）、初始化（B1-07）
 const logLines = ref([]);
 const showLog = ref(false);
@@ -141,7 +150,6 @@ async function doAction(action, pkg, bundle) {
       package: name,
     });
     notify(t(action === "add" ? "dsplugins.installed" : "dsplugins.removed", { p: name }));
-    newPkg.value = "";
     lastAction.value = null;
     if (logLines.value.length) showLog.value = true;
     await load();
@@ -152,6 +160,130 @@ async function doAction(action, pkg, bundle) {
     await refreshInfo();
   } finally {
     busy.value = false;
+  }
+}
+
+// ── 官方安装对话框（对齐 dsh 插件页：spec 输入 / 安装源 / 信任提示）──
+const registryValue = computed(() => {
+  if (installRegistry.value === "official") return "https://registry.npmjs.org";
+  if (installRegistry.value === "mirror") return "https://registry.npmmirror.com";
+  if (installRegistry.value === "custom") return customRegistry.value.trim() || null;
+  return null;
+});
+
+function openInstall() {
+  showInstall.value = true;
+  installSpec.value = "";
+  installRegistry.value = "";
+  customRegistry.value = "";
+  logLines.value = [];
+}
+
+async function doInstall() {
+  const spec = installSpec.value.trim();
+  if (!spec || installing.value) return;
+  const registry = registryValue.value;
+  if (installRegistry.value === "custom" && !registry) {
+    notify(t("dsplugins.customRegistryRequired"));
+    return;
+  }
+  installing.value = true;
+  logLines.value = [];
+  try {
+    await invoke("ds_plugin_action", {
+      version: props.version,
+      profile: activeProfile.value,
+      action: "add",
+      package: spec,
+      registry,
+    });
+    notify(t("dsplugins.installed", { p: spec }));
+    showInstall.value = false;
+    if (logLines.value.length) showLog.value = true;
+    await load();
+  } catch (e) {
+    notify(actionErrorText(e));
+    showLog.value = true;
+    await refreshInfo();
+  } finally {
+    installing.value = false;
+  }
+}
+
+// B1-13：检查可更新插件（dsh CLI `outdated --json`）
+async function checkUpdates() {
+  if (!activeProfile.value) return;
+  busy.value = true;
+  try {
+    const list = await invoke("ds_check_updates", {
+      version: props.version,
+      profile: activeProfile.value,
+    });
+    const map = {};
+    for (const u of list || []) map[u.name] = u;
+    updates.value = map;
+    notify(t("dsplugins.updatesFound", { n: Object.keys(map).length }));
+  } catch (e) {
+    notify("" + e);
+  } finally {
+    busy.value = false;
+  }
+}
+
+// B1-13：更新 = 官方语义「先卸载再安装新版」
+async function updatePlugin(pl) {
+  const u = updates.value[pl.name];
+  if (!u) return;
+  const ok = await ask(t("dsplugins.updateConfirm", { p: pl.name, v: u.latest }), {
+    title: t("dsplugins.update"),
+    kind: "warning",
+  });
+  if (!ok) return;
+  busy.value = true;
+  logLines.value = [];
+  try {
+    await invoke("ds_plugin_action", {
+      version: props.version,
+      profile: activeProfile.value,
+      action: "remove",
+      package: pl.name,
+    });
+    await invoke("ds_plugin_action", {
+      version: props.version,
+      profile: activeProfile.value,
+      action: "add",
+      package: `${pl.name}@${u.latest}`,
+    });
+    notify(t("dsplugins.updated", { p: pl.name, v: u.latest }));
+    await load();
+    await checkUpdates();
+  } catch (e) {
+    notify(actionErrorText(e));
+    showLog.value = true;
+  } finally {
+    busy.value = false;
+  }
+}
+
+// B1-14：允许版本不兼容（官方 allow-version --accept-risk）
+async function allowExemption() {
+  const spec = allowSpec.value.trim();
+  const runtime = (allowRuntime.value || profileInfo.value.runtime_version || "").trim();
+  if (!spec || !runtime || !allowRisk.value) return;
+  try {
+    await invoke("ds_exemption_action", {
+      version: props.version,
+      profile: activeProfile.value,
+      action: "allow",
+      package_version: spec,
+      dsh_version: runtime,
+    });
+    notify(t("dsplugins.exemptionAllowed", { p: spec }));
+    allowSpec.value = "";
+    allowRisk.value = false;
+    await refreshInfo();
+  } catch (e) {
+    notify("" + e);
   }
 }
 
@@ -313,18 +445,12 @@ onUnmounted(() => {
 
         <input v-model="search" class="dp-input dp-search" :placeholder="t('dsplugins.searchPlaceholder')" />
 
-        <div class="dp-add">
-          <input
-            class="dp-input"
-            v-model="newPkg"
-            :placeholder="t('dsplugins.addPlaceholder')"
-            @keyup.enter="doAction('add', newPkg)"
-            :disabled="busy"
-          />
-          <button class="dp-btn dp-btn-primary" @click="doAction('add', newPkg)" :disabled="busy || !newPkg.trim()">
-            {{ busy ? "…" : t("dsplugins.add") }}
-          </button>
-        </div>
+        <button class="dp-btn dp-btn-primary" @click="openInstall" :disabled="busy">
+          ＋ {{ t("dsplugins.addPlugin") }}
+        </button>
+        <button class="dp-btn" @click="checkUpdates" :disabled="busy">
+          {{ t("dsplugins.checkUpdates") }}
+        </button>
       </div>
 
       <!-- 插件列表 -->
@@ -346,7 +472,18 @@ onUnmounted(() => {
             </div>
             <span class="dp-badge" :class="isOfficial(pl) ? 'dp-badge-bundle' : 'dp-badge-user'">{{ srcLabel(pl) }}</span>
             <span class="dp-badge dp-badge-kind" v-if="!pl.declares_bundle">{{ kindLabel(pl) }}</span>
+            <span class="dp-badge dp-badge-update" v-if="updates[pl.name]">
+              {{ t("dsplugins.newVersion", { v: updates[pl.name].latest }) }}
+            </span>
           </div>
+          <button
+            v-if="updates[pl.name]"
+            class="dp-btn dp-btn-primary dp-btn-sm"
+            @click="updatePlugin(pl)"
+            :disabled="busy"
+          >
+            {{ t("dsplugins.update") }}
+          </button>
           <button
             class="dp-btn dp-btn-danger dp-btn-sm"
             @click="doAction('remove', pl.name, isBundle(pl))"
@@ -390,9 +527,71 @@ onUnmounted(() => {
               </span>
             </li>
           </ul>
+          <!-- B1-14：允许版本不兼容（官方 allow-version --accept-risk） -->
+          <div class="dp-allow">
+            <input class="dp-input dp-allow-spec" v-model="allowSpec" :placeholder="t('dsplugins.allowSpecPlaceholder')" />
+            <input class="dp-input dp-allow-rt" v-model="allowRuntime" :placeholder="profileInfo.runtime_version || '0.2.1-rc.2'" />
+            <label class="dp-allow-risk">
+              <input type="checkbox" v-model="allowRisk" />
+              {{ t("dsplugins.allowRisk") }}
+            </label>
+            <button
+              class="dp-btn dp-btn-primary dp-btn-sm"
+              @click="allowExemption"
+              :disabled="!allowSpec.trim() || !allowRisk"
+            >
+              {{ t("dsplugins.allowExemption") }}
+            </button>
+          </div>
         </details>
       </div>
     </template>
+
+    <!-- 官方风格安装对话框：spec / 安装源 / 信任提示 -->
+    <div class="dp-modal-mask" v-if="showInstall" @click.self="showInstall = false">
+      <div class="dp-modal">
+        <div class="dp-modal-head">
+          <span class="dp-modal-title">{{ t("dsplugins.addPlugin") }}</span>
+          <button class="dp-icon-btn" @click="showInstall = false">✕</button>
+        </div>
+        <div class="dp-modal-desc">{{ t("dsplugins.installDesc") }}</div>
+        <input
+          class="dp-input dp-modal-input"
+          v-model="installSpec"
+          :placeholder="t('dsplugins.specPlaceholder')"
+          :disabled="installing"
+          @keyup.enter="doInstall"
+        />
+        <details class="dp-guide">
+          <summary>{{ t("dsplugins.guideTitle") }}</summary>
+          <div class="dp-guide-body">{{ t("dsplugins.guideText") }}</div>
+        </details>
+        <div class="dp-field">
+          <label>{{ t("dsplugins.registryLabel") }}</label>
+          <select class="dp-select" v-model="installRegistry" :disabled="installing">
+            <option value="">{{ t("dsplugins.registryDefault") }}</option>
+            <option value="official">{{ t("dsplugins.registryOfficial") }}</option>
+            <option value="mirror">{{ t("dsplugins.registryMirror") }}</option>
+            <option value="custom">{{ t("dsplugins.registryCustom") }}</option>
+          </select>
+        </div>
+        <input
+          v-if="installRegistry === 'custom'"
+          class="dp-input dp-modal-input"
+          v-model="customRegistry"
+          :placeholder="t('dsplugins.customRegistryPlaceholder')"
+          :disabled="installing"
+        />
+        <div class="dp-warn">{{ t("dsplugins.trustWarning") }}</div>
+        <button
+          class="dp-btn dp-btn-primary dp-modal-install"
+          @click="doInstall"
+          :disabled="installing || !installSpec.trim()"
+        >
+          {{ installing ? t("dsplugins.installing") : t("dsplugins.install") }}
+        </button>
+      </div>
+    </div>
   </div>
 </template>
 
@@ -566,4 +765,45 @@ onUnmounted(() => {
   font-size: 11px; line-height: 1.5; color: var(--text-3);
   font-family: ui-monospace, Consolas, monospace; white-space: pre-wrap; word-break: break-all;
 }
+
+/* 官方风格安装对话框 */
+.dp-modal-mask {
+  position: fixed; inset: 0; z-index: 1000;
+  background: rgba(0, 0, 0, 0.35);
+  display: flex; align-items: center; justify-content: center;
+}
+.dp-modal {
+  width: min(560px, calc(100vw - 40px));
+  max-height: calc(100vh - 40px); overflow: auto;
+  background: var(--panel-bg); border: 1px solid var(--panel-border); border-radius: 12px;
+  padding: 16px 18px; box-shadow: 0 12px 40px rgba(0, 0, 0, 0.18);
+  display: flex; flex-direction: column; gap: 10px;
+}
+.dp-modal-head { display: flex; align-items: center; justify-content: space-between; }
+.dp-modal-title { font-size: 14px; font-weight: 600; color: var(--text); }
+.dp-modal-desc { font-size: 12px; color: var(--text-muted); }
+.dp-modal-input { width: 100%; box-sizing: border-box; }
+.dp-guide summary { font-size: 12px; color: var(--text-muted); cursor: pointer; }
+.dp-guide-body {
+  margin-top: 6px; padding: 8px 10px; font-size: 11.5px; line-height: 1.6;
+  color: var(--text-muted); background: var(--surface-2);
+  border: 1px solid var(--panel-border); border-radius: 6px;
+}
+.dp-field { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--text); }
+.dp-field select { flex: 1; }
+.dp-warn {
+  font-size: 11.5px; line-height: 1.6; color: #a17a08;
+  background: rgba(245, 197, 66, 0.14); border: 1px solid rgba(245, 197, 66, 0.4);
+  border-radius: 6px; padding: 8px 10px;
+}
+.dp-modal-install { width: 100%; }
+.dp-badge-update {
+  background: rgba(229, 72, 77, 0.1); color: var(--danger, #e5484d);
+  border-color: rgba(229, 72, 77, 0.4);
+}
+.dp-allow { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
+.dp-allow .dp-input { font-size: 11px; padding: 4px 8px; }
+.dp-allow-spec { width: 180px; }
+.dp-allow-rt { width: 130px; }
+.dp-allow-risk { font-size: 11px; color: var(--text-muted); display: inline-flex; align-items: center; gap: 4px; }
 </style>

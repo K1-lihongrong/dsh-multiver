@@ -6,7 +6,7 @@ use super::*;
 fn resolve_dsh(
     app: &tauri::AppHandle,
     version: &str,
-) -> Result<(std::path::PathBuf, std::path::PathBuf), String> {
+) -> Result<(crate::dsplugins::DshCli, std::path::PathBuf), String> {
     let mdir = manager_dir(app);
     let cfg = Config::load(&mdir);
     let dirs = Dirs::new(cfg.resolve_root(&mdir));
@@ -15,9 +15,9 @@ fn resolve_dsh(
         return Err(format!("版本 {} 未安装", version));
     }
     let home = crate::paths::resolve_home(&cfg, &dirs, version);
-    let bin = crate::dsplugins::dsh_bin(&vdir)
+    let cli = crate::dsplugins::dsh_cli(&vdir)
         .ok_or_else(|| format!("版本 {} 缺少 dsh 入口", version))?;
-    Ok((bin, home))
+    Ok((cli, home))
 }
 
 /// dsh 插件管理（双向桥 B1）：列某版本下的所有 profile 与插件。
@@ -95,7 +95,7 @@ pub(crate) async fn ds_exemption_action(
     crate::dsplugins::validate_package_spec(&package_version)?;
     crate::dsplugins::validate_package_spec(&dsh_version)
         .map_err(|_| "DSH 版本格式不正确".to_string())?;
-    let (bin, home) = resolve_dsh(&app, &version)?;
+    let (cli, home) = resolve_dsh(&app, &version)?;
     let args: Vec<String> = match action.as_str() {
         "allow" => vec![
             "allow-version".into(),
@@ -116,7 +116,8 @@ pub(crate) async fn ds_exemption_action(
     tauri::async_runtime::spawn_blocking(move || {
         let args_ref: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
         let res = crate::dsplugins::run_dsh_plugin(
-            &bin,
+            &cli.bin,
+            cli.js.as_deref(),
             &home,
             &profile2,
             &args_ref,
@@ -201,14 +202,28 @@ pub(crate) async fn ds_plugin_action(
     profile: String,
     action: String,
     package: String,
+    registry: Option<String>,
 ) -> Result<String, String> {
-    // 先校验：包名防选项/特殊字符透传（B1-05）；profile 名防路径穿越。
-    crate::dsplugins::validate_package_spec(&package)?;
+    // 与官方安装对话框对齐：add 允许「包名 / GitHub 地址 / 本地目录」，remove 只允许包名。
     crate::dsplugins::validate_profile_name(&profile)?;
-    let (bin, home) = resolve_dsh(&app, &version)?;
+    match action.as_str() {
+        "add" => crate::dsplugins::validate_install_spec(&package)?,
+        "remove" => crate::dsplugins::validate_package_spec(&package)?,
+        _ => return Err(format!("未知操作：{}", action)),
+    }
+    if let Some(url) = &registry {
+        crate::dsplugins::validate_registry_url(url)?;
+    }
+    let (cli, home) = resolve_dsh(&app, &version)?;
     let package = package.trim().to_string();
     let args: Vec<String> = match action.as_str() {
-        "add" => vec!["add".into(), package],
+        "add" => {
+            let mut a = vec!["add".to_string(), package];
+            if let Some(url) = &registry {
+                a.push(format!("--registry={}", url.trim()));
+            }
+            a
+        }
         "remove" => vec!["remove".into(), package],
         _ => return Err(format!("未知操作：{}", action)),
     };
@@ -220,7 +235,8 @@ pub(crate) async fn ds_plugin_action(
         use tauri::Emitter;
         let args_ref: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
         let res = crate::dsplugins::run_dsh_plugin(
-            &bin,
+            &cli.bin,
+            cli.js.as_deref(),
             &home,
             &profile2,
             &args_ref,
@@ -260,7 +276,7 @@ pub(crate) async fn ds_init_profile(
     profile: String,
 ) -> Result<String, String> {
     crate::dsplugins::validate_profile_name(&profile)?;
-    let (bin, home) = resolve_dsh(&app, &version)?;
+    let (cli, home) = resolve_dsh(&app, &version)?;
 
     let app2 = app.clone();
     let version2 = version.clone();
@@ -268,7 +284,8 @@ pub(crate) async fn ds_init_profile(
     tauri::async_runtime::spawn_blocking(move || {
         use tauri::Emitter;
         let res = crate::dsplugins::run_dsh_plugin(
-            &bin,
+            &cli.bin,
+            cli.js.as_deref(),
             &home,
             &profile2,
             &["list"],
@@ -320,5 +337,38 @@ pub(crate) fn ds_open_profile_dir(
         Ok(())
     } else {
         Err(msg)
+    }
+}
+
+/// 检查可更新插件（B1-13）：`dsh plugin --profile <p> outdated --json`。
+#[tauri::command]
+pub(crate) async fn ds_check_updates(
+    app: tauri::AppHandle,
+    version: String,
+    profile: String,
+) -> Result<Vec<crate::dsplugins::DsUpdate>, String> {
+    crate::dsplugins::validate_profile_name(&profile)?;
+    let (cli, home) = resolve_dsh(&app, &version)?;
+    let profile2 = profile.clone();
+    let res = tauri::async_runtime::spawn_blocking(move || {
+        crate::dsplugins::run_dsh_plugin(
+            &cli.bin,
+            cli.js.as_deref(),
+            &home,
+            &profile2,
+            &["outdated", "--json"],
+            crate::dsplugins::PLUGIN_TIMEOUT,
+            |_| {},
+        )
+    })
+    .await
+    .map_err(|e| format!("检查更新失败：{e}"))?;
+    if res.timed_out {
+        return Err("检查更新超时".into());
+    }
+    if serde_json::from_str::<serde_json::Value>(res.output.trim()).is_ok() {
+        Ok(crate::dsplugins::parse_outdated_json(&res.output))
+    } else {
+        Err(res.output)
     }
 }

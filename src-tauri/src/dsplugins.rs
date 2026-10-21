@@ -495,6 +495,131 @@ pub fn dsh_bin(version_dir: &Path) -> Option<PathBuf> {
     }
 }
 
+/// dsh CLI 入口：优先用 `node <dsh>/lib/bin.js` 直接执行（避免 `cmd /C` 的参数转义，
+/// 从而安全支持 GitHub 地址 / 本地目录等安装 spec）。
+#[derive(Debug, Clone)]
+pub struct DshCli {
+    pub bin: PathBuf,
+    pub js: Option<PathBuf>,
+}
+
+pub fn dsh_cli(version_dir: &Path) -> Option<DshCli> {
+    let bin = dsh_bin(version_dir)?;
+    let js = version_dir
+        .join("node_modules")
+        .join("@deepseek-ai")
+        .join("dsh")
+        .join("lib")
+        .join("bin.js");
+    Some(DshCli {
+        bin,
+        js: js.exists().then_some(js),
+    })
+}
+
+/// 安装 spec 校验：npm 包名 / GitHub 地址 / 本地目录路径（与官方安装对话框一致的三类输入）。
+pub fn validate_install_spec(spec: &str) -> Result<(), String> {
+    let s = spec.trim();
+    if s.is_empty() {
+        return Err("请输入插件包名、GitHub 地址或本地目录".into());
+    }
+    if s.len() > 2048 {
+        return Err("插件标识过长".into());
+    }
+    if s.starts_with('-') {
+        return Err("不能以 - 开头（禁止透传 pnpm 选项）".into());
+    }
+    if s.chars().any(|c| c.is_control()) {
+        return Err("插件标识含控制字符".into());
+    }
+    if validate_package_spec(s).is_ok() {
+        return Ok(());
+    }
+    let lower = s.to_ascii_lowercase();
+    let is_url = lower.starts_with("http://")
+        || lower.starts_with("https://")
+        || lower.starts_with("git+")
+        || lower.starts_with("github:")
+        || lower.starts_with("file:")
+        || lower.starts_with("link:");
+    let bytes = s.as_bytes();
+    let is_path = lower.starts_with("./")
+        || lower.starts_with("../")
+        || lower.starts_with(".\\")
+        || lower.starts_with("..\\")
+        || lower.starts_with('/')
+        || (bytes.len() > 2 && bytes[1] == b':' && (bytes[2] == b'\\' || bytes[2] == b'/'));
+    if !is_url && !is_path {
+        return Err("请输入 npm 包名、GitHub 地址或本地目录".into());
+    }
+    if s.chars()
+        .any(|c| matches!(c, ';' | '&' | '|' | '`' | '$' | '"' | '\''))
+    {
+        return Err("路径/URL 含 shell 特殊字符".into());
+    }
+    Ok(())
+}
+
+/// 安装源校验（对齐官方规则：http(s)、无用户名/密码、无 `#` 片段）。
+pub fn validate_registry_url(url: &str) -> Result<(), String> {
+    let s = url.trim();
+    let lower = s.to_ascii_lowercase();
+    if !(lower.starts_with("http://") || lower.starts_with("https://")) {
+        return Err("安装源必须是 http(s) 地址".into());
+    }
+    if s.chars().any(|c| c.is_control() || c.is_whitespace()) {
+        return Err("安装源不能含空白/控制字符".into());
+    }
+    if s.contains('#') {
+        return Err("安装源不能包含 # 片段".into());
+    }
+    let after = s.split_once("://").map(|(_, r)| r).unwrap_or("");
+    if let Some(at) = after.find('@') {
+        let slash = after.find('/').unwrap_or(after.len());
+        if at < slash {
+            return Err("安装源不能包含用户名/密码".into());
+        }
+    }
+    Ok(())
+}
+
+/// 一条「有新版本」信息（pnpm outdated --json 的解析结果）。
+#[derive(Debug, Clone, Serialize)]
+pub struct DsUpdate {
+    pub name: String,
+    pub current: String,
+    pub latest: String,
+}
+
+pub fn parse_outdated_json(text: &str) -> Vec<DsUpdate> {
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(text.trim()) else {
+        return Vec::new();
+    };
+    let Some(obj) = v.as_object() else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for (name, info) in obj {
+        let current = info
+            .get("current")
+            .and_then(|x| x.as_str())
+            .unwrap_or_default();
+        let latest = info
+            .get("latest")
+            .and_then(|x| x.as_str())
+            .unwrap_or_default();
+        if !current.is_empty() && !latest.is_empty() && current != latest {
+            out.push(DsUpdate {
+                name: name.clone(),
+                current: current.to_string(),
+                latest: latest.to_string(),
+            });
+        }
+    }
+    out.sort_by(|a, b| a.name.cmp(&b.name));
+    out
+}
+
 /// 校验 profile 名（dsh 会用它作目录名）：字母/数字/`.`/`-`/`_`，且不能以 `-` 开头。
 pub fn validate_profile_name(name: &str) -> Result<(), String> {
     let s = name.trim();
@@ -586,13 +711,19 @@ fn pump_lines<R: std::io::Read + Send + 'static>(
 /// - 输出统一解码（D16）并剥离 ANSI。
 pub fn run_dsh_plugin<F: FnMut(&str)>(
     dsh_bin: &Path,
+    dsh_js: Option<&Path>,
     dsh_home: &Path,
     profile: &str,
     args: &[&str],
     timeout: Duration,
     mut on_line: F,
 ) -> RunResult {
-    let mut cmd = if cfg!(windows) {
+    let mut cmd = if let Some(js) = dsh_js {
+        // 直接 node 执行：避免 cmd /C 二次转义，支持 URL / 本地路径 spec
+        let mut c = std::process::Command::new("node");
+        c.arg(js);
+        c
+    } else if cfg!(windows) {
         let mut c = std::process::Command::new("cmd");
         c.arg("/C").arg(dsh_bin);
         c
@@ -869,6 +1000,7 @@ mod tests {
         let bin = write_script(&dir, "echo hello");
         let res = run_dsh_plugin(
             &bin,
+            None,
             &dir,
             "web",
             &["list"],
@@ -890,6 +1022,7 @@ mod tests {
         let bin = write_script(&dir, "exit 3");
         let res = run_dsh_plugin(
             &bin,
+            None,
             &dir,
             "web",
             &["list"],
@@ -910,6 +1043,7 @@ mod tests {
         let bin = write_script(&dir, "sleep 3");
         let res = run_dsh_plugin(
             &bin,
+            None,
             &dir,
             "web",
             &["list"],
@@ -983,5 +1117,53 @@ mod tests {
         assert_eq!(v["pkg@1.2.3"][0], "0.2.1-rc.2");
         assert_eq!(read_exemptions(&home, "nope"), serde_json::json!({}));
         let _ = std::fs::remove_dir_all(&base);
+    }
+
+    // ── 官方安装交互对齐：spec / registry / outdated 解析 ──
+    #[test]
+    fn validate_install_spec_accepts_official_forms() {
+        for ok in [
+            "dsh-plugin-whale-pet",
+            "@scope/pkg",
+            "pkg@1.2.3",
+            "https://github.com/deepseek-ai/deepseek-harness",
+            "git+https://github.com/x/y.git",
+            "file:../local-plugin",
+            "./local-plugin",
+            "E:\\plugins\\local",
+            "/home/user/local-plugin",
+        ] {
+            assert!(validate_install_spec(ok).is_ok(), "应接受：{ok}");
+        }
+        for bad in ["", "-D", "--registry=x", "a\nb", "a;b", "a&b", "a|b"] {
+            assert!(validate_install_spec(bad).is_err(), "应拒绝：{bad:?}");
+        }
+    }
+
+    #[test]
+    fn validate_registry_url_rules() {
+        assert!(validate_registry_url("https://registry.npmjs.org").is_ok());
+        assert!(validate_registry_url("https://registry.npmmirror.com").is_ok());
+        assert!(validate_registry_url("http://localhost:4873").is_ok());
+        for bad in [
+            "",
+            "registry.npmjs.org",
+            "ftp://x",
+            "https://user:pass@x.com",
+            "https://x.com/#frag",
+            "https://x.com/a b",
+        ] {
+            assert!(validate_registry_url(bad).is_err(), "应拒绝：{bad:?}");
+        }
+    }
+
+    #[test]
+    fn parse_outdated_json_lists_newer_versions() {
+        let text = r#"{"a":{"current":"1.0.0","latest":"2.0.0"},"b":{"current":"1.0.0","latest":"1.0.0"}}"#;
+        let out = parse_outdated_json(text);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].name, "a");
+        assert_eq!(out[0].latest, "2.0.0");
+        assert!(parse_outdated_json("not json").is_empty());
     }
 }
