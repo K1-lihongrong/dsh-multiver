@@ -41,6 +41,17 @@
   - 列 profile 与插件（包名 + 版本，标 bundle）；安装/卸载（调 `dsh plugin --profile <p> add/remove`）；打开 profile 目录。
   - 新增后端模块 `dsplugins.rs` + 命令 `ds_list_plugins` / `ds_plugin_action` / `ds_open_profile_dir`。
   - 4 语言文案。
+- **与官方语义对齐（2026-10-21）**：
+  - 标签改为「随 DSH 提供 / 已安装 + 插件 / 依赖」：从 `dsh-app-boot` 读取官方 OPTIONAL/DEFAULT/ON_DEMAND bundle，按 `dsh.bundle` 区分插件与依赖；不再用 npm scope 猜「官方/第三方」。
+  - 失败诊断本地化：识别官方 CLI 的 `allow-version` / `pnpm was not found` / `diagnostics: <logPath>`。
+  - 卸载二次确认、内置 bundle 禁卸、包名校验（防 pnpm 选项/特殊字符透传）。
+  - 进度输出面板 + 300s 超时（**取消按官方边界挂起**，见 `docs/插件面板-取消设计.md`）。
+- **官方信息查询与桥接（B1-11/B1-12）**：
+  - profile 信息：运行时版本、版本豁免（`compatibility.json`）、待决定构建脚本、诊断日志目录。
+  - 版本豁免可查看/撤销（官方 CLI `revoke-version`）。
+  - 待决定构建脚本一键「允许并重试」（写 `pnpm-workspace.yaml` 的 `allowBuilds: true`）。
+  - 打开 `.plugin-manager/logs` 诊断日志目录。
+  - 新增命令 `ds_profile_info` / `ds_exemption_action` / `ds_approve_builds` / `ds_open_plugin_logs`。
 
 ### 文档
 - 新增 [CLI 迁移指南](docs/CLI迁移指南-v0.3.0.md)（旧→新对照 + 脚本迁移示例）。

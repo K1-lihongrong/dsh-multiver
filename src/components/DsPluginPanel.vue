@@ -1,5 +1,5 @@
 <script setup>
-import { ref, computed, onMounted, onUnmounted } from "vue";
+import { ref, computed, watch, onMounted, onUnmounted } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { ask } from "@tauri-apps/plugin-dialog";
@@ -35,13 +35,40 @@ const homeKindLabel = computed(() => {
 });
 const homeKindClass = computed(() => "kind-" + homeKind.value);
 
-// v0.3.0 B1：与 dsh 官方插件页语义对齐（官方「随 DSH 提供 / 已安装」两个状态）。
-// 说明：外部 CLI 拿不到官方 listBundles 的 official/availability 信息，
-// 这里只标注「随 DSH 提供」（profile 的 dsh.profile.bundles）与「已安装」（dependencies）；
-// 不再用 npm scope 猜「官方/第三方」——那与官方语义不一致（见 docs/插件面板-取消设计.md §15）。
+// v0.3.0 B1：与 dsh 官方插件页语义对齐。
+// 「随 DSH 提供」= 官方安装随附的 bundle（OPTIONAL/DEFAULT/ON_DEMAND，后端从 dsh-app-boot 读取）；
+// 「已安装」= profile dependencies；「插件 / 依赖」= 包是否声明 dsh.bundle（官方定义）。
 const srcOf = (pl) => pl.source || (pl.is_bundle ? "bundle" : "user");
 const isBundle = (pl) => srcOf(pl) === "bundle";
-const srcLabel = (pl) => t(srcOf(pl) === "bundle" ? "dsplugins.sourceBundle" : "dsplugins.sourceUser");
+const isOfficial = (pl) => pl.official === true;
+const srcLabel = (pl) => t(isOfficial(pl) ? "dsplugins.sourceBundle" : "dsplugins.sourceUser");
+const kindLabel = (pl) => t(pl.declares_bundle ? "dsplugins.kindPlugin" : "dsplugins.kindDependency");
+
+// B1-11/B1-12：profile 级官方信息（运行时版本 / 版本豁免 / 待决定构建脚本 / 日志目录）
+const profileInfo = ref({ runtime_version: null, exemptions: {}, pending_builds: [], logs_dir: "" });
+const lastAction = ref(null);
+const exemptionCount = computed(() => Object.keys(profileInfo.value.exemptions || {}).length);
+
+async function refreshInfo() {
+  if (!activeProfile.value) {
+    profileInfo.value = { runtime_version: null, exemptions: {}, pending_builds: [], logs_dir: "" };
+    return;
+  }
+  try {
+    const info = await invoke("ds_profile_info", {
+      version: props.version,
+      profile: activeProfile.value,
+    });
+    profileInfo.value = {
+      runtime_version: info?.runtime_version || null,
+      exemptions: info?.exemptions || {},
+      pending_builds: info?.pending_builds || [],
+      logs_dir: info?.logs_dir || "",
+    };
+  } catch (_) {
+    // 非 Tauri / 旧后端：保持空信息
+  }
+}
 
 // 官方 CLI 的失败诊断对齐：把官方提示（allow-version / pnpm 缺失 / 诊断日志路径）转成本地化提示。
 function actionErrorText(e) {
@@ -66,6 +93,7 @@ async function load() {
     if (!activeProfile.value && profiles.value.length) {
       activeProfile.value = profiles.value[0].name;
     }
+    await refreshInfo();
   } catch (e) {
     notify("" + e);
   } finally {
@@ -114,13 +142,71 @@ async function doAction(action, pkg, bundle) {
     });
     notify(t(action === "add" ? "dsplugins.installed" : "dsplugins.removed", { p: name }));
     newPkg.value = "";
+    lastAction.value = null;
     if (logLines.value.length) showLog.value = true;
     await load();
   } catch (e) {
+    lastAction.value = { action, name, bundle: !!bundle };
     notify(actionErrorText(e));
     showLog.value = true;
+    await refreshInfo();
   } finally {
     busy.value = false;
+  }
+}
+
+// B1-12：允许 pnpm 拦截的依赖构建脚本（写 pnpm-workspace.yaml 的 allowBuilds），成功后重试上次操作
+async function approveBuilds() {
+  const pkgs = profileInfo.value.pending_builds || [];
+  if (!pkgs.length) return;
+  busy.value = true;
+  try {
+    const left = await invoke("ds_approve_builds", {
+      version: props.version,
+      profile: activeProfile.value,
+      packages: pkgs,
+    });
+    profileInfo.value.pending_builds = left || [];
+    notify(t("dsplugins.buildsApproved", { n: pkgs.length }));
+    const last = lastAction.value;
+    if (last) {
+      lastAction.value = null;
+      await doAction(last.action, last.name, last.bundle);
+    }
+  } catch (e) {
+    notify("" + e);
+  } finally {
+    busy.value = false;
+  }
+}
+
+// B1-12：撤销版本豁免（官方 CLI revoke-version）
+async function revokeExemption(spec, runtime) {
+  const ok = await ask(t("dsplugins.exemptionRevokeConfirm", { p: spec }), {
+    title: t("dsplugins.exemptions"),
+    kind: "warning",
+  });
+  if (!ok) return;
+  try {
+    await invoke("ds_exemption_action", {
+      version: props.version,
+      profile: activeProfile.value,
+      action: "revoke",
+      package_version: spec,
+      dsh_version: runtime,
+    });
+    notify(t("dsplugins.exemptionRevoked", { p: spec }));
+    await refreshInfo();
+  } catch (e) {
+    notify("" + e);
+  }
+}
+
+async function openLogs() {
+  try {
+    await invoke("ds_open_plugin_logs", { version: props.version, profile: activeProfile.value });
+  } catch (e) {
+    notify("" + e);
   }
 }
 
@@ -166,6 +252,11 @@ onMounted(async () => {
   }
 });
 
+// 切换 profile 时刷新官方信息（豁免 / 待决定构建脚本 / 日志目录）
+watch(activeProfile, () => {
+  refreshInfo();
+});
+
 onUnmounted(() => {
   if (unlistenProgress) unlistenProgress();
 });
@@ -184,6 +275,7 @@ onUnmounted(() => {
       </div>
       <div class="dp-head-actions">
         <button class="dp-icon-btn" @click="load" :disabled="loading" :title="t('dsplugins.refresh')">↻</button>
+        <button class="dp-icon-btn" @click="openLogs" :disabled="!activeProfile" :title="t('dsplugins.logs')">📜</button>
         <button class="dp-icon-btn" @click="openDir" :disabled="!activeProfile" :title="t('dsplugins.openDir')">📂</button>
         <button class="dp-icon-btn" @click="emit('close')" :title="t('dsplugins.close')">✕</button>
       </div>
@@ -245,14 +337,15 @@ onUnmounted(() => {
           <div class="dp-item-main">
             <span class="dp-item-icon">{{ pl.is_bundle ? "📦" : "🧩" }}</span>
             <div class="dp-item-info">
-              <code class="dp-item-name">{{ pl.name }}</code>
+              <code class="dp-item-name" :title="pl.description || ''">{{ pl.name }}</code>
               <span
                 class="dp-item-ver"
                 v-if="pl.version"
                 :title="pl.spec ? t('dsplugins.specTip', { spec: pl.spec }) : ''"
               >v{{ pl.version }}</span>
             </div>
-            <span class="dp-badge" :class="isBundle(pl) ? 'dp-badge-bundle' : 'dp-badge-user'">{{ srcLabel(pl) }}</span>
+            <span class="dp-badge" :class="isOfficial(pl) ? 'dp-badge-bundle' : 'dp-badge-user'">{{ srcLabel(pl) }}</span>
+            <span class="dp-badge dp-badge-kind" v-if="!pl.declares_bundle">{{ kindLabel(pl) }}</span>
           </div>
           <button
             class="dp-btn dp-btn-danger dp-btn-sm"
@@ -272,6 +365,32 @@ onUnmounted(() => {
           {{ showLog ? t("dsplugins.hideLog") : t("dsplugins.showLog") }} ({{ logLines.length }})
         </button>
         <pre class="dp-log-body" v-show="showLog">{{ logLines.join("\n") }}</pre>
+      </div>
+
+      <!-- B1-11/B1-12：官方信息（待决定构建脚本 / 版本豁免） -->
+      <div class="dp-meta">
+        <div class="dp-pending" v-if="profileInfo.pending_builds.length">
+          <span class="dp-meta-label">{{ t("dsplugins.pendingBuilds", { n: profileInfo.pending_builds.length }) }}</span>
+          <code class="dp-meta-code">{{ profileInfo.pending_builds.join(", ") }}</code>
+          <button class="dp-btn dp-btn-primary dp-btn-sm" @click="approveBuilds" :disabled="busy">
+            {{ t("dsplugins.approveRetry") }}
+          </button>
+        </div>
+        <details class="dp-exemptions">
+          <summary>{{ t("dsplugins.exemptions") }} ({{ exemptionCount }})</summary>
+          <div v-if="!exemptionCount" class="dp-meta-empty">{{ t("dsplugins.exemptionsEmpty") }}</div>
+          <ul v-else class="dp-exemption-list">
+            <li v-for="(runtimes, spec) in profileInfo.exemptions" :key="spec" class="dp-exemption">
+              <code>{{ spec }}</code>
+              <span v-for="rt in runtimes" :key="rt" class="dp-exemption-rt">
+                {{ rt }}
+                <button class="dp-btn dp-btn-danger dp-btn-sm" @click="revokeExemption(spec, rt)">
+                  {{ t("dsplugins.revoke") }}
+                </button>
+              </span>
+            </li>
+          </ul>
+        </details>
       </div>
     </template>
   </div>
@@ -420,6 +539,19 @@ onUnmounted(() => {
 
 /* B1-10：搜索框 */
 .dp-search { min-width: 140px; max-width: 220px; flex: none; }
+
+/* B1-11/B1-12：官方信息（构建脚本 / 版本豁免） */
+.dp-meta { border-top: 1px dashed var(--panel-border); padding: 8px 16px 12px; display: flex; flex-direction: column; gap: 8px; }
+.dp-pending { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 11.5px; }
+.dp-meta-label { color: var(--danger, #e5484d); font-weight: 600; }
+.dp-meta-code { color: var(--text-muted); font-size: 11px; font-family: ui-monospace, Consolas, monospace; word-break: break-all; }
+.dp-meta-empty { color: var(--text-muted); font-size: 11.5px; padding: 2px 0 0; }
+.dp-exemptions summary { cursor: pointer; font-size: 11.5px; color: var(--text-muted); }
+.dp-exemption-list { list-style: none; margin: 6px 0 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.dp-exemption { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 11px; color: var(--text-muted); }
+.dp-exemption code { color: var(--text); font-family: ui-monospace, Consolas, monospace; }
+.dp-exemption-rt { display: inline-flex; align-items: center; gap: 4px; }
+.dp-badge-kind { background: var(--surface-3); color: var(--text-3); border-color: var(--panel-border); }
 
 /* B1-08：操作输出 */
 .dp-log { border-top: 1px dashed var(--panel-border); padding: 6px 16px 10px; }

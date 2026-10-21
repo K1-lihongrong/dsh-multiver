@@ -168,6 +168,10 @@ pub fn run() {
             commands::ds_plugin_action,
             commands::ds_init_profile,
             commands::ds_open_profile_dir,
+            commands::ds_profile_info,
+            commands::ds_exemption_action,
+            commands::ds_approve_builds,
+            commands::ds_open_plugin_logs,
         ])
         .setup(move |app| {
             use tauri::Manager;
