@@ -24,6 +24,8 @@ pub(crate) async fn scan_versions(
         let total = names.len();
         let store_mtime = sizecache::dir_mtime(&store);
         let mut cache = sizecache::load(&root);
+        // D13：清掉已卸载版本留下的死条目，保证写回时只含当前实际安装的版本
+        sizecache::prune(&mut cache, |v| versions_dir.join(v).exists());
 
         for (i, n) in names.iter().enumerate() {
             // 取消检查（每个版本开始前）
