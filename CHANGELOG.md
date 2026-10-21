@@ -53,6 +53,11 @@
 - LAUNCH_MODE 提前到 run() 开头记录（先于窗口/前端创建）。
 - 新增 show_main_window / get_launch_mode / is_version_open 命令。
 
+### 调研结论（无代码改动）
+- **P7 占用扫描「思路 G」实施后证伪**：把「`metadata()` 取大小 + `open` 取 nlink」合并为一次 open，
+  实测 release 构建 **39.13s vs 旧 38.16s（同版本同机）**——瓶颈在 `File::open` 本身，合并系统调用无收益。
+  代码已回退，结论记入 [开发缺口 · P7](docs/开发缺口.md)。A~G 全部验证完毕，P7 结案。
+
 ---
 
 ## [0.2.13] - 2026-10-15
