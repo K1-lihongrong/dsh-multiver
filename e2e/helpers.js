@@ -1,4 +1,4 @@
-// v0.2.14：Playwright E2E 公共工具。
+﻿// v0.2.14：Playwright E2E 公共工具。
 // 纯 web 环境（vite preview）无 Tauri 后端，需 mock window.__TAURI_INTERNALS__。
 //
 // 关键：page.addInitScript 的参数走 structured clone，函数会丢失。
@@ -44,11 +44,12 @@ export async function mockTauri(page, opts = {}) {
       check_env: () => [
         { name: "Node.js", name_key: "env.node.name", ok: true, detail: "v22.19.0", detail_key: "env.node.detail_ok", detail_args: { v: "v22.19.0" }, critical: true, install_hint: "", hint_key: "", install_url: "" },
         { name: "pnpm", name_key: "env.pnpm.name", ok: true, detail: "v11.17.0", detail_key: "", detail_args: {}, critical: true, install_hint: "", hint_key: "", install_url: "" },
+        { name: "git", name_key: "env.git.name", ok: true, detail: "git version 2.47.3", detail_key: "", detail_args: {}, critical: false, install_hint: "", hint_key: "", install_url: "" },
         { name: "根目录可写", name_key: "env.writable.name", ok: true, detail: "D:/dsh-data", detail_key: "", detail_args: {}, critical: true, install_hint: "", hint_key: "", install_url: "" },
         { name: "磁盘空间", name_key: "env.disk.name", ok: true, detail: "可用 100 GB", detail_key: "", detail_args: {}, critical: false, install_hint: "", hint_key: "", install_url: "" },
         { name: "npm 源连通", name_key: "env.registry.name", ok: true, detail: "可达", detail_key: "", detail_args: {}, critical: false, install_hint: "", hint_key: "", install_url: "" },
       ],
-      runtime_status: () => ({ system_node_ok: true, system_pnpm_ok: true }),
+      runtime_status: () => ({ system_node_ok: true, system_pnpm_ok: true, bundled_node_ok: false, bundled_pnpm_ok: false, portable_supported: true }),
       check_update: () => ({ has_update: false }),
       log_frontend: () => null,
       is_version_open: () => false,

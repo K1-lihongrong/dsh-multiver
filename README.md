@@ -1,4 +1,4 @@
-# dsh-multiver
+﻿# dsh-multiver
 
 一个**轻量、便携**的 DeepSeek Harness（dsh）版本管理器，用于在同一台机器上安装、切换、运行多个 dsh 版本。
 
@@ -224,7 +224,7 @@ node gen-icons.mjs
 
 **开发 / 从源码构建**：
 - Node.js `^22.19.0` 或 `>=24`
-- pnpm（建议 11.x）
+- pnpm 10+（建议 11.x 及以上；便携版内置 12.11.2）
 - Rust 工具链
 - Windows：MSVC C++ 构建工具 + Windows SDK
 - Linux：`libwebkit2gtk-4.1-dev`、`libayatana-appindicator3-dev`、`librsvg2-dev`、`build-essential` 等
@@ -239,6 +239,10 @@ node gen-icons.mjs
 
 - 便携版单 exe 不含 WebView2 与 VC++ 运行时，极老或纯净版 Win10 可能需手动安装 WebView2
 - 终端 `dsh` 转发脚本写入 `%APPDATA%\npm\`，该目录需在 PATH 中
+- 便携运行时（Node/pnpm）自动下载**仅 Windows**；Linux 请用系统包管理器安装 Node.js 与 pnpm
+- pnpm 需 **10+**：llowBuilds 构建脚本审批依赖其语法；低于 10 环境检查会提示升级
+- 安装 GitHub / Git 来源插件需要系统 git（环境检查会提示，非致命）
+- Windows 系统代理会自动用于下载/更新（仅在未设置 HTTP(S)_PROXY 环境变量时）
 - Windows 图标有缓存，更新 exe 后若图标未变，需清缓存（`ie4uinit.exe -show` 或重启资源管理器）
 - 部分早期 dsh 版本依赖已下架的私有包，任何源都无法安装（界面会标灰并提示换版本）
 - 使用 npm 官方源时，国内下载可能较慢；淘宝镜像同步滞后，可能出现子包缺失
