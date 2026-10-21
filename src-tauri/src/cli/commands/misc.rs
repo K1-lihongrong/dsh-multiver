@@ -323,6 +323,25 @@ pub fn cmd_run(version: &str, json: bool) -> i32 {
 /// - `--dry-run`：只报告检测结果（缺什么），不下载
 /// - 正常：下载缺失的便携 Node 到 `<root>/tools/node/`
 pub fn cmd_setup_runtime(dry_run: bool, json: bool) -> i32 {
+    // 便携运行时下载仅 Windows（与 runtime/bundled.rs 的 cfg 门控一致）。
+    // CLI 侧必须显式报错并返回非 0，避免「错误被塞进 msg 当成功」（L-24 实测缺陷）。
+    if !cfg!(windows) {
+        let msg =
+            "便携运行时仅支持 Windows；请用系统包管理器安装 Node.js 与 pnpm（Linux：apt/dnf 等）";
+        if json {
+            println!(
+                "{}",
+                json_str(&serde_json::json!({
+                    "supported": false,
+                    "portable_supported": false,
+                    "error": msg,
+                }))
+            );
+        } else {
+            eprintln!("{}", msg);
+        }
+        return 1;
+    }
     let ctx = load_ctx();
     let root = &ctx.dirs.root;
     let sys_node = crate::runtime::system_node_ok();

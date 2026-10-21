@@ -45,6 +45,7 @@ export default {
 
     "env.writable.detail_fail": "{path} に書き込めません: {err}",
     "env.disk.detail_ok": "空き {size}",
+    "env.disk.detail_zero": "0 MB（読み取り専用マウントまたはディスク満杯。AppImage ではデータルートを書き込み可能な場所に変更してください）",
     "env.disk.detail_unknown": "取得できません（対象 {path}）",
     "env.registry.detail_ok": "到達可能",
     "env.registry.detail_latest": "到達可能（最新 {v}）",

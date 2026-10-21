@@ -227,7 +227,7 @@ node gen-icons.mjs
 - pnpm 10+（建议 11.x 及以上；便携版内置 12.11.2）
 - Rust 工具链
 - Windows：MSVC C++ 构建工具 + Windows SDK
-- Linux：`libwebkit2gtk-4.1-dev`、`libayatana-appindicator3-dev`、`librsvg2-dev`、`build-essential` 等
+- Linux：`libwebkit2gtk-4.1-dev`、`libgtk-3-dev`、`libayatana-appindicator3-dev`、`librsvg2-dev`、`libdbus-1-dev`、`libxdo-dev`、`libssl-dev`、`build-essential`、`pkg-config` 等
 
 ## 技术栈
 

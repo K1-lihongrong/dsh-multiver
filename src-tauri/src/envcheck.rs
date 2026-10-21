@@ -362,6 +362,8 @@ pub fn check_writable(root: &Path) -> CheckItem {
 /// 返回可用空间（人类可读）。查不到时降级为"未知"（非致命，不误报失败）。
 pub fn check_disk(root: &Path) -> CheckItem {
     match free_space(root) {
+        Some(0) => ok_item("磁盘空间", "可用 0 MB".to_string(), false)
+            .i18n_detail("env.disk.detail_zero", serde_json::Value::Null),
         Some(bytes) => ok_item("磁盘空间", format!("可用 {}", human_bytes(bytes)), false)
             .i18n_detail(
                 "env.disk.detail_ok",
