@@ -10,7 +10,12 @@
 //! - DSH_HOME 由调用方（commands）解析后传入（隔离/共享/官方）。
 
 use serde::Serialize;
+use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
+
+/// 单次插件操作的超时（pnpm 安装可能较慢，但不应无限阻塞）。
+pub const PLUGIN_TIMEOUT: Duration = Duration::from_secs(300);
 
 /// 一个 profile 下的插件信息（从 profiles/<name>/package.json 的 dependencies 读）。
 #[derive(Debug, Clone, Serialize)]
@@ -22,6 +27,8 @@ pub struct DsPlugin {
     pub source: String,
     /// 归属：`"official"`（`@deepseek-ai/*`）| `"third_party"`（其它来源）。
     pub origin: String,
+    /// `package.json` 里声明的版本范围（与 `version` 不同时给出，供 UI 提示）。
+    pub spec: Option<String>,
 }
 
 /// 一个 profile（dsh 的插件集合）。
@@ -70,10 +77,17 @@ pub fn list_profiles(dsh_home: &Path) -> Vec<DsProfile> {
 }
 
 /// 读单个 profile（package.json 的 dependencies + dsh.profile.bundles）。
+///
+/// 版本优先取**实际安装版本**（`node_modules/<pkg>/package.json`），
+/// 取不到时退回 `package.json` 里声明的 semver 范围（此时 `spec` 记录原范围）。
 fn read_profile(name: &str, path: &Path) -> DsProfile {
     let mut plugins: Vec<DsPlugin> = Vec::new();
     let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
     let pkg_path = path.join("package.json");
+    let parent_nm = path
+        .parent()
+        .map(|p| p.join("node_modules"))
+        .unwrap_or_default();
     if let Ok(text) = std::fs::read_to_string(&pkg_path) {
         if let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) {
             // 1) dsh.profile.bundles：profile 内置的 bundle 层
@@ -92,8 +106,15 @@ fn read_profile(name: &str, path: &Path) -> DsProfile {
             // 2) dependencies：用户 add 的插件（bundles 之外）
             if let Some(deps) = v.get("dependencies").and_then(|d| d.as_object()) {
                 for (k, ver) in deps {
-                    let version = ver.as_str().unwrap_or("").to_string();
+                    let declared = ver.as_str().map(|s| s.to_string());
                     let is_bundle = bundles.iter().any(|b| b == k);
+                    let installed = installed_version(&path.join("node_modules"), &parent_nm, k);
+                    let (version, spec) = match (&installed, &declared) {
+                        (Some(actual), Some(d)) if actual != d => (actual.clone(), Some(d.clone())),
+                        (Some(actual), _) => (actual.clone(), None),
+                        (None, Some(d)) => (d.clone(), None),
+                        (None, None) => (String::new(), None),
+                    };
                     seen.insert(k.clone());
                     plugins.push(DsPlugin {
                         name: k.clone(),
@@ -101,22 +122,18 @@ fn read_profile(name: &str, path: &Path) -> DsProfile {
                         is_bundle,
                         source: if is_bundle { "bundle" } else { "user" }.to_string(),
                         origin: plugin_origin(k).to_string(),
+                        spec,
                     });
                 }
             }
 
             // 3) bundles 里未出现在 dependencies 的（dsh 默认 profile 的 dependencies 常为空）
-            //    版本从 <profile>/node_modules/<pkg>/package.json 或 <profiles>/node_modules/<pkg> 读。
-            let parent_nm = path
-                .parent()
-                .map(|p| p.join("node_modules"))
-                .unwrap_or_default();
+            //    版本从 <profile>/node_modules/<pkg> 或 <profiles>/node_modules/<pkg> 读。
             for b in &bundles {
                 if seen.contains(b) {
                     continue;
                 }
-                let ver = read_pkg_version(&path.join("node_modules").join(b))
-                    .or_else(|| read_pkg_version(&parent_nm.join(b)))
+                let ver = installed_version(&path.join("node_modules"), &parent_nm, b)
                     .unwrap_or_default();
                 seen.insert(b.clone());
                 plugins.push(DsPlugin {
@@ -125,6 +142,7 @@ fn read_profile(name: &str, path: &Path) -> DsProfile {
                     is_bundle: true,
                     source: "bundle".to_string(),
                     origin: plugin_origin(b).to_string(),
+                    spec: None,
                 });
             }
         }
@@ -135,6 +153,11 @@ fn read_profile(name: &str, path: &Path) -> DsProfile {
         path: path.to_string_lossy().to_string(),
         plugins,
     }
+}
+
+/// 取实际安装版本：先看 profile 自己的 `node_modules`，再看 `profiles/node_modules`（hoisted）。
+fn installed_version(profile_nm: &Path, parent_nm: &Path, pkg: &str) -> Option<String> {
+    read_pkg_version(&profile_nm.join(pkg)).or_else(|| read_pkg_version(&parent_nm.join(pkg)))
 }
 
 /// 读 <pkg>/package.json 的 version 字段。
@@ -234,15 +257,103 @@ pub fn dsh_bin(version_dir: &Path) -> Option<PathBuf> {
     }
 }
 
+/// 校验 profile 名（dsh 会用它作目录名）：字母/数字/`.`/`-`/`_`，且不能以 `-` 开头。
+pub fn validate_profile_name(name: &str) -> Result<(), String> {
+    let s = name.trim();
+    if s.is_empty() {
+        return Err("profile 名不能为空".into());
+    }
+    if s.len() > 64 {
+        return Err("profile 名过长（最多 64 字符）".into());
+    }
+    if s.starts_with('-') {
+        return Err("profile 名不能以 - 开头".into());
+    }
+    if s == "." || s == ".." {
+        return Err("profile 名不能是 . 或 ..".into());
+    }
+    if !s
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_'))
+    {
+        return Err("profile 名只能包含字母、数字、. - _".into());
+    }
+    Ok(())
+}
+
+/// 剥离 ANSI 转义序列（`ESC [ … 终止字节`），让日志/toast 不出现彩色控制码。
+pub fn strip_ansi(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut chars = text.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '\u{1b}' {
+            match chars.peek() {
+                Some('[') => {
+                    chars.next(); // '['
+                    for n in chars.by_ref() {
+                        if ('@'..='~').contains(&n) {
+                            break;
+                        }
+                    }
+                }
+                Some(_) => {
+                    chars.next();
+                }
+                None => {}
+            }
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
+/// 一次插件命令的执行结果。
+#[derive(Debug)]
+pub struct RunResult {
+    pub ok: bool,
+    pub output: String,
+    pub timed_out: bool,
+}
+
+/// 读子进程输出并按行转发（解码 UTF-8/GBK + 剥 ANSI）。
+fn pump_lines<R: std::io::Read + Send + 'static>(
+    reader: R,
+    tx: std::sync::mpsc::Sender<String>,
+) -> std::thread::JoinHandle<()> {
+    std::thread::spawn(move || {
+        let mut br = BufReader::new(reader);
+        let mut buf = Vec::new();
+        loop {
+            buf.clear();
+            match br.read_until(b'\n', &mut buf) {
+                Ok(0) => break,
+                Ok(_) => {
+                    let decoded = crate::console_decode::decode_console(&buf);
+                    let line = strip_ansi(decoded.trim_end_matches(['\r', '\n']));
+                    if tx.send(line).is_err() {
+                        break;
+                    }
+                }
+                Err(_) => break,
+            }
+        }
+    })
+}
+
 /// 调 dsh CLI 执行插件操作（`dsh plugin --profile <p> <args...>`）。
 ///
-/// 返回 (成功, 输出文本)。dsh 侧输出全量带回，供界面展示。
-pub fn run_dsh_plugin(
+/// - 输出按行流式回调（供前端进度展示），同时累积到返回值 `output`；
+/// - 超过 `timeout` 杀掉子进程并返回 `timed_out = true`；
+/// - 输出统一解码（D16）并剥离 ANSI。
+pub fn run_dsh_plugin<F: FnMut(&str)>(
     dsh_bin: &Path,
     dsh_home: &Path,
     profile: &str,
     args: &[&str],
-) -> (bool, String) {
+    timeout: Duration,
+    mut on_line: F,
+) -> RunResult {
     let mut cmd = if cfg!(windows) {
         let mut c = std::process::Command::new("cmd");
         c.arg("/C").arg(dsh_bin);
@@ -255,7 +366,9 @@ pub fn run_dsh_plugin(
         .arg(profile)
         .args(args)
         .env("DSH_HOME", dsh_home)
-        .stdin(std::process::Stdio::null());
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
 
     #[cfg(windows)]
     {
@@ -264,19 +377,66 @@ pub fn run_dsh_plugin(
         cmd.creation_flags(CREATE_NO_WINDOW);
     }
 
-    match cmd.output() {
-        Ok(out) => {
-            let mut text = crate::console_decode::decode_console(&out.stdout);
-            let err = crate::console_decode::decode_console(&out.stderr);
-            if !err.trim().is_empty() {
-                if !text.is_empty() {
-                    text.push('\n');
-                }
-                text.push_str(&err);
+    let mut child = match cmd.spawn() {
+        Ok(c) => c,
+        Err(e) => {
+            return RunResult {
+                ok: false,
+                output: format!("执行 dsh 失败：{e}"),
+                timed_out: false,
             }
-            (out.status.success(), text)
         }
-        Err(e) => (false, format!("执行 dsh 失败：{}", e)),
+    };
+
+    let (tx, rx) = std::sync::mpsc::channel::<String>();
+    let mut readers = Vec::new();
+    if let Some(out) = child.stdout.take() {
+        readers.push(pump_lines(out, tx.clone()));
+    }
+    if let Some(err) = child.stderr.take() {
+        readers.push(pump_lines(err, tx.clone()));
+    }
+    drop(tx);
+
+    let deadline = Instant::now() + timeout;
+    let mut lines: Vec<String> = Vec::new();
+    let mut ok = false;
+    let mut timed_out = false;
+    loop {
+        while let Ok(line) = rx.try_recv() {
+            on_line(&line);
+            lines.push(line);
+        }
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                ok = status.success();
+                break;
+            }
+            Ok(None) => {}
+            Err(e) => {
+                lines.push(format!("等待 dsh 失败：{e}"));
+                break;
+            }
+        }
+        if Instant::now() >= deadline {
+            timed_out = true;
+            let _ = child.kill();
+            let _ = child.wait();
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    for h in readers {
+        let _ = h.join();
+    }
+    while let Ok(line) = rx.try_recv() {
+        on_line(&line);
+        lines.push(line);
+    }
+    RunResult {
+        ok,
+        output: lines.join("\n"),
+        timed_out,
     }
 }
 
@@ -383,6 +543,50 @@ mod tests {
         ] {
             assert!(validate_package_spec(bad).is_err(), "应拒绝：{bad}");
         }
+    }
+
+    #[test]
+    fn strip_ansi_removes_csi() {
+        assert_eq!(strip_ansi("\u{1b}[32mok\u{1b}[0m"), "ok");
+        assert_eq!(strip_ansi("plain"), "plain");
+        assert_eq!(strip_ansi("\u{1b}[1;31merr\u{1b}[m end"), "err end");
+    }
+
+    #[test]
+    fn validate_profile_name_rules() {
+        for ok in ["web", "tui", "rescue", "my-profile", "a.b_c"] {
+            assert!(validate_profile_name(ok).is_ok(), "应接受：{ok}");
+        }
+        for bad in ["", "  ", "-x", "a b", "a/b", "a\\b", "a:b", "@x", ".", ".."] {
+            assert!(validate_profile_name(bad).is_err(), "应拒绝：{bad}");
+        }
+    }
+
+    #[test]
+    fn read_profile_prefers_installed_version() {
+        let base = std::env::temp_dir().join(format!("dsplug-ver-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let profile = base.join("profiles").join("web");
+        std::fs::create_dir_all(&profile).unwrap();
+        std::fs::write(
+            profile.join("package.json"),
+            r#"{"dependencies":{"pkg":"^1.0.0"}}"#,
+        )
+        .unwrap();
+        let pkg = base.join("profiles").join("node_modules").join("pkg");
+        std::fs::create_dir_all(&pkg).unwrap();
+        std::fs::write(pkg.join("package.json"), r#"{"version":"1.2.3"}"#).unwrap();
+
+        let p = read_profile("web", &profile);
+        let item = p
+            .plugins
+            .iter()
+            .find(|x| x.name == "pkg")
+            .expect("应列出 pkg");
+        assert_eq!(item.version, "1.2.3");
+        assert_eq!(item.spec.as_deref(), Some("^1.0.0"));
+        assert_eq!(item.source, "user");
+        let _ = std::fs::remove_dir_all(&base);
     }
 
     #[test]

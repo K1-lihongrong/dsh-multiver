@@ -1,6 +1,7 @@
 <script setup>
-import { ref, computed, onMounted } from "vue";
+import { ref, computed, onMounted, onUnmounted } from "vue";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { ask } from "@tauri-apps/plugin-dialog";
 import { t } from "../composables/useI18n.js";
 import { useToast } from "../composables/useToast.js";
@@ -20,7 +21,13 @@ const loading = ref(false);
 const busy = ref(false);
 const activeProfile = ref("");
 const newPkg = ref("");
-const activeTab = ref("plugins"); // plugins | logs? (预留)
+// B1-04/B1-08：进度输出（实时行）、搜索（B1-10）、初始化（B1-07）
+const logLines = ref([]);
+const showLog = ref(false);
+const search = ref("");
+const initName = ref("web");
+const initializing = ref(false);
+let unlistenProgress = null;
 
 const homeKindLabel = computed(() => {
   const m = { isolated: "dsplugins.homeIsolated", official: "dsplugins.homeOfficial", shared: "dsplugins.homeShared" };
@@ -56,6 +63,18 @@ async function load() {
 
 const currentProfile = () => profiles.value.find((p) => p.name === activeProfile.value);
 
+// B1-10：按包名/版本过滤
+const filteredPlugins = computed(() => {
+  const list = currentProfile()?.plugins || [];
+  const q = search.value.trim().toLowerCase();
+  if (!q) return list;
+  return list.filter(
+    (pl) =>
+      pl.name.toLowerCase().includes(q) ||
+      String(pl.version || "").toLowerCase().includes(q),
+  );
+});
+
 async function doAction(action, pkg, bundle) {
   const name = (pkg || "").trim();
   if (!name) return;
@@ -73,20 +92,43 @@ async function doAction(action, pkg, bundle) {
     if (!ok) return;
   }
   busy.value = true;
+  logLines.value = [];
   try {
-    const out = await invoke("ds_plugin_action", {
+    await invoke("ds_plugin_action", {
       version: props.version,
       profile: activeProfile.value,
       action,
       package: name,
     });
-    notify(out || t(action === "add" ? "dsplugins.installed" : "dsplugins.removed", { p: name }));
+    notify(t(action === "add" ? "dsplugins.installed" : "dsplugins.removed", { p: name }));
     newPkg.value = "";
+    if (logLines.value.length) showLog.value = true;
     await load();
   } catch (e) {
     notify("" + e);
+    showLog.value = true;
   } finally {
     busy.value = false;
+  }
+}
+
+// B1-07：无 profile 时初始化（dsh 首次使用会自动创建 profile 目录）
+async function initProfile() {
+  const name = initName.value.trim();
+  if (!name || initializing.value) return;
+  initializing.value = true;
+  logLines.value = [];
+  try {
+    await invoke("ds_init_profile", { version: props.version, profile: name });
+    notify(t("dsplugins.initDone", { p: name }));
+    if (logLines.value.length) showLog.value = true;
+    activeProfile.value = name;
+    await load();
+  } catch (e) {
+    notify("" + e);
+    showLog.value = true;
+  } finally {
+    initializing.value = false;
   }
 }
 
@@ -98,7 +140,23 @@ async function openDir() {
   }
 }
 
-onMounted(load);
+onMounted(async () => {
+  await load();
+  try {
+    unlistenProgress = await listen("ds-plugin-progress", (e) => {
+      const p = e?.payload;
+      if (!p || p.version !== props.version) return;
+      logLines.value.push(p.line);
+      if (logLines.value.length > 500) logLines.value.splice(0, logLines.value.length - 500);
+    });
+  } catch (_) {
+    // 非 Tauri 环境（E2E mock）忽略
+  }
+});
+
+onUnmounted(() => {
+  if (unlistenProgress) unlistenProgress();
+});
 </script>
 
 <template>
@@ -126,9 +184,20 @@ onMounted(load);
       <span class="dp-spinner"></span>
       <span>{{ t("dsplugins.loading") }}</span>
     </div>
-    <div v-else-if="!profiles.length" class="dp-state dp-state-empty">
-      <span class="dp-state-icon">📦</span>
-      <span>{{ t("dsplugins.noProfile") }}</span>
+    <div v-else-if="!profiles.length" class="dp-state dp-state-empty dp-init">
+      <div class="dp-init-text">{{ t("dsplugins.noProfile") }}</div>
+      <div class="dp-add">
+        <input
+          class="dp-input"
+          v-model="initName"
+          :placeholder="t('dsplugins.initPlaceholder')"
+          :disabled="initializing"
+          @keyup.enter="initProfile"
+        />
+        <button class="dp-btn dp-btn-primary" @click="initProfile" :disabled="initializing || !initName.trim()">
+          {{ initializing ? t("dsplugins.initializing") : t("dsplugins.init") }}
+        </button>
+      </div>
     </div>
     <template v-else>
       <!-- profile 切换（多个时） -->
@@ -137,6 +206,8 @@ onMounted(load);
           <option v-for="p in profiles" :key="p.name" :value="p.name">{{ p.name }}</option>
         </select>
         <span v-else class="dp-profile-tag">{{ activeProfile }}</span>
+
+        <input v-model="search" class="dp-input dp-search" :placeholder="t('dsplugins.searchPlaceholder')" />
 
         <div class="dp-add">
           <input
@@ -157,13 +228,17 @@ onMounted(load);
         <span class="dp-state-icon">🧩</span>
         <span>{{ t("dsplugins.empty") }}</span>
       </div>
-      <ul class="dp-list" v-else>
-        <li v-for="pl in currentProfile().plugins" :key="pl.name" class="dp-item">
+      <ul v-else-if="filteredPlugins.length" class="dp-list">
+        <li v-for="pl in filteredPlugins" :key="pl.name" class="dp-item">
           <div class="dp-item-main">
             <span class="dp-item-icon">{{ pl.is_bundle ? "📦" : "🧩" }}</span>
             <div class="dp-item-info">
               <code class="dp-item-name">{{ pl.name }}</code>
-              <span class="dp-item-ver" v-if="pl.version">v{{ pl.version }}</span>
+              <span
+                class="dp-item-ver"
+                v-if="pl.version"
+                :title="pl.spec ? t('dsplugins.specTip', { spec: pl.spec }) : ''"
+              >v{{ pl.version }}</span>
             </div>
             <span class="dp-badge" :class="orgOf(pl) === 'official' ? 'dp-badge-official' : 'dp-badge-third'">{{ orgLabel(pl) }}</span>
             <span class="dp-badge" :class="isBundle(pl) ? 'dp-badge-bundle' : 'dp-badge-user'">{{ srcLabel(pl) }}</span>
@@ -178,6 +253,15 @@ onMounted(load);
           </button>
         </li>
       </ul>
+      <div v-else class="dp-state dp-state-empty">{{ t("dsplugins.noMatch") }}</div>
+
+      <!-- B1-08：操作输出（实时进度行） -->
+      <div class="dp-log" v-if="logLines.length">
+        <button class="dp-log-toggle" @click="showLog = !showLog">
+          {{ showLog ? t("dsplugins.hideLog") : t("dsplugins.showLog") }} ({{ logLines.length }})
+        </button>
+        <pre class="dp-log-body" v-show="showLog">{{ logLines.join("\n") }}</pre>
+      </div>
     </template>
   </div>
 </template>
@@ -320,4 +404,26 @@ onMounted(load);
 /* 来源：内置 / 用户安装 */
 .dp-badge-bundle { background: var(--surface-3); color: var(--text-3); border-color: var(--panel-border); }
 .dp-badge-user { background: var(--accent-weak); color: var(--accent); border-color: var(--accent-border); }
+
+/* B1-07：无 profile 时的初始化表单 */
+.dp-init { flex-direction: column; gap: 10px; }
+.dp-init-text { font-size: 12px; }
+.dp-init .dp-add { flex: none; width: 100%; max-width: 420px; }
+
+/* B1-10：搜索框 */
+.dp-search { min-width: 140px; max-width: 220px; flex: none; }
+
+/* B1-08：操作输出 */
+.dp-log { border-top: 1px dashed var(--panel-border); padding: 6px 16px 10px; }
+.dp-log-toggle {
+  font-size: 11px; color: var(--text-muted); background: none; border: none;
+  cursor: pointer; padding: 2px 0;
+}
+.dp-log-toggle:hover { color: var(--text); }
+.dp-log-body {
+  margin: 6px 0 0; padding: 8px 10px; max-height: 180px; overflow: auto;
+  background: var(--surface-2); border: 1px solid var(--panel-border); border-radius: 6px;
+  font-size: 11px; line-height: 1.5; color: var(--text-3);
+  font-family: ui-monospace, Consolas, monospace; white-space: pre-wrap; word-break: break-all;
+}
 </style>
