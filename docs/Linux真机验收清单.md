@@ -156,3 +156,4 @@ WEBKIT_DISABLE_COMPOSITING_MODE=1 ./dsh-multiver_*.AppImage
 - [使用手册 · Linux 支持](使用手册.md#十三linux-支持)
 - [问题日志查看指南](问题日志查看指南.md)
 - [验收记录-WSL-2026-10-22](验收记录-WSL-2026-10-22.md) —— 本次 WSL 实测原始记录
+- [验收记录-Linux容器-2026-10-22](验收记录-Linux容器-2026-10-22.md) —— Ubuntu 24.04 容器 + Xvfb/Sway 补充实测（覆盖 L-06、L-08~L-22、L-29~L-37）
