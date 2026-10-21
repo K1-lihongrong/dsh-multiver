@@ -279,6 +279,15 @@ export default {
     "dsplugins.exampleSpec": "dsh-plugin-whale-pet",
 
     "dsplugins.install": "安裝",
+    "dsplugins.checking": "正在檢查外掛…",
+    "dsplugins.inspectNotBundle": "「{p}」未宣告 dsh.bundle，不是組合包外掛，已拒絕安裝（與官方一致）。",
+    "dsplugins.inspectNotFound": "找不到「{p}」：所有安裝來源都沒有這個套件。",
+    "dsplugins.inspectNetwork": "無法連線安裝來源檢查「{p}」：請檢查網路/代理或更換安裝來源。",
+    "dsplugins.inspectProblem": "無法安裝「{p}」。",
+    "dsplugins.descriptionLabel": "描述",
+    "dsplugins.inspectGitNote": "Git 來源無法預檢內容；將從 {p} 取得。",
+    "dsplugins.probeRecommended": "已探測最快安裝來源（快取 5 分鐘）",
+
     "dsplugins.installDesc": "輸入外掛的套件名、GitHub 倉庫位址或本機目錄路徑。",
     "dsplugins.specPlaceholder": "例如 dsh-plugin-whale-pet",
     "dsplugins.guideTitle": "外掛安裝引導與範例",

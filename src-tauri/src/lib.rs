@@ -173,6 +173,8 @@ pub fn run() {
             commands::ds_approve_builds,
             commands::ds_open_plugin_logs,
             commands::ds_check_updates,
+            commands::ds_inspect_spec,
+            commands::ds_probe_registries,
         ])
         .setup(move |app| {
             use tauri::Manager;

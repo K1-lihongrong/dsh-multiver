@@ -167,6 +167,9 @@ async function doAction(action, pkg, bundle) {
 const installPhase = ref("form");
 const installResult = ref(null);
 const installError = ref("");
+const inspectInfo = ref(null);
+const inspectFailed = ref(false);
+const registryProbed = ref(false);
 const REG_KEY = "dsh-multiver.installRegistry";
 const REG_CUSTOM_KEY = "dsh-multiver.installRegistryCustom";
 
@@ -190,12 +193,15 @@ const completedPlugin = computed(() => {
   return currentProfile()?.plugins?.find((p) => p.name === name) || null;
 });
 
-function openInstall() {
+async function openInstall() {
   showInstall.value = true;
   installSpec.value = "";
   installPhase.value = "form";
   installResult.value = null;
   installError.value = "";
+  inspectInfo.value = null;
+  inspectFailed.value = false;
+  registryProbed.value = false;
   logLines.value = [];
   try {
     installRegistry.value = localStorage.getItem(REG_KEY) || "";
@@ -204,16 +210,88 @@ function openInstall() {
     installRegistry.value = "";
     customRegistry.value = "";
   }
+  // 首次使用（未记住安装源）时探测最快源（对齐官方 registryProbe）
+  if (!installRegistry.value) {
+    try {
+      const p = await invoke("ds_probe_registries");
+      if (p?.kind) {
+        installRegistry.value = p.kind;
+        registryProbed.value = true;
+      }
+    } catch (_) {
+      // 探测失败保持默认
+    }
+  }
 }
 
-function requestInstall() {
+function inspectProblemText(info) {
+  const map = {
+    "not-a-bundle": "dsplugins.inspectNotBundle",
+    "not-found": "dsplugins.inspectNotFound",
+    network: "dsplugins.inspectNetwork",
+  };
+  const key = map[info?.problem] || "dsplugins.inspectProblem";
+  const msg = t(key, { p: info?.name || installSpec.value });
+  return info?.detail ? msg + "\n" + info.detail : msg;
+}
+
+async function requestInstall() {
   const spec = installSpec.value.trim();
   if (!spec) return;
   if (installRegistry.value === "custom" && !customRegistry.value.trim()) {
     notify(t("dsplugins.customRegistryRequired"));
     return;
   }
-  installPhase.value = "confirm";
+  // B1-16：安装前 inspect（对齐官方：先确认 spec 指向什么）
+  installPhase.value = "checking";
+  installError.value = "";
+  inspectFailed.value = false;
+  inspectInfo.value = null;
+  try {
+    const info = await invoke("ds_inspect_spec", {
+      version: props.version,
+      profile: activeProfile.value,
+      spec,
+      registry: registryValue.value,
+    });
+    inspectInfo.value = info || null;
+    if (info?.problem) {
+      installError.value = inspectProblemText(info);
+      inspectFailed.value = true;
+      installPhase.value = "failed";
+      return;
+    }
+    installPhase.value = "confirm";
+  } catch (e) {
+    installError.value = String(e);
+    inspectFailed.value = true;
+    installPhase.value = "failed";
+  }
+}
+
+function retryInstall() {
+  if (inspectFailed.value || !inspectInfo.value) {
+    requestInstall();
+  } else {
+    confirmInstall();
+  }
+}
+
+// 失败界面内直接允许 pnpm 拦截的构建脚本并重试安装（对齐官方）
+async function approveAndRetryInstall() {
+  const pkgs = profileInfo.value.pending_builds || [];
+  if (!pkgs.length) return;
+  try {
+    await invoke("ds_approve_builds", {
+      version: props.version,
+      profile: activeProfile.value,
+      packages: pkgs,
+    });
+    await refreshInfo();
+    retryInstall();
+  } catch (e) {
+    notify("" + e);
+  }
 }
 
 async function confirmInstall() {
@@ -633,6 +711,7 @@ onUnmounted(() => {
               <option value="custom">{{ t("dsplugins.registryCustom") }}</option>
             </select>
           </div>
+          <div class="dp-modal-hint" v-if="registryProbed">{{ t("dsplugins.probeRecommended") }}</div>
           <input
             v-if="installRegistry === 'custom'"
             class="dp-input dp-modal-input"
@@ -650,15 +729,29 @@ onUnmounted(() => {
           </button>
         </template>
 
+        <template v-else-if="installPhase === 'checking'">
+          <div class="dp-modal-desc">
+            <span class="dp-spinner"></span>
+            <span style="margin-left: 6px">{{ t("dsplugins.checking") }}</span>
+          </div>
+        </template>
+
         <template v-else-if="installPhase === 'confirm'">
           <div class="dp-modal-desc">{{ t("dsplugins.confirmHint") }}</div>
           <div class="dp-confirm-row">
             <span class="dp-confirm-label">{{ t("dsplugins.specLabel") }}</span>
-            <code>{{ installSpec.trim() }}</code>
+            <code>{{ inspectInfo?.name || installSpec.trim() }}<span v-if="inspectInfo?.version"> · v{{ inspectInfo.version }}</span></code>
+          </div>
+          <div class="dp-confirm-row" v-if="inspectInfo?.description">
+            <span class="dp-confirm-label">{{ t("dsplugins.descriptionLabel") }}</span>
+            <span>{{ inspectInfo.description }}</span>
           </div>
           <div class="dp-confirm-row">
             <span class="dp-confirm-label">{{ t("dsplugins.registryLabel") }}</span>
             <span>{{ registryLabelText }}</span>
+          </div>
+          <div class="dp-modal-hint" v-if="inspectInfo?.kind === 'git'">
+            {{ t("dsplugins.inspectGitNote", { p: inspectInfo.detail || installSpec.trim() }) }}
           </div>
           <div class="dp-warn">{{ t("dsplugins.trustWarning") }}</div>
           <div class="dp-modal-actions">
@@ -693,9 +786,16 @@ onUnmounted(() => {
         <template v-else>
           <div class="dp-done-title dp-fail-title">✕ {{ t("dsplugins.installFailedTitle") }}</div>
           <pre class="dp-log-body dp-modal-log">{{ installError }}</pre>
+          <div class="dp-pending" v-if="profileInfo.pending_builds.length">
+            <span class="dp-meta-label">{{ t("dsplugins.pendingBuilds", { n: profileInfo.pending_builds.length }) }}</span>
+            <code class="dp-meta-code">{{ profileInfo.pending_builds.join(", ") }}</code>
+            <button class="dp-btn dp-btn-primary dp-btn-sm" @click="approveAndRetryInstall">
+              {{ t("dsplugins.approveRetry") }}
+            </button>
+          </div>
           <div class="dp-modal-actions">
             <button class="dp-btn" @click="backToForm">{{ t("dsplugins.changeSource") }}</button>
-            <button class="dp-btn dp-btn-primary" @click="confirmInstall">{{ t("dsplugins.retry") }}</button>
+            <button class="dp-btn dp-btn-primary" @click="retryInstall">{{ t("dsplugins.retry") }}</button>
             <button class="dp-btn" @click="closeInstall">{{ t("dsplugins.close") }}</button>
           </div>
         </template>

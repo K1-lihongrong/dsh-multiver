@@ -52,6 +52,17 @@ export async function mockTauri(page, opts = {}) {
       check_update: () => ({ has_update: false }),
       log_frontend: () => null,
       is_version_open: () => false,
+      // 默认：安装前 inspect 成功（组合包）；需要失败场景时用 extra 覆盖
+      ds_inspect_spec: () => ({
+        kind: "npm",
+        name: "test-pkg",
+        version: "1.0.0",
+        description: "",
+        declares_bundle: true,
+        problem: null,
+        detail: null,
+      }),
+      ds_probe_registries: () => ({ kind: null, url: null, ms: null }),
     };
     // 合并 extra：JSON 值 → 静态返回；函数体字符串 → eval 成函数
     const jsonExtra = JSON.parse(extraSerialized);

@@ -225,7 +225,7 @@ test("显示待决定构建脚本并允许（B1-12）", async ({ page }) => {
   await page.goto("/");
   await page.getByRole("button", { name: "插件", exact: true }).click();
   await expect(page.locator(".dp-pending")).toContainText("esbuild");
-  await page.getByRole("button", { name: "允许并重试", exact: true }).click();
+  await page.locator(".dp-pending").getByRole("button", { name: "允许并重试", exact: true }).click();
   await page.waitForTimeout(400);
   const flatApprove = JSON.stringify(calls);
   expect(flatApprove).toContain("esbuild");
@@ -331,4 +331,81 @@ test("允许版本豁免（B1-14）", async ({ page }) => {
   const flat = JSON.stringify(calls);
   expect(flat).toContain('"action":"allow"');
   expect(flat).toContain("pkg@1.0.0");
+});
+
+test("安装前 inspect 拒绝非组合包（B1-16）", async ({ page }) => {
+  const calls = [];
+  await page.exposeFunction("__recordInspectInstall", (x) => calls.push(x));
+  await mockTauri(page, {
+    installed: [makeVersion("0.2.0-rc.1", { isolated: true })],
+    extra: {
+      ds_list_plugins: { dsh_home: "D:/dsh", home_kind: "shared", profiles: [PROFILE] },
+      ds_inspect_spec: {
+        kind: "npm",
+        name: "plain-pkg",
+        version: "1.0.0",
+        description: "",
+        declares_bundle: false,
+        problem: "not-a-bundle",
+        detail: null,
+      },
+      ds_plugin_action: "(args) => { window.__recordInspectInstall(args); return Promise.resolve('ok'); }",
+    },
+  });
+  await page.goto("/");
+  await page.getByRole("button", { name: "插件", exact: true }).click();
+  await page.getByRole("button", { name: /添加插件/ }).click();
+  await page.locator(".dp-modal-input").first().fill("plain-pkg");
+  await page.locator(".dp-modal").getByRole("button", { name: "安装", exact: true }).click();
+  await page.waitForTimeout(400);
+  await expect(page.locator(".dp-modal")).toContainText("不是组合包插件");
+  expect(JSON.stringify(calls)).not.toContain("plain-pkg");
+});
+
+test("首次打开安装对话框 → 探测最快源（B1-17）", async ({ page }) => {
+  await mockTauri(page, {
+    installed: [makeVersion("0.2.0-rc.1", { isolated: true })],
+    extra: {
+      ds_list_plugins: { dsh_home: "D:/dsh", home_kind: "shared", profiles: [PROFILE] },
+      ds_probe_registries: { kind: "mirror", url: "https://registry.npmmirror.com", ms: 120 },
+    },
+  });
+  await page.goto("/");
+  await page.getByRole("button", { name: "插件", exact: true }).click();
+  await page.getByRole("button", { name: /添加插件/ }).click();
+  await page.waitForTimeout(300);
+  await expect(page.locator(".dp-modal select")).toHaveValue("mirror");
+  await expect(page.locator(".dp-modal")).toContainText("已探测最快安装源");
+});
+
+test("失败弹窗内允许构建脚本并重试（B1-12 对齐官方）", async ({ page }) => {
+  const calls = [];
+  await page.exposeFunction("__recordBuildRetry", (x) => calls.push(x));
+  await mockTauri(page, {
+    installed: [makeVersion("0.2.0-rc.1", { isolated: true })],
+    extra: {
+      ds_list_plugins: { dsh_home: "D:/dsh", home_kind: "shared", profiles: [PROFILE] },
+      ds_profile_info: {
+        runtime_version: "0.2.0-rc.1",
+        exemptions: {},
+        pending_builds: ["esbuild"],
+        logs_dir: "D:/dsh/profiles/web/.plugin-manager/logs",
+      },
+      ds_approve_builds: "(args) => { window.__recordBuildRetry({kind:'approve', args}); return Promise.resolve([]); }",
+      ds_plugin_action:
+        "(args) => { window.__recordBuildRetry({kind:'action', args}); return Promise.reject('Ignored build scripts: esbuild'); }",
+    },
+  });
+  await page.goto("/");
+  await page.getByRole("button", { name: "插件", exact: true }).click();
+  await page.getByRole("button", { name: /添加插件/ }).click();
+  await page.locator(".dp-modal-input").first().fill("needs-build");
+  await page.locator(".dp-modal").getByRole("button", { name: "安装", exact: true }).click();
+  await page.locator(".dp-modal").getByRole("button", { name: "确认安装", exact: true }).click();
+  await page.waitForTimeout(400);
+  await page.locator(".dp-modal").getByRole("button", { name: "允许并重试", exact: true }).click();
+  await page.waitForTimeout(500);
+  const flat = JSON.stringify(calls);
+  expect(flat).toContain('"kind":"approve"');
+  expect(flat).toContain("esbuild");
 });
