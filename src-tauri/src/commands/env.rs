@@ -24,6 +24,7 @@ pub(crate) fn runtime_status(app: tauri::AppHandle) -> runtime::RuntimeStatus {
         bundled_node_ok: runtime::bundled_node_ok(&root),
         system_pnpm_ok: runtime::system_pnpm_ok(),
         bundled_pnpm_ok: runtime::bundled_pnpm_ok(&root),
+        portable_supported: cfg!(windows),
     }
 }
 
@@ -33,6 +34,12 @@ pub(crate) fn runtime_status(app: tauri::AppHandle) -> runtime::RuntimeStatus {
 /// 返回结果消息（成功/已就绪）。
 #[tauri::command]
 pub(crate) async fn setup_runtime(app: tauri::AppHandle) -> Result<String, String> {
+    if !cfg!(windows) {
+        return Err(
+            "便携运行时仅支持 Windows；请用系统包管理器安装 Node.js 与 pnpm（Linux：apt/dnf 等）"
+                .to_string(),
+        );
+    }
     use tauri::Emitter;
     let mdir = manager_dir(&app);
     let cfg = Config::load(&mdir);

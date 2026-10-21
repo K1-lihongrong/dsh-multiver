@@ -1,7 +1,10 @@
 //! 便携运行时（Node / pnpm）的检测、下载与解压（D12 拆分：原 runtime.rs 的便携运行时部分）。
-use super::{download_to, RuntimeProgress};
+#[cfg(windows)]
+use super::download_to;
+use super::RuntimeProgress;
 use std::path::{Path, PathBuf};
 /// 便携运行时依赖的 Node 版本（与 envcheck 的下限一致）。
+#[cfg_attr(not(windows), allow(dead_code))]
 pub const NODE_VERSION: &str = "22.19.0";
 
 /// 便携 Node 目录：`<root>/tools/node`
@@ -53,6 +56,8 @@ pub struct RuntimeStatus {
     pub system_pnpm_ok: bool,
     /// 便携 pnpm 是否已就绪
     pub bundled_pnpm_ok: bool,
+    /// 是否支持便携运行时自动下载（目前仅 Windows）
+    pub portable_supported: bool,
 }
 
 /// 检测运行时应走系统还是便携：返回该注入 dsh 子进程 PATH 的额外目录列表。
@@ -109,6 +114,7 @@ pub fn system_pnpm_ok() -> bool {
 ///
 /// 源顺序：官方 → 淘宝镜像（npmmirror）。任一成功即返回。
 /// 这是「失败换源」在运行时下载里的复用。
+#[cfg(windows)]
 pub fn download_node_zip(
     on_progress: &(dyn Fn(RuntimeProgress) + Send + Sync),
 ) -> Result<PathBuf, String> {
@@ -139,6 +145,7 @@ pub fn download_node_zip(
 
 /// 解压 Node zip 到 `<root>/tools/node/`，把 zip 内的顶层目录（`node-vX-win-x64/`）内容
 /// 平铺到 node 目录。
+#[cfg(windows)]
 pub fn extract_node_zip(zip_path: &Path, root: &Path) -> Result<(), String> {
     let target = node_dir(root);
     let _ = std::fs::remove_dir_all(&target);
@@ -173,6 +180,7 @@ pub fn extract_node_zip(zip_path: &Path, root: &Path) -> Result<(), String> {
 }
 
 /// 完整流程：下载 + 解压便携 Node。返回 node 目录。
+#[cfg(windows)]
 pub fn install_bundled_node(
     root: &Path,
     on_progress: &(dyn Fn(RuntimeProgress) + Send + Sync),
@@ -192,11 +200,13 @@ pub fn install_bundled_node(
 // ───────────────────────── 便携 pnpm ─────────────────────────
 
 /// 便携 pnpm 版本（@pnpm/exe 的稳定版）。
+#[cfg_attr(not(windows), allow(dead_code))]
 pub const PNPM_VERSION: &str = "12.11.2";
 
 /// 下载 pnpm 独立版（@pnpm/exe.win32-x64 的 tgz）到临时文件。
 ///
 /// 源顺序：官方 registry → npmmirror。任一成功即返回。
+#[cfg(windows)]
 pub fn download_pnpm_tgz(
     on_progress: &(dyn Fn(RuntimeProgress) + Send + Sync),
 ) -> Result<PathBuf, String> {
@@ -223,6 +233,7 @@ pub fn download_pnpm_tgz(
 }
 
 /// 解压 pnpm tgz 到 `<root>/tools/pnpm/`，取出 `package/pnpm.exe`（及其余文件）。
+#[cfg(windows)]
 pub fn extract_pnpm_tgz(tgz_path: &Path, root: &Path) -> Result<(), String> {
     let target = pnpm_dir(root);
     let _ = std::fs::remove_dir_all(&target);
@@ -254,6 +265,7 @@ pub fn extract_pnpm_tgz(tgz_path: &Path, root: &Path) -> Result<(), String> {
 }
 
 /// 完整流程：下载 + 解压便携 pnpm。返回 pnpm 目录。
+#[cfg(windows)]
 pub fn install_bundled_pnpm(
     root: &Path,
     on_progress: &(dyn Fn(RuntimeProgress) + Send + Sync),
@@ -268,6 +280,24 @@ pub fn install_bundled_pnpm(
     let _ = std::fs::remove_file(&tgz);
     result?;
     Ok(pnpm_dir(root))
+}
+
+// ───────────────────────── 非 Windows：不支持便携运行时 ─────────────────────────
+
+#[cfg(not(windows))]
+pub fn install_bundled_node(
+    _root: &Path,
+    _on_progress: &(dyn Fn(RuntimeProgress) + Send + Sync),
+) -> Result<PathBuf, String> {
+    Err("便携运行时仅支持 Windows；请用系统包管理器安装 Node.js".to_string())
+}
+
+#[cfg(not(windows))]
+pub fn install_bundled_pnpm(
+    _root: &Path,
+    _on_progress: &(dyn Fn(RuntimeProgress) + Send + Sync),
+) -> Result<PathBuf, String> {
+    Err("便携运行时仅支持 Windows；请用系统包管理器安装 pnpm".to_string())
 }
 
 #[cfg(test)]

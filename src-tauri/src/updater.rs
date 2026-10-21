@@ -46,11 +46,10 @@ pub fn check() -> UpdateInfo {
     };
 
     let url = format!("https://api.github.com/repos/{}/releases/latest", REPO);
-    let client = match reqwest::blocking::Client::builder()
-        .timeout(std::time::Duration::from_secs(10))
-        .user_agent("dsh-multiver")
-        .build()
-    {
+    let client = match crate::runtime::blocking_client_ua(
+        std::time::Duration::from_secs(10),
+        Some("dsh-multiver"),
+    ) {
         Ok(c) => c,
         Err(_) => return none,
     };
@@ -128,11 +127,10 @@ pub fn download_and_verify(
             .map(|d| d.as_nanos())
             .unwrap_or(0)
     ));
-    let client = reqwest::blocking::Client::builder()
-        .timeout(std::time::Duration::from_secs(300))
-        .user_agent("dsh-multiver")
-        .build()
-        .map_err(|e| e.to_string())?;
+    let client = crate::runtime::blocking_client_ua(
+        std::time::Duration::from_secs(300),
+        Some("dsh-multiver"),
+    )?;
     let mut resp = client.get(url).send().map_err(|e| e.to_string())?;
     if !resp.status().is_success() {
         return Err(format!("下载失败：HTTP {}", resp.status()));

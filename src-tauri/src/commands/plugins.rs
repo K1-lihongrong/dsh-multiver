@@ -404,10 +404,7 @@ pub(crate) async fn ds_probe_registries() -> Result<DsRegistryProbe, String> {
         let mut best: Option<(String, String, u64)> = None;
         for (kind, url) in candidates {
             let started = Instant::now();
-            let client = match reqwest::blocking::Client::builder()
-                .timeout(Duration::from_millis(1500))
-                .build()
-            {
+            let client = match crate::runtime::blocking_client(Duration::from_millis(1500)) {
                 Ok(c) => c,
                 Err(_) => continue,
             };

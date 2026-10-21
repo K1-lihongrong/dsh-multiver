@@ -8,6 +8,8 @@ test("页面能正常渲染（不白屏）", async ({ page }) => {
   await expect(page.locator(".brand h1")).toBeVisible();
   // 有"环境检查"卡片
   await expect(page.getByText("环境检查").first()).toBeVisible();
+  // 新增 git 检查项正常渲染
+  await expect(page.getByText("git", { exact: true })).toBeVisible();
 });
 
 test("已安装版本列表渲染", async ({ page }) => {

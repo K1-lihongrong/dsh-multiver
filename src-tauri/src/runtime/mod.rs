@@ -22,7 +22,135 @@ mod webview2;
 pub use bundled::*;
 pub use webview2::*;
 
+#[cfg(windows)]
 use std::path::Path;
+
+/// 构建统一的 HTTP 客户端：环境变量代理优先；Windows 未设置代理环境变量时读系统代理。
+///
+/// reqwest 默认只读 `HTTP(S)_PROXY` / `ALL_PROXY`；Windows「Internet 选项」里的系统代理
+/// 不会自动生效，而下载便携运行时 / WebView2 Bootstrapper / 更新包都可能有代理需求。
+pub fn blocking_client(timeout: std::time::Duration) -> Result<reqwest::blocking::Client, String> {
+    blocking_client_ua(timeout, None)
+}
+
+/// 同上，可选 User-Agent（GitHub API 必需）。
+pub fn blocking_client_ua(
+    timeout: std::time::Duration,
+    user_agent: Option<&str>,
+) -> Result<reqwest::blocking::Client, String> {
+    #[allow(unused_mut)]
+    let mut builder = reqwest::blocking::Client::builder().timeout(timeout);
+    if let Some(ua) = user_agent {
+        builder = builder.user_agent(ua);
+    }
+    #[cfg(windows)]
+    {
+        let has_env_proxy = [
+            "HTTP_PROXY",
+            "HTTPS_PROXY",
+            "ALL_PROXY",
+            "http_proxy",
+            "https_proxy",
+            "all_proxy",
+        ]
+        .iter()
+        .any(|k| std::env::var_os(k).is_some());
+        if !has_env_proxy {
+            if let Some(url) = windows_system_proxy() {
+                if let Ok(proxy) = reqwest::Proxy::all(&url) {
+                    builder = builder.proxy(proxy);
+                }
+            }
+        }
+    }
+    builder.build().map_err(|e| e.to_string())
+}
+
+#[cfg(windows)]
+/// 解析 Windows `ProxyServer` 字符串。
+///
+/// 支持 `host:port` 与 `http=host:port;https=host:port` 两种形式；优先 https 项，
+/// 缺少协议时补 `http://`。
+fn parse_system_proxy(s: &str) -> Option<String> {
+    let s = s.trim();
+    if s.is_empty() {
+        return None;
+    }
+    let mut http: Option<String> = None;
+    let mut https: Option<String> = None;
+    for part in s.split(';') {
+        let part = part.trim();
+        if part.is_empty() {
+            continue;
+        }
+        match part.split_once('=') {
+            Some((k, v)) if !v.trim().is_empty() => {
+                let key = k.trim().to_ascii_lowercase();
+                if key == "https" {
+                    https = Some(v.trim().to_string());
+                } else if key == "http" {
+                    http = Some(v.trim().to_string());
+                }
+            }
+            Some(_) => {}
+            None => http = Some(part.to_string()),
+        }
+    }
+    let host = https.or(http)?;
+    if host.starts_with("http://") || host.starts_with("https://") {
+        Some(host)
+    } else {
+        Some(format!("http://{host}"))
+    }
+}
+
+/// 读取 Windows 系统代理（Internet 选项 → 局域网设置）。
+#[cfg(windows)]
+fn windows_system_proxy() -> Option<String> {
+    use windows_sys::Win32::System::Registry::{
+        RegGetValueW, HKEY_CURRENT_USER, RRF_RT_REG_DWORD, RRF_RT_REG_SZ,
+    };
+
+    fn wide(s: &str) -> Vec<u16> {
+        s.encode_utf16().chain(std::iter::once(0)).collect()
+    }
+
+    unsafe {
+        let subkey = wide("Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings");
+        let enable_name = wide("ProxyEnable");
+        let mut enable: u32 = 0;
+        let mut size: u32 = std::mem::size_of::<u32>() as u32;
+        let rc = RegGetValueW(
+            HKEY_CURRENT_USER,
+            subkey.as_ptr(),
+            enable_name.as_ptr(),
+            RRF_RT_REG_DWORD,
+            std::ptr::null_mut(),
+            &mut enable as *mut u32 as *mut _,
+            &mut size,
+        );
+        if rc != 0 || enable == 0 {
+            return None;
+        }
+        let server_name = wide("ProxyServer");
+        let mut buf = [0u16; 2048];
+        let mut size: u32 = (buf.len() * 2) as u32;
+        let rc = RegGetValueW(
+            HKEY_CURRENT_USER,
+            subkey.as_ptr(),
+            server_name.as_ptr(),
+            RRF_RT_REG_SZ,
+            std::ptr::null_mut(),
+            buf.as_mut_ptr() as *mut _,
+            &mut size,
+        );
+        if rc != 0 {
+            return None;
+        }
+        let len = (size as usize / 2).saturating_sub(1);
+        parse_system_proxy(&String::from_utf16_lossy(&buf[..len]))
+    }
+}
 
 /// 运行时准备进度事件（v0.2.9 进度条）。
 ///
@@ -39,6 +167,7 @@ pub struct RuntimeProgress {
 ///
 /// `stage` 是给用户看的阶段名；`on_progress` 每次收到数据块时调用一次。
 /// 总大小取 Content-Length（可能缺失）。
+#[cfg(windows)]
 fn download_to(
     url: &str,
     dest: &Path,
@@ -47,10 +176,7 @@ fn download_to(
 ) -> Result<(), String> {
     use std::io::{Read, Write};
 
-    let client = reqwest::blocking::Client::builder()
-        .timeout(std::time::Duration::from_secs(300))
-        .build()
-        .map_err(|e| e.to_string())?;
+    let client = blocking_client(std::time::Duration::from_secs(300))?;
     let mut resp = client.get(url).send().map_err(|e| e.to_string())?;
     if !resp.status().is_success() {
         return Err(format!("HTTP {}", resp.status()));
@@ -78,4 +204,34 @@ fn download_to(
         });
     }
     Ok(())
+}
+
+#[cfg(all(test, windows))]
+mod tests {
+    use super::parse_system_proxy;
+
+    #[test]
+    fn parses_plain_host_port() {
+        assert_eq!(
+            parse_system_proxy("127.0.0.1:7890").as_deref(),
+            Some("http://127.0.0.1:7890")
+        );
+    }
+
+    #[test]
+    fn parses_scheme_map_prefers_https() {
+        assert_eq!(
+            parse_system_proxy("http=10.0.0.1:8080;https=10.0.0.1:8443").as_deref(),
+            Some("http://10.0.0.1:8443")
+        );
+    }
+
+    #[test]
+    fn keeps_existing_scheme_and_ignores_empty() {
+        assert_eq!(
+            parse_system_proxy("https://proxy.example:443").as_deref(),
+            Some("https://proxy.example:443")
+        );
+        assert_eq!(parse_system_proxy("   "), None);
+    }
 }

@@ -24,11 +24,18 @@ let unlistenProgress = null;
 /// 是否缺运行时（系统与便携都没有）。
 function needsRuntime() {
   const s = rtStatus.value;
-  if (!s) return false;
+  if (!s || !s.portable_supported) return false;
   return (
     (!s.system_node_ok && !s.bundled_node_ok) ||
     (!s.system_pnpm_ok && !s.bundled_pnpm_ok)
   );
+}
+
+/// 非 Windows：便携运行时不可用，只能提示用户用系统包管理器。
+function needsSystemRuntime() {
+  const s = rtStatus.value;
+  if (!s || s.portable_supported) return false;
+  return !s.system_node_ok || !s.system_pnpm_ok;
 }
 
 /// 运行环境检查，返回是否通过（致命项全 ok）。
@@ -142,6 +149,7 @@ defineExpose({ run, prepareRuntime });
       </li>
     </ul>
     <div v-else class="hint">{{ t("env.checking") }}</div>
+    <div v-if="checked && needsSystemRuntime()" class="hint">{{ t("env.portableUnsupported") }}</div>
 
     <div class="rt-progress" v-if="preparing && progStage">
       <div class="prog-line">

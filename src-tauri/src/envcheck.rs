@@ -64,6 +64,7 @@ fn name_to_key(name: &str) -> &'static str {
     match name {
         "Node.js" => "env.node.name",
         "pnpm" => "env.pnpm.name",
+        "git" => "env.git.name",
         "根目录可写" => "env.writable.name",
         "磁盘空间" => "env.disk.name",
         "npm 源连通" => "env.registry.name",
@@ -258,7 +259,24 @@ fn node_fallback_or_fail(root: &Path, detail: String) -> CheckItem {
 /// 3. 都没有 → 失败（引导下载；可用 `--setup-runtime` 自动下载）
 pub fn check_pnpm(root: &Path) -> CheckItem {
     match run_version("pnpm") {
-        Some(v) => ok_item("pnpm", v, true),
+        Some(v) => {
+            let major = parse_semver(v.trim()).map(|(m, _, _)| m).unwrap_or(0);
+            if major >= 10 {
+                let detail = v.clone();
+                ok_item("pnpm", v, true)
+                    .i18n_detail("env.pnpm.detail_ok", serde_json::json!({ "v": detail }))
+            } else {
+                fail_item(
+                    "pnpm",
+                    format!("版本过低：{v}（需要 pnpm 10+）"),
+                    true,
+                    "请升级 pnpm：npm install -g pnpm@latest。pnpm 10+ 才支持 allowBuilds 构建脚本审批。",
+                    "env.pnpm.hint_old",
+                    "https://pnpm.io/zh/installation",
+                )
+                .i18n_detail("env.pnpm.detail_old", serde_json::json!({ "v": v }))
+            }
+        }
         None => {
             if crate::runtime::bundled_pnpm_ok(root) {
                 return ok_item("pnpm", "将使用便携 pnpm".to_string(), true)
@@ -274,6 +292,25 @@ pub fn check_pnpm(root: &Path) -> CheckItem {
             )
             .i18n_detail("env.pnpm.detail_missing", serde_json::Value::Null)
         }
+    }
+}
+
+/// 检查 git（非致命）：安装 Git 来源插件/依赖时需要。
+///
+/// 官方插件安装支持 `github:` / `git+https:` 等 spec，pnpm 拉取这些依赖依赖 `git` 可执行文件；
+/// 缺失时安装只会得到晦涩的 pnpm 报错，故单独提示（不阻塞 Node/pnpm 主流程）。
+pub fn check_git() -> CheckItem {
+    match run_version("git") {
+        Some(v) => ok_item("git", v, false),
+        None => fail_item(
+            "git",
+            "未找到 git 命令（安装 GitHub / Git 来源插件时需要）".to_string(),
+            false,
+            "如要安装 Git 来源的插件或依赖，请先安装 Git 并确保它在 PATH 中。",
+            "env.git.hint",
+            "https://git-scm.com/downloads",
+        )
+        .i18n_detail("env.git.detail_missing", serde_json::Value::Null),
     }
 }
 
@@ -455,6 +492,7 @@ pub fn run_all(root: &Path, include_registry: bool) -> Vec<CheckItem> {
     std::thread::scope(|s| {
         let h_node = s.spawn(|| check_node(root));
         let h_pnpm = s.spawn(|| check_pnpm(root));
+        let h_git = s.spawn(check_git);
         let h_writable = s.spawn(|| check_writable(root));
         let h_disk = s.spawn(|| check_disk(root));
         let h_registry = if include_registry {
@@ -465,6 +503,7 @@ pub fn run_all(root: &Path, include_registry: bool) -> Vec<CheckItem> {
         let mut items = vec![
             h_node.join().unwrap_or_else(|_| panic_item("Node.js")),
             h_pnpm.join().unwrap_or_else(|_| panic_item("pnpm")),
+            h_git.join().unwrap_or_else(|_| panic_item("git")),
             h_writable
                 .join()
                 .unwrap_or_else(|_| panic_item("根目录可写")),
