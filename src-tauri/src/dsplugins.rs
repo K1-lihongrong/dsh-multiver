@@ -18,6 +18,10 @@ pub struct DsPlugin {
     pub name: String,
     pub version: String,
     pub is_bundle: bool,
+    /// 来源：`"bundle"`（profile 模板自带）| `"user"`（用户 `dsh plugin add` 装的）。
+    pub source: String,
+    /// 归属：`"official"`（`@deepseek-ai/*`）| `"third_party"`（其它来源）。
+    pub origin: String,
 }
 
 /// 一个 profile（dsh 的插件集合）。
@@ -95,6 +99,8 @@ fn read_profile(name: &str, path: &Path) -> DsProfile {
                         name: k.clone(),
                         version,
                         is_bundle,
+                        source: if is_bundle { "bundle" } else { "user" }.to_string(),
+                        origin: plugin_origin(k).to_string(),
                     });
                 }
             }
@@ -117,6 +123,8 @@ fn read_profile(name: &str, path: &Path) -> DsProfile {
                     name: b.clone(),
                     version: ver,
                     is_bundle: true,
+                    source: "bundle".to_string(),
+                    origin: plugin_origin(b).to_string(),
                 });
             }
         }
@@ -136,6 +144,81 @@ fn read_pkg_version(pkg_dir: &Path) -> Option<String> {
     v.get("version")
         .and_then(|x| x.as_str())
         .map(|s| s.to_string())
+}
+
+/// 归属判定（启发式）：npm scope 为 `@deepseek-ai/` 视为官方，其余视为第三方。
+///
+/// 仅按包名判断、不发网络请求；返回 `"official"` / `"third_party"`。
+pub fn plugin_origin(name: &str) -> &'static str {
+    if name.starts_with("@deepseek-ai/") {
+        "official"
+    } else {
+        "third_party"
+    }
+}
+
+/// 校验用户输入的 npm 包规格：`name` / `@scope/name`，可带 `@版本或标签`。
+///
+/// 拒绝空、空白、控制字符、以 `-` 开头（防止把 pnpm 选项当包名透传）与非法字符。
+/// 允许的字符集与 npm 包名/常见 semver 范围一致（如 `pkg@^1.2.3`、`@scope/pkg@latest`）。
+pub fn validate_package_spec(spec: &str) -> Result<(), String> {
+    let s = spec.trim();
+    if s.is_empty() {
+        return Err("包名不能为空".into());
+    }
+    if s.len() > 214 {
+        return Err("包名过长（最多 214 字符）".into());
+    }
+    if s.starts_with('-') {
+        return Err("包名不能以 - 开头（禁止透传 pnpm 选项）".into());
+    }
+    if s.chars().any(|c| {
+        c.is_whitespace()
+            || c.is_control()
+            || matches!(c, ';' | '&' | '|' | '`' | '$' | '"' | '\'' | '\\')
+    }) {
+        return Err("包名不能包含空白、控制字符或 shell 特殊字符".into());
+    }
+
+    // 拆出可选的 @版本/标签：scope 包名以 @ 开头，故用 rfind 且要求位置 > 0。
+    let (body, version) = match s.rfind('@') {
+        Some(i) if i > 0 => (&s[..i], Some(&s[i + 1..])),
+        _ => (s, None),
+    };
+    if let Some(v) = version {
+        if v.is_empty() {
+            return Err("版本/标签不能为空（如 pkg@1.2.3）".into());
+        }
+        if !v.chars().all(|c| {
+            c.is_ascii_alphanumeric()
+                || matches!(c, '.' | '-' | '_' | '~' | '^' | '*' | '+' | '=' | '<' | '>')
+        }) {
+            return Err(format!("版本/标签含非法字符：{v}"));
+        }
+    }
+
+    let (scope, name) = if let Some(rest) = body.strip_prefix('@') {
+        match rest.split_once('/') {
+            Some((sc, nm)) => (Some(sc), nm),
+            None => return Err("scope 包名需形如 @scope/name".into()),
+        }
+    } else {
+        (None, body)
+    };
+    let valid_part = |x: &str| {
+        !x.is_empty()
+            && x.chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_'))
+    };
+    if let Some(sc) = scope {
+        if !valid_part(sc) {
+            return Err("scope 含非法字符".into());
+        }
+    }
+    if !valid_part(name) {
+        return Err("包名含非法字符".into());
+    }
+    Ok(())
 }
 
 /// dsh CLI 路径（`<版本目录>/node_modules/.bin/dsh[.cmd]`）。
@@ -254,8 +337,52 @@ mod tests {
             .expect("bundle 应被列出");
         assert!(a.is_bundle);
         assert_eq!(a.version, "1.2.3");
+        assert_eq!(a.source, "bundle");
+        assert_eq!(a.origin, "third_party");
         let _ = std::fs::remove_dir_all(&profdir);
         let _ = std::fs::remove_dir_all(&nm);
+    }
+
+    #[test]
+    fn plugin_origin_matches_scope() {
+        assert_eq!(plugin_origin("@deepseek-ai/dsh-base"), "official");
+        assert_eq!(plugin_origin("@scope/other"), "third_party");
+        assert_eq!(plugin_origin("my-plugin"), "third_party");
+    }
+
+    #[test]
+    fn validate_package_spec_accepts_common_forms() {
+        for ok in [
+            "lodash",
+            "@scope/pkg",
+            "@deepseek-ai/dsh-base",
+            "pkg@1.2.3",
+            "@scope/pkg@^1.0.0",
+            "@scope/pkg@latest",
+            "my-plugin@~2.1",
+        ] {
+            assert!(validate_package_spec(ok).is_ok(), "应接受：{ok}");
+        }
+    }
+
+    #[test]
+    fn validate_package_spec_rejects_bad_forms() {
+        for bad in [
+            "",
+            "   ",
+            "-D",
+            "--registry=http://evil.example",
+            "pkg; rm -rf /",
+            "pkg && calc",
+            "pkg|cat",
+            "a b",
+            "@scope",
+            "pkg@",
+            "pkg@1.2.3/x",
+            "@scope/pkg@1.2.3 beta",
+        ] {
+            assert!(validate_package_spec(bad).is_err(), "应拒绝：{bad}");
+        }
     }
 
     #[test]
