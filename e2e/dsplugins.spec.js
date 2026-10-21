@@ -12,7 +12,27 @@ const PROFILE = {
   ],
 };
 
-test("点「插件」→ 展开面板（列 profile 与插件 + 来源/归属标签）", async ({ page }) => {
+// 官方 CLI 失败诊断 → 面板补充本地化提示
+test("安装失败且带官方诊断 → 显示 allow-version 指引（对齐官方）", async ({ page }) => {
+  await mockTauri(page, {
+    installed: [makeVersion("0.2.0-rc.1", { isolated: true })],
+    extra: {
+      ds_list_plugins: { dsh_home: "D:/dsh", home_kind: "shared", profiles: [PROFILE] },
+      ds_plugin_action:
+        "(args) => Promise.reject('dsh: installation rejected: incompatible\\ndsh: to accept the risk, run: dsh plugin --profile web allow-version x@1.0.0 --dsh-version 0.2.1 --accept-risk\\ndsh: plugin command failed; diagnostics: D:/dsh/profiles/web/.plugin-manager/logs/op/pnpm.log')",
+    },
+  });
+  await page.goto("/");
+  await page.getByRole("button", { name: "插件", exact: true }).click();
+  await page.getByPlaceholder(/npm 包名/).fill("x");
+  await page.locator(".ds-plugin-panel").getByRole("button", { name: "安装", exact: true }).click();
+  await page.waitForTimeout(400);
+  await expect(page.locator(".toast")).toContainText("版本不兼容");
+  await expect(page.locator(".toast")).toContainText("诊断日志");
+});
+
+
+test("点「插件」→ 展开面板（列 profile 与插件 + 官方语义标签）", async ({ page }) => {
   await mockTauri(page, {
     installed: [makeVersion("0.2.0-rc.1", { isolated: true })],
     extra: {
@@ -24,11 +44,10 @@ test("点「插件」→ 展开面板（列 profile 与插件 + 来源/归属标
   await expect(page.locator(".ds-plugin-panel")).toBeVisible();
   await expect(page.getByText("@deepseek-ai/dsh-base")).toBeVisible();
   await expect(page.getByText("my-plugin")).toBeVisible();
-  // 双维度标签：官方/内置 + 第三方/用户安装
-  await expect(page.locator(".dp-badge-official")).toBeVisible();
-  await expect(page.locator(".dp-badge-bundle")).toBeVisible();
-  await expect(page.locator(".dp-badge-third")).toBeVisible();
-  await expect(page.locator(".dp-badge-user")).toBeVisible();
+  // 与官方语义对齐：只标「随 DSH 提供 / 已安装」，不再按 npm scope 猜官方/第三方
+  await expect(page.locator(".dp-badge-bundle")).toHaveText("随 DSH 提供");
+  await expect(page.locator(".dp-badge-user")).toHaveText("已安装");
+  await expect(page.locator(".dp-badge-official")).toHaveCount(0);
 });
 
 test("无 profile 时显示提示", async ({ page }) => {
