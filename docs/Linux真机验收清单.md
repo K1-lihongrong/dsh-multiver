@@ -25,6 +25,10 @@
 > ⚠️ **Node 版本**：dsh 需要 `^22.19.0` 或 `>=24`。Debian 13 仓库的 Node 是 20.x，**不满足**；
 > 请用 [NodeSource](https://github.com/nodesource/distributions) 或 nvm 安装 22.19+/24。
 > pnpm 需 **10+**（推荐 11+）。git 非致命，但安装 Git 来源插件时需要。
+>
+> 🔧 **从源码构建/复现还需系统依赖**（Debian/Ubuntu）：
+> `sudo apt install libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev libdbus-1-dev libxdo-dev libssl-dev build-essential pkg-config`
+> （2026-10-22 WSL 实测发现：缺 `libdbus-1-dev` 会导致首次 `cargo check` 失败。）
 
 ## 1. 产物与安装（P0）
 
@@ -64,7 +68,7 @@
 - [ ] **L-24 便携运行时门控**：`setup-runtime` 在 Linux 应明确报「仅支持 Windows」；GUI 不显示「自动准备运行时」按钮，改为提示用系统包管理器。
 - [ ] **L-25 git 缺失**：临时把 `git` 移出 PATH 跑 `env --json`，git 项应为**非致命失败**并给出引导；不阻塞 Node/pnpm。
 - [ ] **L-26 版本管理 CLI**：`list` / `install` / `uninstall` / `set-default` 正常，退出码符合预期。
-- [ ] **L-27 终端短命令**：`~/.local/bin/dsh` 生成；在新 shell（PATH 已含 `~/.local/bin`）敲 `dsh` 命中默认版本；PATH 未含时是否提示。
+- [ ] **L-27 终端短命令**：转发脚本生成在候选 bin 目录之一（`~/.local/bin`、`~/.local/share/pnpm`、`~/.npm-global/bin` 中第一个已存在的，属设计行为）；在新 shell（PATH 已含该目录）敲 `dsh` 命中默认版本；PATH 未含时是否提示。
 - [ ] **L-28 转发脚本清理**：切换/取消默认版本后，脚本内容/删除状态正确。
 
 ## 5. 网络与代理（P1）
@@ -133,9 +137,22 @@ WEBKIT_DISABLE_COMPOSITING_MODE=1 ./dsh-multiver_*.AppImage
 
 > 真机仍需重点验证：**内嵌窗口连接（L-16/L-17）**、AppImage FUSE、桌面集成、Wayland、字体/缩放、代理行为。
 
+## 附 D：WSL 实测结论（2026-10-22）
+
+完整记录见 [验收记录-WSL-2026-10-22](验收记录-WSL-2026-10-22.md)（WSL2 + WSLg，**非真机**，仅供预检参考）。
+
+- 12 项通过（L-01~L-05、L-07、L-15、L-23、L-25~L-28），GUI/桌面/代理项受 WSLg 限制未测。
+- 发现并已修复：
+  - **L-24**：CLI `setup-runtime` 在 Linux 未报错、错误被当成功（exit 0）→ 现已明确报「仅支持 Windows」并返回 **exit 1**（`--json` 返回 `supported:false`）。
+  - **3.1**：`--help` / `--version` 报「未知参数」且提示「用 --help 查看用法」自相矛盾 → 已补回 `--help/-h`、`--version/-V` 别名。
+  - **3.2**：源码构建缺 `libdbus-1-dev` → 已补入上文依赖清单。
+  - **3.3**：AppImage 只读挂载时「磁盘空间 0 MB」易误解 → 文案改为提示「只读挂载或磁盘已满；AppImage 请把数据根改到可写目录」。
+- 仍需真机：L-06、L-08~L-14、L-16~L-22、L-29~L-37。
+
 ## 相关文档
 
 - [征求协助](征求协助.md) —— 需要社区实测的事项
 - [开发缺口](开发缺口.md) —— 已知问题（GAP-008 等）
 - [使用手册 · Linux 支持](使用手册.md#十三linux-支持)
 - [问题日志查看指南](问题日志查看指南.md)
+- [验收记录-WSL-2026-10-22](验收记录-WSL-2026-10-22.md) —— 本次 WSL 实测原始记录

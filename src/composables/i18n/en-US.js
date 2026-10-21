@@ -45,6 +45,7 @@ export default {
 
     "env.writable.detail_fail": "Cannot write to {path}: {err}",
     "env.disk.detail_ok": "{size} free",
+    "env.disk.detail_zero": "0 MB (read-only mount or disk full; for AppImage, set the data root to a writable directory)",
     "env.disk.detail_unknown": "unavailable (target {path})",
     "env.registry.detail_ok": "reachable",
     "env.registry.detail_latest": "reachable (latest {v})",

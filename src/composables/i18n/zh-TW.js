@@ -45,6 +45,7 @@ export default {
 
     "env.writable.detail_fail": "無法寫入 {path}: {err}",
     "env.disk.detail_ok": "可用 {size}",
+    "env.disk.detail_zero": "0 MB（唯讀掛載或磁碟已滿；AppImage 請把資料根改到可寫目錄）",
     "env.disk.detail_unknown": "無法取得（目標 {path}）",
     "env.registry.detail_ok": "可達",
     "env.registry.detail_latest": "可達（最新 {v}）",

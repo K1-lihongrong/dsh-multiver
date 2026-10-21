@@ -19,6 +19,15 @@ pub fn parse(args: &[String]) -> Result<Option<CliCommand>, String> {
         }
     }
 
+    // 兼容传统用法：--help/-h、--version/-V（v0.3.0 子命令重构后补回，避免报错提示自相矛盾）
+    if let Some(first) = args.first() {
+        match first.as_str() {
+            "--help" | "-h" => return Ok(Some(CliCommand::Help)),
+            "--version" | "-V" => return Ok(Some(CliCommand::Version)),
+            _ => {}
+        }
+    }
+
     // 找第一个非修饰符（子命令）。
     // 修饰符：--json / --dry-run / --force（布尔）；--registry / --off（--off 是布尔）
     let mut cmd_index: Option<usize> = None;
@@ -379,6 +388,18 @@ mod tests {
         }
     }
 
+    #[test]
+    fn legacy_help_version_flags() {
+        for flag in ["--help", "-h"] {
+            assert!(matches!(parse(&args(&[flag])), Ok(Some(CliCommand::Help))));
+        }
+        for flag in ["--version", "-V"] {
+            assert!(matches!(
+                parse(&args(&[flag])),
+                Ok(Some(CliCommand::Version))
+            ));
+        }
+    }
     #[test]
     fn modifiers_parse_as_flags() {
         assert!(has_json(&args(&["list", "--json"])));

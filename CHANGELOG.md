@@ -67,6 +67,7 @@
   - 便携运行时下载改为 **Windows-only**（Linux 不再误下载 win-x64 二进制；非 Windows 隐藏按钮并提示用系统包管理器）。
   - 环境检查新增 **git**（非致命，Git 来源插件需要）；pnpm 增加 **10+ 版本校验**（`allowBuilds` 依赖）。
   - HTTP 下载/更新/安装源探测统一客户端：未设置代理环境变量时**读取 Windows 系统代理**（注册表 Internet Settings）。
+  - 2026-10-22 WSL 实测补漏：CLI `setup-runtime` 在非 Windows 明确报错并 **exit 1**（`--json` 返回 `supported:false`）；补回 `--help/-h`、`--version/-V` 别名；只读挂载 0 MB 文案澄清；Linux 源码构建依赖补 `libdbus-1-dev`（文档）。
 
 ### 文档
 - 新增 [CLI 迁移指南](docs/CLI迁移指南-v0.3.0.md)（旧→新对照 + 脚本迁移示例）。
