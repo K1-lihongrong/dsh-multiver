@@ -237,7 +237,7 @@ node gen-icons.mjs
 
 ## 已知限制
 
-- 便携版单 exe 不含 WebView2 与 VC++ 运行时，极老或纯净版 Win10 可能需手动安装 WebView2
+- 便携版单 exe 不含 WebView2；Win11 / Win10 1803+ 自带 UCRT。当前构建**不依赖 VC++ Redistributable**（已用导入表验证，仅依赖系统 UCRT）；极老系统仍可能需要手动安装 WebView2
 - 终端 `dsh` 转发脚本写入 `%APPDATA%\npm\`，该目录需在 PATH 中
 - 便携运行时（Node/pnpm）自动下载**仅 Windows**；Linux 请用系统包管理器安装 Node.js 与 pnpm
 - pnpm 需 **10+**：llowBuilds 构建脚本审批依赖其语法；低于 10 环境检查会提示升级

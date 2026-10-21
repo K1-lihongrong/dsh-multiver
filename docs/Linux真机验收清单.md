@@ -1,0 +1,141 @@
+# Linux 真机验收清单（v0.3.0）
+
+> 目的：在**真实 Linux 桌面**验证 WSL 无法覆盖的项（窗口系统、桌面环境、打包、代理、进程清理）。
+> **WSL 结果不能替代真机验收**；WSL 仅用于编译/单测/CLI 预检（见文末附录 C）。
+> 适用产物：v0.3.0 的 **AppImage** / **deb**（或本地 `pnpm tauri build --bundles appimage,deb` 的产物）。
+> 反馈：按 [附 B](#附-b问题上报模板) 提 Issue，注明环境矩阵 + 用例编号 + 实际结果 + 日志。
+
+## 0. 环境记录（每台机器填一次）
+
+| 项 | 值（示例） | 你的值 |
+| :--- | :--- | :--- |
+| 发行版 / 版本 | Debian 13 / Ubuntu 24.04 / Fedora 41 | |
+| 内核 / 架构 | `uname -r` / `x86_64` | |
+| 桌面环境 | GNOME 46 / KDE Plasma 6 / XFCE 4.18 | |
+| 会话 | Wayland 或 X11（`echo $XDG_SESSION_TYPE`） | |
+| 显示缩放 | 100% / 125% / 150% / 200% | |
+| 显卡 / 驱动 | 核显 / NVIDIA 专有 / AMD | |
+| WebKitGTK | `pkg-config --modversion webkit2gtk-4.1` | |
+| glibc | `ldd --version \| head -1` | |
+| 语言 / 字体 | `locale`，是否装中文字体（`fc-list :lang=zh`） | |
+| Node / pnpm / git | `node -v && pnpm -v && git --version` | |
+| 代理 | 无 / 环境变量 / GNOME 系统代理 / 其他 | |
+| FUSE | `ldconfig -p \| grep libfuse` | |
+
+> ⚠️ **Node 版本**：dsh 需要 `^22.19.0` 或 `>=24`。Debian 13 仓库的 Node 是 20.x，**不满足**；
+> 请用 [NodeSource](https://github.com/nodesource/distributions) 或 nvm 安装 22.19+/24。
+> pnpm 需 **10+**（推荐 11+）。git 非致命，但安装 Git 来源插件时需要。
+
+## 1. 产物与安装（P0）
+
+- [ ] **L-01 产物品鉴**：记录文件名、sha256（`sha256sum`）、文件大小；AppImage 已 `chmod +x`。
+- [ ] **L-02 AppImage + FUSE**：有 `libfuse2` 时可直接运行，窗口正常出现。
+- [ ] **L-03 无 libfuse2**：卸载/移走 libfuse2（或容器内）后直接运行，应给出失败提示；`--appimage-extract` 解包后 `squashfs-root/AppRun` 能启动（记录提示文案）。
+- [ ] **L-04 deb 安装**：`sudo apt install ./dsh-multiver_*.deb`（让 apt 自动补依赖）；桌面菜单项存在。
+- [ ] **L-05 deb 卸载**：`sudo apt remove dsh-multiver`；确认可执行/菜单项移除；用户数据是否保留符合预期。
+- [ ] **L-06 WebKitGTK 缺失/过低**（容器或可回滚环境）：启动应有可理解的错误（不能只白屏/闪退）；记录报错。
+- [ ] **L-07 数据根可写**：AppImage 挂在只读 squashfs 时，确认界面能识别「根目录不可写」并允许改到 `~/.local/share` 等可写目录。
+
+## 2. 启动与桌面集成（P0）
+
+- [ ] **L-08 冷启动**：双击/命令启动，窗口正常显示，无「重新连接中」。
+- [ ] **L-09 中文渲染**：界面中文无方块/乱码；系统无中文字体时记录表现（预期可读或提示装字体）。
+- [ ] **L-10 HiDPI**：125%/150%/200% 下文字与按钮不重叠、不截断。
+- [ ] **L-11 单实例/重复启动**：连续启动两次，记录行为（是否两个进程/两个窗口），是否符合预期。
+- [ ] **L-12 关闭退出**：关闭主窗口后 `pgrep -af dsh-multiver` 无残留（除预期后台进程）。
+- [ ] **L-13 桌面快捷方式**：对某版本点「创建桌面快捷方式」，检查 `~/Desktop`（或本地化桌面目录）下 `.desktop` 生成、可执行、双击能启动对应 dsh 版本。
+- [ ] **L-14 无桌面环境**（SSH/headless）：创建快捷方式应给出可理解提示，不应崩溃。
+
+## 3. 内嵌窗口与运行（P0，重点）
+
+- [ ] **L-15 安装版本**：装一个 dsh 版本（Node/pnpm 满足后），进度、完成状态正常。
+- [ ] **L-16 内嵌窗口（X11）**：点「运行」→ 内嵌窗口能连上 dsh Web UI，可交互；**重点回归 GAP-008**（不再显示「重新连接中」）。
+- [ ] **L-17 内嵌窗口（Wayland）**：切到 Wayland 会话重复 L-16；记录是否有缩放/输入法/剪贴板异常。
+- [ ] **L-18 浏览器打开**：点「浏览器打开」能在系统默认浏览器打开对应版本。
+- [ ] **L-19 WebView 缓存隔离**：两个版本各跑一次，确认 `<数据根>/webview/<版本>` 目录独立、cookie 不串。
+- [ ] **L-20 关窗清理进程树**：运行 dsh 后关闭内嵌窗口，`pgrep -af dsh` 无该版本残留。
+- [ ] **L-21 强杀恢复**：`kill -9` 管理器后重启，确认上次残留的 dsh 进程被清理（进程组逻辑）。
+- [ ] **L-22 多版本并存**：两个版本交替运行/关闭，互不影响；默认版本切换生效。
+
+## 4. CLI 与终端集成（P1）
+
+- [ ] **L-23 `env --json`**：返回 6 项（Node/pnpm/git/根目录/磁盘/源），字段 `name_key`/`hint_key` 正常；
+      Node 不满足时提示 `apt` 类系统安装（**不应提示 setup-runtime**）。
+- [ ] **L-24 便携运行时门控**：`setup-runtime` 在 Linux 应明确报「仅支持 Windows」；GUI 不显示「自动准备运行时」按钮，改为提示用系统包管理器。
+- [ ] **L-25 git 缺失**：临时把 `git` 移出 PATH 跑 `env --json`，git 项应为**非致命失败**并给出引导；不阻塞 Node/pnpm。
+- [ ] **L-26 版本管理 CLI**：`list` / `install` / `uninstall` / `set-default` 正常，退出码符合预期。
+- [ ] **L-27 终端短命令**：`~/.local/bin/dsh` 生成；在新 shell（PATH 已含 `~/.local/bin`）敲 `dsh` 命中默认版本；PATH 未含时是否提示。
+- [ ] **L-28 转发脚本清理**：切换/取消默认版本后，脚本内容/删除状态正确。
+
+## 5. 网络与代理（P1）
+
+- [ ] **L-29 环境变量代理**：`HTTPS_PROXY=http://127.0.0.1:7890 ./dsh-multiver...` 下：npm 源检查、版本安装、更新检查均可用。
+- [ ] **L-30 仅 GNOME 系统代理（无环境变量）**：记录行为。**当前已知限制**：Linux 只读代理环境变量，不读 GNOME 系统代理 → 预期失败，需用户显式设 `HTTPS_PROXY`（把实际表现补进 Issue）。
+- [ ] **L-31 镜像源安装**：安装对话框选 npmmirror 能成功；官方源失败时切换镜像有效。
+- [ ] **L-32 离线/断网**：断网启动 → 环境检查/安装失败信息可理解，不崩溃、不长时间卡死。
+
+## 6. 桌面环境矩阵（P1，按条件逐项）
+
+- [ ] **L-33 GNOME**：窗口、字体、缩放、快捷方式。
+- [ ] **L-34 KDE Plasma**：同上。
+- [ ] **L-35 XFCE**：同上。
+- [ ] **L-36 缩放矩阵**：100/125/150/200%（至少一个 DE）。
+- [ ] **L-37 X11 vs Wayland**：同一 DE 两种会话对比（L-16/L-17）。
+
+## 7. 通过标准
+
+- **P0 全部通过**（L-01..L-22 中 P0 项；若某项因环境不具备无法测，用 N/A + 原因）。
+- **P1 记录实际结果**，允许存在已知限制（如 L-30），但必须可解释、有文档。
+- 任何 **崩溃、白屏、数据损坏、进程残留** 视为阻塞发布。
+
+## 附 A：日志与诊断命令
+
+```bash
+# 数据根：默认在可执行文件同目录；AppImage 只读挂载时请在界面改成可写目录
+# 日志（相对数据根）：
+ls -la "<数据根>/logs/"
+tail -n 200 "<数据根>/logs/app.log" 2>/dev/null
+tail -n 200 "<数据根>/logs/frontend.log" 2>/dev/null
+
+# 进程
+pgrep -af 'dsh-multiver|dsh'
+
+# AppImage 依赖
+ldd squashfs-root/usr/bin/dsh-multiver | grep 'not found'
+
+# WebKit/显示相关环境信息
+echo "$XDG_SESSION_TYPE $XDG_CURRENT_DESKTOP"
+glxinfo -B 2>/dev/null | head -20
+
+# 可选：WebKit 合成问题规避（仅诊断用）
+WEBKIT_DISABLE_COMPOSITING_MODE=1 ./dsh-multiver_*.AppImage
+```
+
+## 附 B：问题上报模板
+
+```
+环境：发行版+版本 / 内核 / DE+版本 / X11或Wayland / 缩放 / 显卡驱动
+产物：AppImage 或 deb + sha256 + 版本号
+用例：L-XX
+预期：
+实际：
+复现步骤：
+日志/截图：<附 app.log / frontend.log / 终端输出>
+```
+
+## 附 C：WSL 已覆盖、无需真机重复
+
+- `cargo check` 零警告、`cargo test --lib`（Linux）、`cargo clippy -D warnings`
+- CLI：`env --json`、`--help`、`list`/`set-default`/`uninstall`
+- 转发脚本生成/删除
+- 进程组清理逻辑（WSL 内）
+- AppImage/deb **可构建**（CI Ubuntu 22.04）
+
+> 真机仍需重点验证：**内嵌窗口连接（L-16/L-17）**、AppImage FUSE、桌面集成、Wayland、字体/缩放、代理行为。
+
+## 相关文档
+
+- [征求协助](征求协助.md) —— 需要社区实测的事项
+- [开发缺口](开发缺口.md) —— 已知问题（GAP-008 等）
+- [使用手册 · Linux 支持](使用手册.md#十三linux-支持)
+- [问题日志查看指南](问题日志查看指南.md)
