@@ -163,7 +163,13 @@ async function doAction(action, pkg, bundle) {
   }
 }
 
-// ── 官方安装对话框（对齐 dsh 插件页：spec 输入 / 安装源 / 信任提示）──
+// ── 官方安装对话框（对齐 dsh 插件页：form → confirm → installing → done/failed）──
+const installPhase = ref("form");
+const installResult = ref(null);
+const installError = ref("");
+const REG_KEY = "dsh-multiver.installRegistry";
+const REG_CUSTOM_KEY = "dsh-multiver.installRegistryCustom";
+
 const registryValue = computed(() => {
   if (installRegistry.value === "official") return "https://registry.npmjs.org";
   if (installRegistry.value === "mirror") return "https://registry.npmmirror.com";
@@ -171,43 +177,90 @@ const registryValue = computed(() => {
   return null;
 });
 
+const registryLabelText = computed(() => {
+  if (installRegistry.value === "official") return t("dsplugins.registryOfficial");
+  if (installRegistry.value === "mirror") return t("dsplugins.registryMirror");
+  if (installRegistry.value === "custom") return customRegistry.value.trim() || t("dsplugins.registryCustom");
+  return t("dsplugins.registryDefault");
+});
+
+const completedPlugin = computed(() => {
+  const name = installResult.value?.name;
+  if (!name) return null;
+  return currentProfile()?.plugins?.find((p) => p.name === name) || null;
+});
+
 function openInstall() {
   showInstall.value = true;
   installSpec.value = "";
-  installRegistry.value = "";
-  customRegistry.value = "";
+  installPhase.value = "form";
+  installResult.value = null;
+  installError.value = "";
   logLines.value = [];
+  try {
+    installRegistry.value = localStorage.getItem(REG_KEY) || "";
+    customRegistry.value = localStorage.getItem(REG_CUSTOM_KEY) || "";
+  } catch (_) {
+    installRegistry.value = "";
+    customRegistry.value = "";
+  }
 }
 
-async function doInstall() {
+function requestInstall() {
   const spec = installSpec.value.trim();
-  if (!spec || installing.value) return;
-  const registry = registryValue.value;
-  if (installRegistry.value === "custom" && !registry) {
+  if (!spec) return;
+  if (installRegistry.value === "custom" && !customRegistry.value.trim()) {
     notify(t("dsplugins.customRegistryRequired"));
     return;
   }
+  installPhase.value = "confirm";
+}
+
+async function confirmInstall() {
+  const spec = installSpec.value.trim();
+  if (!spec || installing.value) return;
+  try {
+    localStorage.setItem(REG_KEY, installRegistry.value);
+    localStorage.setItem(REG_CUSTOM_KEY, customRegistry.value);
+  } catch (_) {
+    // localStorage 不可用时忽略
+  }
+  installPhase.value = "installing";
+  installError.value = "";
+  installResult.value = null;
   installing.value = true;
   logLines.value = [];
   try {
-    await invoke("ds_plugin_action", {
+    const res = await invoke("ds_plugin_action", {
       version: props.version,
       profile: activeProfile.value,
       action: "add",
       package: spec,
-      registry,
+      registry: registryValue.value,
     });
-    notify(t("dsplugins.installed", { p: spec }));
-    showInstall.value = false;
-    if (logLines.value.length) showLog.value = true;
+    installResult.value = { name: res?.name || null, spec, registry: registryValue.value };
+    installPhase.value = "done";
     await load();
+    await refreshInfo();
   } catch (e) {
-    notify(actionErrorText(e));
-    showLog.value = true;
+    installError.value = actionErrorText(e);
+    installPhase.value = "failed";
     await refreshInfo();
   } finally {
     installing.value = false;
   }
+}
+
+function backToForm() {
+  installPhase.value = "form";
+}
+
+function closeInstall() {
+  showInstall.value = false;
+}
+
+function useExample() {
+  installSpec.value = t("dsplugins.exampleSpec");
 }
 
 // B1-13：检查可更新插件（dsh CLI `outdated --json`）
@@ -547,49 +600,105 @@ onUnmounted(() => {
       </div>
     </template>
 
-    <!-- 官方风格安装对话框：spec / 安装源 / 信任提示 -->
-    <div class="dp-modal-mask" v-if="showInstall" @click.self="showInstall = false">
+    <!-- 官方风格安装对话框：form → confirm → installing → done/failed -->
+    <div class="dp-modal-mask" v-if="showInstall" @click.self="closeInstall">
       <div class="dp-modal">
         <div class="dp-modal-head">
           <span class="dp-modal-title">{{ t("dsplugins.addPlugin") }}</span>
-          <button class="dp-icon-btn" @click="showInstall = false">✕</button>
+          <button class="dp-icon-btn" @click="closeInstall">✕</button>
         </div>
-        <div class="dp-modal-desc">{{ t("dsplugins.installDesc") }}</div>
-        <input
-          class="dp-input dp-modal-input"
-          v-model="installSpec"
-          :placeholder="t('dsplugins.specPlaceholder')"
-          :disabled="installing"
-          @keyup.enter="doInstall"
-        />
-        <details class="dp-guide">
-          <summary>{{ t("dsplugins.guideTitle") }}</summary>
-          <div class="dp-guide-body">{{ t("dsplugins.guideText") }}</div>
-        </details>
-        <div class="dp-field">
-          <label>{{ t("dsplugins.registryLabel") }}</label>
-          <select class="dp-select" v-model="installRegistry" :disabled="installing">
-            <option value="">{{ t("dsplugins.registryDefault") }}</option>
-            <option value="official">{{ t("dsplugins.registryOfficial") }}</option>
-            <option value="mirror">{{ t("dsplugins.registryMirror") }}</option>
-            <option value="custom">{{ t("dsplugins.registryCustom") }}</option>
-          </select>
-        </div>
-        <input
-          v-if="installRegistry === 'custom'"
-          class="dp-input dp-modal-input"
-          v-model="customRegistry"
-          :placeholder="t('dsplugins.customRegistryPlaceholder')"
-          :disabled="installing"
-        />
-        <div class="dp-warn">{{ t("dsplugins.trustWarning") }}</div>
-        <button
-          class="dp-btn dp-btn-primary dp-modal-install"
-          @click="doInstall"
-          :disabled="installing || !installSpec.trim()"
-        >
-          {{ installing ? t("dsplugins.installing") : t("dsplugins.install") }}
-        </button>
+
+        <template v-if="installPhase === 'form'">
+          <div class="dp-modal-desc">{{ t("dsplugins.installDesc") }}</div>
+          <input
+            class="dp-input dp-modal-input"
+            v-model="installSpec"
+            :placeholder="t('dsplugins.specPlaceholder')"
+            :disabled="installing"
+            @keyup.enter="requestInstall"
+          />
+          <details class="dp-guide">
+            <summary>{{ t("dsplugins.guideTitle") }}</summary>
+            <div class="dp-guide-body">
+              {{ t("dsplugins.guideText") }}
+              <button class="dp-link-btn" @click="useExample">{{ t("dsplugins.fillExample") }}</button>
+            </div>
+          </details>
+          <div class="dp-field">
+            <label>{{ t("dsplugins.registryLabel") }}</label>
+            <select class="dp-select" v-model="installRegistry" :disabled="installing">
+              <option value="">{{ t("dsplugins.registryDefault") }}</option>
+              <option value="official">{{ t("dsplugins.registryOfficial") }}</option>
+              <option value="mirror">{{ t("dsplugins.registryMirror") }}</option>
+              <option value="custom">{{ t("dsplugins.registryCustom") }}</option>
+            </select>
+          </div>
+          <input
+            v-if="installRegistry === 'custom'"
+            class="dp-input dp-modal-input"
+            v-model="customRegistry"
+            :placeholder="t('dsplugins.customRegistryPlaceholder')"
+            :disabled="installing"
+          />
+          <div class="dp-warn">{{ t("dsplugins.trustWarning") }}</div>
+          <button
+            class="dp-btn dp-btn-primary dp-modal-install"
+            @click="requestInstall"
+            :disabled="!installSpec.trim()"
+          >
+            {{ t("dsplugins.install") }}
+          </button>
+        </template>
+
+        <template v-else-if="installPhase === 'confirm'">
+          <div class="dp-modal-desc">{{ t("dsplugins.confirmHint") }}</div>
+          <div class="dp-confirm-row">
+            <span class="dp-confirm-label">{{ t("dsplugins.specLabel") }}</span>
+            <code>{{ installSpec.trim() }}</code>
+          </div>
+          <div class="dp-confirm-row">
+            <span class="dp-confirm-label">{{ t("dsplugins.registryLabel") }}</span>
+            <span>{{ registryLabelText }}</span>
+          </div>
+          <div class="dp-warn">{{ t("dsplugins.trustWarning") }}</div>
+          <div class="dp-modal-actions">
+            <button class="dp-btn" @click="backToForm">{{ t("dsplugins.back") }}</button>
+            <button class="dp-btn dp-btn-primary" @click="confirmInstall">
+              {{ t("dsplugins.confirmInstall") }}
+            </button>
+          </div>
+        </template>
+
+        <template v-else-if="installPhase === 'installing'">
+          <div class="dp-modal-desc">
+            <span class="dp-spinner"></span>
+            <span style="margin-left: 6px">{{ t("dsplugins.installing") }}</span>
+          </div>
+          <pre class="dp-log-body dp-modal-log">{{ logLines.slice(-12).join("\n") }}</pre>
+          <div class="dp-modal-hint">{{ t("dsplugins.installNoCancelHint") }}</div>
+        </template>
+
+        <template v-else-if="installPhase === 'done'">
+          <div class="dp-done-title">✓ {{ t("dsplugins.installDoneTitle") }}</div>
+          <div class="dp-modal-desc">
+            {{ t("dsplugins.installed", { p: completedPlugin?.name || installSpec.trim() }) }}
+            <span v-if="completedPlugin"> · v{{ completedPlugin.version }}</span>
+          </div>
+          <div class="dp-modal-hint">{{ t("dsplugins.installDoneHint") }}</div>
+          <div class="dp-modal-actions">
+            <button class="dp-btn dp-btn-primary" @click="closeInstall">{{ t("dsplugins.done") }}</button>
+          </div>
+        </template>
+
+        <template v-else>
+          <div class="dp-done-title dp-fail-title">✕ {{ t("dsplugins.installFailedTitle") }}</div>
+          <pre class="dp-log-body dp-modal-log">{{ installError }}</pre>
+          <div class="dp-modal-actions">
+            <button class="dp-btn" @click="backToForm">{{ t("dsplugins.changeSource") }}</button>
+            <button class="dp-btn dp-btn-primary" @click="confirmInstall">{{ t("dsplugins.retry") }}</button>
+            <button class="dp-btn" @click="closeInstall">{{ t("dsplugins.close") }}</button>
+          </div>
+        </template>
       </div>
     </div>
   </div>
@@ -806,4 +915,18 @@ onUnmounted(() => {
 .dp-allow-spec { width: 180px; }
 .dp-allow-rt { width: 130px; }
 .dp-allow-risk { font-size: 11px; color: var(--text-muted); display: inline-flex; align-items: center; gap: 4px; }
+
+/* 安装对话框阶段 */
+.dp-confirm-row { display: flex; align-items: baseline; gap: 8px; font-size: 12px; word-break: break-all; }
+.dp-confirm-label { color: var(--text-muted); flex: none; }
+.dp-confirm-row code { font-family: ui-monospace, Consolas, monospace; color: var(--text); }
+.dp-modal-actions { display: flex; justify-content: flex-end; gap: 8px; }
+.dp-done-title { font-size: 14px; font-weight: 600; color: #2f9e63; }
+.dp-fail-title { color: var(--danger, #e5484d); }
+.dp-modal-log { max-height: 160px; margin: 0; }
+.dp-modal-hint { font-size: 11.5px; color: var(--text-muted); line-height: 1.6; }
+.dp-link-btn {
+  display: inline-block; margin-left: 6px; padding: 0; border: none; background: none;
+  color: var(--accent); font-size: 11.5px; cursor: pointer; text-decoration: underline;
+}
 </style>

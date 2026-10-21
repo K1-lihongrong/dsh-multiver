@@ -53,7 +53,8 @@
   - 打开 `.plugin-manager/logs` 诊断日志目录。
   - 新增命令 `ds_profile_info` / `ds_exemption_action` / `ds_approve_builds` / `ds_open_plugin_logs`。
 - **安装交互对齐官方（B1-15）**：
-  - 「添加插件」弹窗：包名 / GitHub 地址 / 本地目录三类 spec、可折叠安装引导、安装源选择（默认 pnpm / npm 官方 / 中国大陆镜像 / 自定义 URL）、信任提示。
+  - 「添加插件」弹窗：包名 / GitHub 地址 / 本地目录三类 spec、可折叠安装引导（含「填入示例」）、安装源选择（默认 pnpm / npm 官方 / 中国大陆镜像 / 自定义 URL）、信任提示。
+  - 多阶段状态：表单 → 确认安装（显示 spec 与来源）→ 安装中（实时输出）→ 完成（显示已装版本 + 「安装成功不保证激活」提示）/ 失败（重试 / 更换安装源）；记住上次安装源（localStorage）。
   - 后端改为 `node bin.js` 直接执行 dsh CLI（避免 `cmd /C` 二次转义，安全支持 URL/路径 spec）；安装源 URL 校验对齐官方（http(s)、无 userinfo、无 `#`）。
 - **更新检测与豁免允许（B1-13/B1-14）**：
   - 「检查更新」：`dsh plugin --profile <p> outdated --json`，显示「有新版本」，更新按官方语义先卸载再安装。
