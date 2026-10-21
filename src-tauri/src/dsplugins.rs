@@ -29,6 +29,12 @@ pub struct DsPlugin {
     pub origin: String,
     /// `package.json` 里声明的版本范围（与 `version` 不同时给出，供 UI 提示）。
     pub spec: Option<String>,
+    /// 包自带描述（`package.json` 的 description，供 UI tooltip）。
+    pub description: Option<String>,
+    /// 是否声明了 `dsh.bundle`（官方把「组合包」定义为声明该字段的包；普通依赖不是插件）。
+    pub declares_bundle: bool,
+    /// 是否属于 DSH 安装随附的官方组合包（`OPTIONAL_BUNDLES` / `DEFAULT_PROFILE_BUNDLES` / `ON_DEMAND_BUNDLES`）。
+    pub official: bool,
 }
 
 /// 一个 profile（dsh 的插件集合）。
@@ -55,7 +61,9 @@ pub fn profiles_dir(dsh_home: &Path) -> PathBuf {
 }
 
 /// 列所有 profile（`profiles/` 下的子目录，排除 node_modules）。
-pub fn list_profiles(dsh_home: &Path) -> Vec<DsProfile> {
+///
+/// `official` 为 DSH 安装随附的官方组合包名（用于与官方插件页语义对齐）。
+pub fn list_profiles(dsh_home: &Path, official: &[String]) -> Vec<DsProfile> {
     let dir = profiles_dir(dsh_home);
     let Ok(rd) = std::fs::read_dir(&dir) else {
         return Vec::new();
@@ -70,7 +78,7 @@ pub fn list_profiles(dsh_home: &Path) -> Vec<DsProfile> {
         if name == "node_modules" {
             continue;
         }
-        out.push(read_profile(&name, &p));
+        out.push(read_profile(&name, &p, official));
     }
     out.sort_by(|a, b| a.name.cmp(&b.name));
     out
@@ -80,7 +88,7 @@ pub fn list_profiles(dsh_home: &Path) -> Vec<DsProfile> {
 ///
 /// 版本优先取**实际安装版本**（`node_modules/<pkg>/package.json`），
 /// 取不到时退回 `package.json` 里声明的 semver 范围（此时 `spec` 记录原范围）。
-fn read_profile(name: &str, path: &Path) -> DsProfile {
+fn read_profile(name: &str, path: &Path, official: &[String]) -> DsProfile {
     let mut plugins: Vec<DsPlugin> = Vec::new();
     let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
     let pkg_path = path.join("package.json");
@@ -88,6 +96,8 @@ fn read_profile(name: &str, path: &Path) -> DsProfile {
         .parent()
         .map(|p| p.join("node_modules"))
         .unwrap_or_default();
+    let profile_nm = path.join("node_modules");
+    let is_official = |pkg: &str| official.iter().any(|o| o == pkg);
     if let Ok(text) = std::fs::read_to_string(&pkg_path) {
         if let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) {
             // 1) dsh.profile.bundles：profile 内置的 bundle 层
@@ -108,7 +118,8 @@ fn read_profile(name: &str, path: &Path) -> DsProfile {
                 for (k, ver) in deps {
                     let declared = ver.as_str().map(|s| s.to_string());
                     let is_bundle = bundles.iter().any(|b| b == k);
-                    let installed = installed_version(&path.join("node_modules"), &parent_nm, k);
+                    let meta = pkg_meta(&profile_nm, &parent_nm, k);
+                    let installed = meta.as_ref().map(|m| m.version.clone());
                     let (version, spec) = match (&installed, &declared) {
                         (Some(actual), Some(d)) if actual != d => (actual.clone(), Some(d.clone())),
                         (Some(actual), _) => (actual.clone(), None),
@@ -123,6 +134,9 @@ fn read_profile(name: &str, path: &Path) -> DsProfile {
                         source: if is_bundle { "bundle" } else { "user" }.to_string(),
                         origin: plugin_origin(k).to_string(),
                         spec,
+                        description: meta.as_ref().and_then(|m| m.description.clone()),
+                        declares_bundle: meta.as_ref().map(|m| m.declares_bundle).unwrap_or(false),
+                        official: is_official(k),
                     });
                 }
             }
@@ -133,16 +147,18 @@ fn read_profile(name: &str, path: &Path) -> DsProfile {
                 if seen.contains(b) {
                     continue;
                 }
-                let ver = installed_version(&path.join("node_modules"), &parent_nm, b)
-                    .unwrap_or_default();
+                let meta = pkg_meta(&profile_nm, &parent_nm, b);
                 seen.insert(b.clone());
                 plugins.push(DsPlugin {
                     name: b.clone(),
-                    version: ver,
+                    version: meta.as_ref().map(|m| m.version.clone()).unwrap_or_default(),
                     is_bundle: true,
                     source: "bundle".to_string(),
                     origin: plugin_origin(b).to_string(),
                     spec: None,
+                    description: meta.as_ref().and_then(|m| m.description.clone()),
+                    declares_bundle: meta.as_ref().map(|m| m.declares_bundle).unwrap_or(false),
+                    official: is_official(b),
                 });
             }
         }
@@ -155,18 +171,240 @@ fn read_profile(name: &str, path: &Path) -> DsProfile {
     }
 }
 
-/// 取实际安装版本：先看 profile 自己的 `node_modules`，再看 `profiles/node_modules`（hoisted）。
-fn installed_version(profile_nm: &Path, parent_nm: &Path, pkg: &str) -> Option<String> {
-    read_pkg_version(&profile_nm.join(pkg)).or_else(|| read_pkg_version(&parent_nm.join(pkg)))
+/// 已安装包的元信息（版本 / 描述 / 是否声明 `dsh.bundle`）。
+struct PkgMeta {
+    version: String,
+    description: Option<String>,
+    declares_bundle: bool,
 }
 
-/// 读 <pkg>/package.json 的 version 字段。
-fn read_pkg_version(pkg_dir: &Path) -> Option<String> {
+fn pkg_meta(profile_nm: &Path, parent_nm: &Path, pkg: &str) -> Option<PkgMeta> {
+    read_pkg_meta(&profile_nm.join(pkg)).or_else(|| read_pkg_meta(&parent_nm.join(pkg)))
+}
+
+fn read_pkg_meta(pkg_dir: &Path) -> Option<PkgMeta> {
     let text = std::fs::read_to_string(pkg_dir.join("package.json")).ok()?;
     let v: serde_json::Value = serde_json::from_str(&text).ok()?;
-    v.get("version")
-        .and_then(|x| x.as_str())
-        .map(|s| s.to_string())
+    Some(PkgMeta {
+        version: v
+            .get("version")
+            .and_then(|x| x.as_str())
+            .unwrap_or_default()
+            .to_string(),
+        description: v
+            .get("description")
+            .and_then(|x| x.as_str())
+            .filter(|s| !s.is_empty())
+            .map(|s| s.to_string()),
+        declares_bundle: v.get("dsh").and_then(|d| d.get("bundle")).is_some(),
+    })
+}
+
+/// DSH 安装随附的官方组合包名（OPTIONAL + DEFAULT + ON_DEMAND），用于对齐官方「随 DSH 提供」语义。
+///
+/// 实现：在版本目录里定位 `@deepseek-ai/dsh-app-boot`，用 node 读取其导出的三个数组；
+/// 结果按版本目录缓存（一次进程生命周期）。node 不可用/读取失败时返回空（退化为只按 profile bundles 判断）。
+pub fn official_bundles(version_dir: &Path) -> Vec<String> {
+    use std::collections::HashMap;
+    use std::sync::{Mutex, OnceLock};
+    static CACHE: OnceLock<Mutex<HashMap<String, Vec<String>>>> = OnceLock::new();
+    let key = version_dir.to_string_lossy().to_string();
+    let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    if let Ok(map) = cache.lock() {
+        if let Some(v) = map.get(&key) {
+            return v.clone();
+        }
+    }
+    let out = query_official_bundles(version_dir).unwrap_or_default();
+    if let Ok(mut map) = cache.lock() {
+        map.insert(key, out.clone());
+    }
+    out
+}
+
+fn official_bundle_lib(version_dir: &Path) -> Option<PathBuf> {
+    let nm = version_dir.join("node_modules");
+    let direct = nm
+        .join("@deepseek-ai")
+        .join("dsh-app-boot")
+        .join("lib")
+        .join("index.js");
+    if direct.exists() {
+        return Some(direct);
+    }
+    let pnpm = nm.join(".pnpm");
+    for e in std::fs::read_dir(pnpm).ok()?.flatten() {
+        let n = e.file_name().to_string_lossy().to_string();
+        if n.starts_with("@deepseek-ai+dsh-app-boot@") {
+            let p = e
+                .path()
+                .join("node_modules")
+                .join("@deepseek-ai")
+                .join("dsh-app-boot")
+                .join("lib")
+                .join("index.js");
+            if p.exists() {
+                return Some(p);
+            }
+        }
+    }
+    None
+}
+
+fn query_official_bundles(version_dir: &Path) -> Option<Vec<String>> {
+    let lib = official_bundle_lib(version_dir)?;
+    const JS: &str = "const {pathToFileURL} = await import('node:url');\nconst m = await import(pathToFileURL(process.argv[1]).href);\nconsole.log(JSON.stringify([...(m.OPTIONAL_BUNDLES||[]),...(m.DEFAULT_PROFILE_BUNDLES||[]),...(m.ON_DEMAND_BUNDLES||[])]));";
+    let out = std::process::Command::new("node")
+        .arg("--input-type=module")
+        .arg("-e")
+        .arg(JS)
+        .arg(&lib)
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let text = String::from_utf8_lossy(&out.stdout);
+    serde_json::from_str(text.trim()).ok()
+}
+
+/// 读 profile 的版本豁免（官方 `compatibility.json`：`{ "pkg@版本": ["DSH 版本", ...] }`）。
+pub fn read_exemptions(dsh_home: &Path, profile: &str) -> serde_json::Value {
+    let file = profiles_dir(dsh_home)
+        .join(profile)
+        .join("compatibility.json");
+    std::fs::read_to_string(file)
+        .ok()
+        .and_then(|t| serde_json::from_str(&t).ok())
+        .unwrap_or_else(|| serde_json::json!({}))
+}
+
+/// 官方「待决定的构建脚本」占位值（pnpm-workspace.yaml 的 allowBuilds 映射里）。
+pub const BUILD_UNDECIDED: &str = "set this to true or false";
+
+/// 读 profile 的 `pnpm-workspace.yaml` 中 allowBuilds 里「待决定」的包名。
+pub fn read_pending_builds(profile_dir: &Path) -> Vec<String> {
+    let Ok(text) = std::fs::read_to_string(profile_dir.join("pnpm-workspace.yaml")) else {
+        return Vec::new();
+    };
+    parse_pending_builds(&text)
+}
+
+fn unquote(s: &str) -> String {
+    let t = s.trim();
+    if (t.starts_with('"') && t.ends_with('"') && t.len() >= 2)
+        || (t.starts_with('\'') && t.ends_with('\'') && t.len() >= 2)
+    {
+        t[1..t.len() - 1].to_string()
+    } else {
+        t.to_string()
+    }
+}
+
+fn parse_pending_builds(text: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut in_allow = false;
+    for line in text.lines() {
+        if line.starts_with("allowBuilds:") {
+            in_allow = true;
+            continue;
+        }
+        if !in_allow {
+            continue;
+        }
+        if line.trim().is_empty() {
+            continue;
+        }
+        if !line.starts_with(' ') && !line.starts_with('\t') {
+            in_allow = false;
+            continue;
+        }
+        if let Some((k, v)) = line.trim().split_once(':') {
+            if unquote(v) == BUILD_UNDECIDED {
+                out.push(unquote(k));
+            }
+        }
+    }
+    out
+}
+
+fn yaml_key(name: &str) -> String {
+    format!("\"{}\"", name.replace('"', "\\\""))
+}
+
+/// 把待决定的构建脚本写成 `allowBuilds: { name: true }`（保留其余内容；官方格式）。
+pub fn approve_builds(profile_dir: &Path, names: &[String]) -> Result<(), String> {
+    if names.is_empty() {
+        return Ok(());
+    }
+    let path = profile_dir.join("pnpm-workspace.yaml");
+    let text = std::fs::read_to_string(&path)
+        .map_err(|e| format!("读取 pnpm-workspace.yaml 失败：{e}"))?;
+    let mut lines: Vec<String> = text.lines().map(|s| s.to_string()).collect();
+    let mut handled = vec![false; names.len()];
+    let start = lines.iter().position(|l| l.starts_with("allowBuilds:"));
+    match start {
+        Some(si) => {
+            let mut end = si + 1;
+            while end < lines.len() {
+                let line = &lines[end];
+                if line.trim().is_empty() {
+                    end += 1;
+                    continue;
+                }
+                if !line.starts_with(' ') && !line.starts_with('\t') {
+                    break;
+                }
+                if let Some((k, _)) = line.trim().split_once(':') {
+                    let key = unquote(k);
+                    if let Some(idx) = names.iter().position(|n| n == &key) {
+                        let indent = line.len() - line.trim_start().len();
+                        lines[end] = format!("{}{}: true", " ".repeat(indent), yaml_key(&key));
+                        handled[idx] = true;
+                    }
+                }
+                end += 1;
+            }
+            let mut insert_at = end;
+            while insert_at > si + 1 && lines[insert_at - 1].trim().is_empty() {
+                insert_at -= 1;
+            }
+            let mut extra = Vec::new();
+            for (i, n) in names.iter().enumerate() {
+                if !handled[i] {
+                    extra.push(format!("  {}: true", yaml_key(n)));
+                }
+            }
+            lines.splice(insert_at..insert_at, extra);
+        }
+        None => {
+            if !lines.last().map(|l| l.trim().is_empty()).unwrap_or(true) {
+                lines.push(String::new());
+            }
+            lines.push("allowBuilds:".to_string());
+            for n in names {
+                lines.push(format!("  {}: true", yaml_key(n)));
+            }
+        }
+    }
+    let mut out = lines.join("\n");
+    if !out.ends_with('\n') {
+        out.push('\n');
+    }
+    // 原子写：先写临时文件再替换，避免半截文件（官方同类操作也用原子写）。
+    let tmp = path.with_extension("yaml.tmp");
+    std::fs::write(&tmp, out).map_err(|e| format!("写入临时文件失败：{e}"))?;
+    std::fs::rename(&tmp, &path).map_err(|e| format!("替换 pnpm-workspace.yaml 失败：{e}"))?;
+    Ok(())
+}
+
+/// 读版本内置的 DSH 运行时版本（`<版本>/node_modules/@deepseek-ai/dsh/package.json`）。
+pub fn runtime_version(version_dir: &Path) -> Option<String> {
+    let dir = version_dir
+        .join("node_modules")
+        .join("@deepseek-ai")
+        .join("dsh");
+    read_pkg_meta(&dir).map(|m| m.version)
 }
 
 /// 归属判定（启发式）：npm scope 为 `@deepseek-ai/` 视为官方，其余视为第三方。
@@ -489,7 +727,7 @@ mod tests {
                 .join("a"),
         );
 
-        let p = read_profile("web", &web);
+        let p = read_profile("web", &web, &[]);
         let a = p
             .plugins
             .iter()
@@ -577,7 +815,7 @@ mod tests {
         std::fs::create_dir_all(&pkg).unwrap();
         std::fs::write(pkg.join("package.json"), r#"{"version":"1.2.3"}"#).unwrap();
 
-        let p = read_profile("web", &profile);
+        let p = read_profile("web", &profile, &[]);
         let item = p
             .plugins
             .iter()
@@ -593,7 +831,7 @@ mod tests {
     fn read_missing_profile_is_empty() {
         let tmp = std::env::temp_dir().join(format!("dsplug-test-{}", std::process::id()));
         let _ = std::fs::create_dir_all(&tmp);
-        let p = read_profile("x", &tmp);
+        let p = read_profile("x", &tmp, &[]);
         assert_eq!(p.name, "x");
         assert!(p.plugins.is_empty());
         let _ = std::fs::remove_dir_all(&tmp);
@@ -681,5 +919,69 @@ mod tests {
         assert!(res.timed_out, "应判定超时：{}", res.output);
         assert!(!res.ok, "超时不应算成功");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // ── B1-11/B1-12：官方信息查询与 allowBuilds 写入 ──
+    #[test]
+    fn parse_pending_builds_finds_sentinel() {
+        let text = "packages:\n  - .\n\nallowBuilds:\n  esbuild: \"set this to true or false\"\n  sharp: true\n  \"@scope/native\": set this to true or false\n";
+        let pending = parse_pending_builds(text);
+        assert_eq!(
+            pending,
+            vec!["esbuild".to_string(), "@scope/native".to_string()]
+        );
+    }
+
+    #[test]
+    fn approve_builds_updates_mapping() {
+        let dir = unique_dir("approve-update");
+        let file = dir.join("pnpm-workspace.yaml");
+        std::fs::write(
+            &file,
+            "packages:\n  - .\nallowBuilds:\n  esbuild: \"set this to true or false\"\n  sharp: true\n",
+        )
+        .unwrap();
+        approve_builds(&dir, &["esbuild".to_string(), "@scope/native".to_string()]).unwrap();
+        let text = std::fs::read_to_string(&file).unwrap();
+        assert!(
+            text.contains("\"esbuild\": true"),
+            "应把待决定项改为 true：{text}"
+        );
+        assert!(
+            text.contains("\"@scope/native\": true"),
+            "应追加新键：{text}"
+        );
+        assert!(text.contains("sharp: true"), "应保留已有键：{text}");
+        assert!(read_pending_builds(&dir).is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn approve_builds_creates_section() {
+        let dir = unique_dir("approve-create");
+        let file = dir.join("pnpm-workspace.yaml");
+        std::fs::write(&file, "packages:\n  - .\n").unwrap();
+        approve_builds(&dir, &["esbuild".to_string()]).unwrap();
+        let text = std::fs::read_to_string(&file).unwrap();
+        assert!(text.contains("allowBuilds:"), "应创建 allowBuilds：{text}");
+        assert!(text.contains("\"esbuild\": true"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn read_exemptions_reads_compatibility_json() {
+        let base = unique_dir("exempt");
+        let home = base.join("home");
+        let pdir = home.join("profiles").join("web");
+        std::fs::create_dir_all(&pdir).unwrap();
+        std::fs::write(
+            pdir.join("compatibility.json"),
+            r#"{"pkg@1.2.3":["0.2.1-rc.2"]}"#,
+        )
+        .unwrap();
+        let v = read_exemptions(&home, "web");
+        assert_eq!(v["pkg@1.2.3"][0], "0.2.1-rc.2");
+        assert_eq!(read_exemptions(&home, "nope"), serde_json::json!({}));
+        let _ = std::fs::remove_dir_all(&base);
     }
 }

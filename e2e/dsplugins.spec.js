@@ -7,8 +7,26 @@ const PROFILE = {
   name: "web",
   path: "D:/dsh/profiles/web",
   plugins: [
-    { name: "@deepseek-ai/dsh-base", version: "0.2.1", is_bundle: true, source: "bundle", origin: "official" },
-    { name: "my-plugin", version: "1.0.0", is_bundle: false, source: "user", origin: "third_party" },
+    {
+      name: "@deepseek-ai/dsh-base",
+      version: "0.2.1",
+      is_bundle: true,
+      source: "bundle",
+      origin: "official",
+      official: true,
+      declares_bundle: true,
+      description: "DSH base bundle",
+    },
+    {
+      name: "my-plugin",
+      version: "1.0.0",
+      is_bundle: false,
+      source: "user",
+      origin: "third_party",
+      official: false,
+      declares_bundle: false,
+      description: "third party plugin",
+    },
   ],
 };
 
@@ -44,9 +62,10 @@ test("点「插件」→ 展开面板（列 profile 与插件 + 官方语义标�
   await expect(page.locator(".ds-plugin-panel")).toBeVisible();
   await expect(page.getByText("@deepseek-ai/dsh-base")).toBeVisible();
   await expect(page.getByText("my-plugin")).toBeVisible();
-  // 与官方语义对齐：只标「随 DSH 提供 / 已安装」，不再按 npm scope 猜官方/第三方
+  // 与官方语义对齐：官方随附 bundle 标「随 DSH 提供」，其余「已安装」；非 dsh.bundle 标「依赖」
   await expect(page.locator(".dp-badge-bundle")).toHaveText("随 DSH 提供");
   await expect(page.locator(".dp-badge-user")).toHaveText("已安装");
+  await expect(page.locator(".dp-badge-kind")).toHaveText("依赖（非插件）");
   await expect(page.locator(".dp-badge-official")).toHaveCount(0);
 });
 
@@ -180,4 +199,57 @@ test("打开 profile 目录 → 调 ds_open_profile_dir（B1-09）", async ({ pa
   const flat = JSON.stringify(calls);
   expect(flat).toContain('"profile":"web"');
   expect(flat).toContain('"version":"0.2.0-rc.1"');
+});
+
+test("显示待决定构建脚本并允许（B1-12）", async ({ page }) => {
+  const calls = [];
+  await page.exposeFunction("__recordApprove", (x) => calls.push(x));
+  await mockTauri(page, {
+    installed: [makeVersion("0.2.0-rc.1", { isolated: true })],
+    extra: {
+      ds_list_plugins: { dsh_home: "D:/dsh", home_kind: "shared", profiles: [PROFILE] },
+      ds_profile_info: {
+        runtime_version: "0.2.0-rc.1",
+        exemptions: {},
+        pending_builds: ["esbuild"],
+        logs_dir: "D:/dsh/profiles/web/.plugin-manager/logs",
+      },
+      ds_approve_builds: "(args) => { window.__recordApprove(args); return Promise.resolve([]); }",
+    },
+  });
+  await page.goto("/");
+  await page.getByRole("button", { name: "插件", exact: true }).click();
+  await expect(page.locator(".dp-pending")).toContainText("esbuild");
+  await page.getByRole("button", { name: "允许并重试", exact: true }).click();
+  await page.waitForTimeout(400);
+  const flatApprove = JSON.stringify(calls);
+  expect(flatApprove).toContain("esbuild");
+});
+
+test("显示版本豁免并可撤销（B1-12）", async ({ page }) => {
+  const calls = [];
+  await page.exposeFunction("__recordExemption", (x) => calls.push(x));
+  await mockTauri(page, {
+    installed: [makeVersion("0.2.0-rc.1", { isolated: true })],
+    extra: {
+      ds_list_plugins: { dsh_home: "D:/dsh", home_kind: "shared", profiles: [PROFILE] },
+      ds_profile_info: {
+        runtime_version: "0.2.0-rc.1",
+        exemptions: { "pkg@1.0.0": ["0.2.0-rc.1"] },
+        pending_builds: [],
+        logs_dir: "D:/dsh/profiles/web/.plugin-manager/logs",
+      },
+      ds_exemption_action: "(args) => { window.__recordExemption(args); return Promise.resolve('ok'); }",
+      "plugin:dialog|message": "Yes",
+    },
+  });
+  await page.goto("/");
+  await page.getByRole("button", { name: "插件", exact: true }).click();
+  await page.locator(".dp-exemptions summary").click();
+  await expect(page.getByText("pkg@1.0.0")).toBeVisible();
+  await page.getByRole("button", { name: "撤销", exact: true }).click();
+  await page.waitForTimeout(400);
+  const flatEx = JSON.stringify(calls);
+  expect(flatEx).toContain('"action":"revoke"');
+  expect(flatEx).toContain("pkg@1.0.0");
 });
