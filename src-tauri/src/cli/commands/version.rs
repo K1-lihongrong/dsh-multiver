@@ -185,7 +185,7 @@ pub fn cmd_uninstall(version: &str, dry_run: bool, json: bool) -> i32 {
     if need_save {
         let _ = ctx.cfg.save(&ctx.mdir);
     }
-    crate::commands::regenerate_forward_script(&ctx.mdir, &ctx.cfg);
+    crate::paths::regenerate_forward_script(&ctx.mdir, &ctx.cfg);
 
     // 快速卸载：rename 到回收站（瞬时），后台再删；CLI 为一次性进程，故同步删回收站
     let (ok, msg) = versions::uninstall_fast(&ctx.dirs.versions, &ctx.dirs.trash, version);
@@ -228,7 +228,7 @@ pub fn cmd_info(version: &str, json: bool) -> i32 {
     };
     let size = cached_version_size(&ctx, version);
     // 非隔离时 DSH_HOME 可能是共享 home 或官方 ~/.dsh，界面/脚本都需要看到实际值
-    let home = crate::commands::resolve_home(&ctx.cfg, &ctx.dirs, version);
+    let home = crate::paths::resolve_home(&ctx.cfg, &ctx.dirs, version);
 
     if json {
         println!(

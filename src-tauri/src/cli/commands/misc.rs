@@ -180,7 +180,7 @@ pub fn cmd_isolate(version: &str, on: bool, dry_run: bool, json: bool) -> i32 {
     if let Err(e) = ctx.cfg.save(&ctx.mdir) {
         return info_fail(json, &format!("保存配置失败：{}", e));
     }
-    crate::commands::regenerate_forward_script(&ctx.mdir, &ctx.cfg);
+    crate::paths::regenerate_forward_script(&ctx.mdir, &ctx.cfg);
     let msg = if on {
         format!("{} 已开启数据隔离", version)
     } else {
@@ -235,7 +235,7 @@ pub fn cmd_import(file: &str, dry_run: bool, json: bool) -> i32 {
                 out_result(json, false, &format!("保存配置失败：{}", e));
                 return 1;
             }
-            crate::commands::regenerate_forward_script(&ctx.mdir, &ctx.cfg);
+            crate::paths::regenerate_forward_script(&ctx.mdir, &ctx.cfg);
             let msg = if applied.is_empty() {
                 "配置无变化".to_string()
             } else {
@@ -259,7 +259,7 @@ pub fn cmd_run(version: &str, json: bool) -> i32 {
     if !vdir.join("node_modules").exists() {
         return info_fail(json, &format!("版本 {} 未安装", version));
     }
-    let home = crate::commands::resolve_home(&ctx.cfg, &ctx.dirs, version);
+    let home = crate::paths::resolve_home(&ctx.cfg, &ctx.dirs, version);
 
     // 端口：固定 3080；被占用则随机（CLI 无交互，直接随机）
     let port: u16 = if crate::launcher::port_in_use(3080) {

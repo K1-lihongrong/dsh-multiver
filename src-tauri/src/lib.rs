@@ -9,6 +9,7 @@ mod jobobj;
 mod launcher;
 mod logging;
 mod maintenance;
+mod paths;
 #[cfg(unix)]
 mod procreg;
 mod runtime;

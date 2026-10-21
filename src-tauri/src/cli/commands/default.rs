@@ -37,7 +37,7 @@ pub fn cmd_set_default(version: &str, dry_run: bool, json: bool) -> i32 {
     }
     // GAP-014：目标位置已有"非本管理器"的 dsh 命令 → 拒绝（除非显式 --force）
     if !has_force() {
-        let target = crate::commands::forward_script_dir(&ctx.mdir);
+        let target = crate::paths::forward_script_dir(&ctx.mdir);
         if let Some(p) = crate::actions::existing_foreign_dsh(&target) {
             out_result(json, false, &format!(
                 "目标位置已存在非本管理器的 dsh 命令：{}\n继续将覆盖它（可能是 npm i -g 装的官方 dsh）。如确认，加 --force 重试。",
@@ -51,7 +51,7 @@ pub fn cmd_set_default(version: &str, dry_run: bool, json: bool) -> i32 {
         out_result(json, false, &format!("保存配置失败：{}", e));
         return 1;
     }
-    crate::commands::regenerate_forward_script(&ctx.mdir, &ctx.cfg);
+    crate::paths::regenerate_forward_script(&ctx.mdir, &ctx.cfg);
     out_result(
         json,
         true,

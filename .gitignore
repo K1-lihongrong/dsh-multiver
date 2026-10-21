@@ -25,12 +25,13 @@ icon-1024.png
 Thumbs.db
 
 # 本地数据（如果误建在源码目录）
-config.json
-versions/
-home/
-store/
-cache/
-state/
+# 注意：必须锚定到仓库根（前导 /），否则会误伤 src-tauri/src/versions/ 等源码目录
+/config.json
+/versions/
+/home/
+/store/
+/cache/
+/state/
 
 # AI 助手项目说明（本地辅助文件）
 .cuckoo/
