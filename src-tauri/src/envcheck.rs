@@ -240,12 +240,23 @@ fn node_fallback_or_fail(root: &Path, detail: String) -> CheckItem {
             serde_json::json!({ "v": detail }),
         );
     }
+    let (hint, hint_key) = if cfg!(windows) {
+        (
+            "可运行 dsh-multiver setup-runtime 自动下载便携 Node，或到 Node.js 官网下载 LTS 版（22.19+ / 24+）安装。",
+            "env.node.hint_missing",
+        )
+    } else {
+        (
+            "请用系统包管理器安装 Node.js（如 apt install nodejs），或到 Node.js 官网下载 22.19+ / 24+ 版本。",
+            "env.node.hint_missing_linux",
+        )
+    };
     fail_item(
         "Node.js",
         format!("{}，且未准备便携 Node", detail),
         true,
-        "可运行 dsh-multiver setup-runtime 自动下载便携 Node，或到 Node.js 官网下载 LTS 版（22.19+ / 24+）安装。",
-        "env.node.hint_missing",
+        hint,
+        hint_key,
         "https://nodejs.org/zh-cn/download",
     )
     .i18n_detail("env.node.detail_missing", serde_json::Value::Null)
@@ -282,12 +293,23 @@ pub fn check_pnpm(root: &Path) -> CheckItem {
                 return ok_item("pnpm", "将使用便携 pnpm".to_string(), true)
                     .i18n_detail("env.pnpm.detail_bundled", serde_json::Value::Null);
             }
+            let (hint, hint_key) = if cfg!(windows) {
+                (
+                    "可运行 dsh-multiver setup-runtime 自动下载便携 pnpm，或先安装 Node 后运行 npm install -g pnpm。",
+                    "env.pnpm.hint_missing",
+                )
+            } else {
+                (
+                    "请用系统包管理器安装 pnpm（如 corepack enable，或 npm install -g pnpm）。",
+                    "env.pnpm.hint_missing_linux",
+                )
+            };
             fail_item(
                 "pnpm",
                 "未找到 pnpm 命令，且未准备便携 pnpm".to_string(),
                 true,
-                "可运行 dsh-multiver setup-runtime 自动下载便携 pnpm，或先安装 Node 后运行 npm install -g pnpm。",
-                "env.pnpm.hint_missing",
+                hint,
+                hint_key,
                 "https://pnpm.io/zh/installation",
             )
             .i18n_detail("env.pnpm.detail_missing", serde_json::Value::Null)

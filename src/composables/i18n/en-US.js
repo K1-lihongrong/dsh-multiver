@@ -23,6 +23,9 @@ export default {
     "env.node.hint_feature": "This Node meets the version requirement but does not support import.meta.main that dsh needs (possibly a custom build). Use the official Node.js LTS build (22.19+ / 24+).",
     "env.node.hint_missing": "Install an LTS build of Node.js from the official site (22.19+ or 24+). Check Add to PATH during install, then reopen this tool.",
     "env.pnpm.hint_missing": "After Node is installed, run in a terminal: npm install -g pnpm (see the pnpm website).",
+    "env.node.hint_missing_linux": "Install Node.js with your package manager (e.g. apt install nodejs), or download a 22.19+ / 24+ build from nodejs.org.",
+    "env.pnpm.hint_missing_linux": "Install pnpm with your package manager (e.g. corepack enable, or npm install -g pnpm).",
+
     "env.writable.hint": "Set the data root to a writable location (e.g. D:\\dsh-data), or check whether it is locked/read-only.",
     "env.registry.hint": "Likely a network or proxy issue. If an install fails, retry with another npm registry (e.g. Aliyun npmmirror).",
     "env.node.detail_ok": "{v} (meets 22.19+ / 24+)",

@@ -23,6 +23,9 @@ export default {
     "env.node.hint_feature": "この Node はバージョン要件を満たしますが、dsh が必要とする import.meta.main をサポートしていません（カスタムビルドの可能性）。公式の LTS 版（22.19+ / 24+）をご利用ください。",
     "env.node.hint_missing": "公式サイトから Node.js の LTS 版（22.19 以上または 24+）をインストールしてください。インストール時に Add to PATH を有効にし、完了後に本ツールを開き直してください。",
     "env.pnpm.hint_missing": "Node のインストール後、ターミナルで実行：npm install -g pnpm（詳細は pnpm 公式サイト参照）。",
+    "env.node.hint_missing_linux": "パッケージマネージャーで Node.js をインストールしてください（例: apt install nodejs）。または nodejs.org から 22.19+ / 24+ を入手してください。",
+    "env.pnpm.hint_missing_linux": "パッケージマネージャーで pnpm をインストールしてください（例: corepack enable、または npm install -g pnpm）。",
+
     "env.writable.hint": "データルートを書き込み可能な場所（例 D:\\dsh-data）に変更するか、使用中/読み取り専用でないか確認してください。",
     "env.registry.hint": "ネットワークまたはプロキシの問題の可能性があります。インストール失敗時は別の npm レジストリ（例 阿里雲 npmmirror）で再試行してください。",
     "env.node.detail_ok": "{v}（22.19+ / 24+ を満たす）",

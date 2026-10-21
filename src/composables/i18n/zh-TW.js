@@ -23,6 +23,9 @@ export default {
     "env.node.hint_feature": "目前 Node 雖符合版本要求，但實測不支援 dsh 依賴的 import.meta.main（可能是自訂建置或異常版本）。建議改用 Node.js 官網的 LTS 版（22.19+ / 24+）。",
     "env.node.hint_missing": "請至 Node.js 官網下載 LTS 版（22.19 或更高，或 24+）安裝。安裝時勾選「Add to PATH」，裝完重開本工具。",
     "env.pnpm.hint_missing": "Node 裝好後，在終端執行：npm install -g pnpm（也可參考 pnpm 官網）。",
+    "env.node.hint_missing_linux": "請用系統套件管理員安裝 Node.js（如 apt install nodejs），或到 Node.js 官網下載 22.19+ / 24+ 版本。",
+    "env.pnpm.hint_missing_linux": "請用系統套件管理員安裝 pnpm（如 corepack enable，或 npm install -g pnpm）。",
+
     "env.writable.hint": "請把「資料根目錄」改到有寫入權限的位置（如 D:\\dsh-data），或檢查該目錄是否被占用/唯讀。",
     "env.registry.hint": "可能是網路或代理問題。安裝失敗時，可在彈窗裡換一個 npm 來源（如阿里雲 npmmirror）重試。",
     "env.node.detail_ok": "{v}（符合 22.19+ / 24+）",
