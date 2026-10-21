@@ -598,4 +598,88 @@ mod tests {
         assert!(p.plugins.is_empty());
         let _ = std::fs::remove_dir_all(&tmp);
     }
+
+    // ── 执行层（run_dsh_plugin）测试：B1-09 ──
+    fn unique_dir(tag: &str) -> PathBuf {
+        let d = std::env::temp_dir().join(format!("dsplug-run-{}-{}", std::process::id(), tag));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    #[cfg(windows)]
+    fn write_script(dir: &Path, body: &str) -> PathBuf {
+        let p = dir.join("fake-dsh.cmd");
+        std::fs::write(&p, format!("@echo off\r\n{}\r\n", body)).unwrap();
+        p
+    }
+
+    #[cfg(unix)]
+    fn write_script(dir: &Path, body: &str) -> PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+        let p = dir.join("fake-dsh.sh");
+        std::fs::write(&p, format!("#!/bin/sh\n{}\n", body)).unwrap();
+        let mut perms = std::fs::metadata(&p).unwrap().permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&p, perms).unwrap();
+        p
+    }
+
+    #[test]
+    fn run_dsh_plugin_captures_output_and_status() {
+        let dir = unique_dir("ok");
+        let bin = write_script(&dir, "echo hello");
+        let res = run_dsh_plugin(
+            &bin,
+            &dir,
+            "web",
+            &["list"],
+            Duration::from_secs(10),
+            |_| {},
+        );
+        assert!(!res.timed_out, "不应超时：{}", res.output);
+        assert!(res.ok, "应成功：{}", res.output);
+        assert!(res.output.contains("hello"), "应捕获输出：{}", res.output);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn run_dsh_plugin_reports_nonzero_exit() {
+        let dir = unique_dir("fail");
+        #[cfg(windows)]
+        let bin = write_script(&dir, "exit /b 3");
+        #[cfg(unix)]
+        let bin = write_script(&dir, "exit 3");
+        let res = run_dsh_plugin(
+            &bin,
+            &dir,
+            "web",
+            &["list"],
+            Duration::from_secs(10),
+            |_| {},
+        );
+        assert!(!res.ok, "非零退出应判失败");
+        assert!(!res.timed_out, "不应超时");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn run_dsh_plugin_times_out() {
+        let dir = unique_dir("hang");
+        #[cfg(windows)]
+        let bin = write_script(&dir, "ping -n 4 127.0.0.1 >nul");
+        #[cfg(unix)]
+        let bin = write_script(&dir, "sleep 3");
+        let res = run_dsh_plugin(
+            &bin,
+            &dir,
+            "web",
+            &["list"],
+            Duration::from_millis(300),
+            |_| {},
+        );
+        assert!(res.timed_out, "应判定超时：{}", res.output);
+        assert!(!res.ok, "超时不应算成功");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

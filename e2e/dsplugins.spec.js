@@ -127,3 +127,38 @@ test("搜索过滤插件（B1-10）", async ({ page }) => {
   await expect(page.locator(".dp-item", { hasText: "my-plugin" })).toBeVisible();
   await expect(page.locator(".dp-item", { hasText: "@deepseek-ai/dsh-base" })).toHaveCount(0);
 });
+
+test("安装失败 → 显示错误提示（B1-09）", async ({ page }) => {
+  await mockTauri(page, {
+    installed: [makeVersion("0.2.0-rc.1", { isolated: true })],
+    extra: {
+      ds_list_plugins: { dsh_home: "D:/dsh", home_kind: "shared", profiles: [PROFILE] },
+      ds_plugin_action: "(args) => Promise.reject('模拟安装失败：网络错误')",
+    },
+  });
+  await page.goto("/");
+  await page.getByRole("button", { name: "插件", exact: true }).click();
+  await page.getByPlaceholder(/npm 包名/).fill("bad-pkg");
+  await page.locator(".ds-plugin-panel").getByRole("button", { name: "安装", exact: true }).click();
+  await page.waitForTimeout(400);
+  await expect(page.locator(".toast")).toContainText("模拟安装失败");
+});
+
+test("打开 profile 目录 → 调 ds_open_profile_dir（B1-09）", async ({ page }) => {
+  const calls = [];
+  await page.exposeFunction("__recordOpenDir", (x) => calls.push(x));
+  await mockTauri(page, {
+    installed: [makeVersion("0.2.0-rc.1", { isolated: true })],
+    extra: {
+      ds_list_plugins: { dsh_home: "D:/dsh", home_kind: "shared", profiles: [PROFILE] },
+      ds_open_profile_dir: "(args) => { window.__recordOpenDir(args); return Promise.resolve(); }",
+    },
+  });
+  await page.goto("/");
+  await page.getByRole("button", { name: "插件", exact: true }).click();
+  await page.locator(".ds-plugin-panel").getByTitle("打开目录").click();
+  await page.waitForTimeout(400);
+  const flat = JSON.stringify(calls);
+  expect(flat).toContain('"profile":"web"');
+  expect(flat).toContain('"version":"0.2.0-rc.1"');
+});
