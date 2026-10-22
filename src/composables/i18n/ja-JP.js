@@ -35,6 +35,7 @@ export default {
     "env.node.detail_old": "{v}（22.19+ または 24.2+ が必要）",
     "env.node.detail_feature": "{v}（バージョンは満たすが import.meta.main が無い）",
     "env.node.detail_missing": "node コマンドが見つかりません。Node.js 22.19+（または 24.2+）をインストールしてください",
+  "env.node.detail_low": "Node.js {v} は古すぎます。22.19+ または 24.2+ が必要です",
     "env.node.detail_bundled": "{v}（ポータブル Node を使用します）",
     "env.pnpm.detail_missing": "pnpm コマンドが見つかりません。pnpm をインストールしてください",
     "env.pnpm.detail_bundled": "ポータブル pnpm を使用します",

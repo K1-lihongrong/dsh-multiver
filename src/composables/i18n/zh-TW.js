@@ -35,6 +35,7 @@ export default {
     "env.node.detail_old": "{v}（需要 22.19+ 或 24.2+）",
     "env.node.detail_feature": "{v}（版本看似符合，但缺少 import.meta.main 特性）",
     "env.node.detail_missing": "未找到 node 命令，請先安裝 Node.js 22.19+（或 24.2+）",
+  "env.node.detail_low": "Node.js {v} 版本過低，需要 22.19+ 或 24.2+",
     "env.node.detail_bundled": "{v}（將使用可攜 Node）",
     "env.pnpm.detail_missing": "未找到 pnpm 命令，請先安裝 pnpm",
     "env.pnpm.detail_bundled": "將使用可攜 pnpm",
