@@ -71,6 +71,7 @@
   - **D18**：管理器 `config.json` 损坏时，启动路径改用 `Config::load_checked`——写 `logs/app.log` 警告 + 把原文件重命名为 `config.json.broken-<时间戳>` 保留现场 + 回退默认配置。此前静默回退，用户 `isolated_versions` 标记丢失无感知。
   - **D19**：数据根不可写时，`AppState` 新增 `root_writable` / `root_writable_error`，界面顶部显示**不可关闭**横幅（含当前路径 + 「去设置」入口），根目录改好后自动消失。此前 `dirs.ensure()` 有 7 处静默忽略错误。
 - **启动失败页背景（R-13）**：设计提供故障页背景（鲸鱼娘手持 SYSTEM FAULT 全息面板，降饱和 + 噪点质感），`LaunchScreen` 在 `stage === 'error'` 时切换，此前一直用正常态欢迎图。浅色/深色主题共用，1280x1280 / 275 KB。
+- **包不存在文案（R-14）**：`dsplugins.inspectNotFound` 原写「所有安装源都没有这个包」，与下方「更换安装源」按钮矛盾——`ERR_PNPM_FETCH_404` 无法区分「包名打错」与「镜像滞后」。改为中性表述「当前安装源找不到该包，可更换安装源重试；若仍失败请检查包名」，4 语言同步。
 - **运行时依赖加固**：
   - 便携运行时下载改为 **Windows-only**（Linux 不再误下载 win-x64 二进制；非 Windows 隐藏按钮并提示用系统包管理器）。
   - 环境检查新增 **git**（非致命，Git 来源插件需要）；pnpm 增加 **10+ 版本校验**（`allowBuilds` 依赖）。

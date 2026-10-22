@@ -314,7 +314,7 @@ export default {
     "dsplugins.install": "インストール",
     "dsplugins.checking": "プラグインを確認中…",
     "dsplugins.inspectNotBundle": "「{p}」は dsh.bundle を宣言していないため、バンドルプラグインではないとしてインストールを拒否しました（公式と同じ）。",
-    "dsplugins.inspectNotFound": "「{p}」が見つかりません。どのインストール元にもありません。",
+    "dsplugins.inspectNotFound": "現在のインストール元に「{p}」が見つかりません。別のインストール元をお試しください。それでも失敗する場合はパッケージ名をご確認ください。",
     "dsplugins.inspectNetwork": "インストール元に接続できず「{p}」を確認できません。ネットワーク/プロキシを確認するか、インストール元を変更してください。",
     "dsplugins.inspectProblem": "「{p}」をインストールできません。",
     "dsplugins.descriptionLabel": "説明",
