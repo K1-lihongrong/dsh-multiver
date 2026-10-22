@@ -314,7 +314,7 @@ export default {
     "dsplugins.install": "Install",
     "dsplugins.checking": "Checking plugin…",
     "dsplugins.inspectNotBundle": "{p} does not declare dsh.bundle and is not a bundle plugin; install rejected (same as official).",
-    "dsplugins.inspectNotFound": "{p} was not found in any install source.",
+    "dsplugins.inspectNotFound": "\"{p}\" was not found in the current install source. Try another source; if it still fails, check the package name.",
     "dsplugins.inspectNetwork": "Cannot reach an install source to inspect {p}; check network/proxy or change the source.",
     "dsplugins.inspectProblem": "Cannot install {p}.",
     "dsplugins.descriptionLabel": "Description",

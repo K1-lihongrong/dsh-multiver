@@ -314,7 +314,7 @@ export default {
     "dsplugins.install": "安装",
     "dsplugins.checking": "正在检查插件…",
     "dsplugins.inspectNotBundle": "「{p}」未声明 dsh.bundle，不是组合包插件，已拒绝安装（与官方一致）。",
-    "dsplugins.inspectNotFound": "找不到「{p}」：所有安装源都没有这个包。",
+    "dsplugins.inspectNotFound": "当前安装源找不到「{p}」，可更换安装源重试；若仍失败请检查包名。",
     "dsplugins.inspectNetwork": "无法连接安装源检查「{p}」：请检查网络/代理或更换安装源。",
     "dsplugins.inspectProblem": "无法安装「{p}」。",
     "dsplugins.descriptionLabel": "描述",
