@@ -56,6 +56,7 @@ function onSharedHomeChoice(choice) {
 
 const runningVersion = ref(""); // 正在启动的版本号
 const uninstalling = ref("");   // 正在卸载的版本号
+const browserOpenResult = ref(null); // 浏览器打开失败时展示 URL
 const installedNoteVer = ref(null); // 当前展开更新说明的版本号
 const pluginPanelVer = ref(null);   // 当前展开 dsh 插件面板的版本号
 
@@ -149,8 +150,14 @@ async function run(v) {
 
 async function openInBrowser(v) {
   if (!(await confirmSharedHome(v))) return;
-  try { notify(await invoke("open_in_browser", { version: v })); }
-  catch (e) { notify("" + e); }
+  try {
+    const res = await invoke("open_in_browser", { version: v });
+    if (res && res.url && res.opened === false) {
+      browserOpenResult.value = res;
+      return;
+    }
+    notify(res?.message || String(res));
+  } catch (e) { notify("" + e); }
 }
 
 async function setDefault(v) {
@@ -365,6 +372,19 @@ function toggleInstalledNote(v) {
       @continue-dont-ask="onSharedHomeChoice('dont-ask')"
       @cancel="onSharedHomeChoice('cancel')"
     />
+
+    <!-- L-18：浏览器未能自动打开时，把完整 URL 展示出来 -->
+    <div class="browser-modal-mask" v-if="browserOpenResult" @click.self="browserOpenResult = null">
+      <div class="browser-modal">
+        <h3>{{ t("installed.browserOpenFailed") }}</h3>
+        <p class="browser-desc">{{ browserOpenResult.message }}</p>
+        <input class="browser-url" :value="browserOpenResult.url" readonly @focus="$event.target.select()" />
+        <p class="browser-hint">{{ t("installed.browserUrlHint") }}</p>
+        <div class="browser-actions">
+          <button class="btn primary" @click="browserOpenResult = null">{{ t("installed.close") }}</button>
+        </div>
+      </div>
+    </div>
   </section>
 </template>
 
@@ -461,4 +481,24 @@ function toggleInstalledNote(v) {
 .ver-inline-pct { font-size: 11px; color: var(--accent); font-variant-numeric: tabular-nums; }
 
 /* .btn / .badge 等公共样式见 src/styles/common.css（main.js 引入），此处不再重复 */
+.browser-modal-mask {
+  position: fixed; inset: 0; z-index: 1000;
+  background: var(--shadow-strong);
+  display: flex; align-items: center; justify-content: center;
+}
+.browser-modal {
+  width: 520px; max-width: 92vw;
+  background: var(--panel-bg); border-radius: 10px; padding: 18px 20px;
+  box-shadow: 0 16px 48px var(--overlay);
+}
+.browser-modal h3 { margin: 0 0 10px; font-size: 15px; }
+.browser-desc { font-size: 13px; color: var(--text-code); line-height: 1.5; margin: 0 0 12px; white-space: pre-wrap; }
+.browser-url {
+  width: 100%; box-sizing: border-box; padding: 7px 10px;
+  border: 1px solid var(--border); border-radius: 6px;
+  font-family: ui-monospace, Consolas, monospace; font-size: 12px;
+  color: var(--text); background: var(--surface-1);
+}
+.browser-hint { font-size: 12px; color: var(--text-3); margin: 8px 0 14px; }
+.browser-actions { display: flex; justify-content: flex-end; }
 </style>

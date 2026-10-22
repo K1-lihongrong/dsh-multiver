@@ -289,6 +289,21 @@ onUnmounted(() => {
         <div class="modal-desc">
           {{ t("remote.modalBadDesc1") }} <b>{{ retryVersion }}</b> {{ t("remote.modalBadDesc2") }}
         </div>
+        <div class="modal-desc" v-if="retryKind === 'incomplete-version'">
+          {{ t("remote.incompleteHint") }}
+        </div>
+        <template v-if="retryKind === 'incomplete-version' || retryKind === 'private-package'">
+          <div class="field">
+            <label>{{ t("remote.chooseRegistry") }}</label>
+            <select v-model="retryRegistry" class="input">
+              <option v-for="r in REGISTRIES" :key="r.value" :value="r.value">{{ r.label }}</option>
+            </select>
+          </div>
+          <div class="field">
+            <label>{{ t("remote.customRegistry") }}</label>
+            <input v-model="retryCustom" class="input" placeholder="https://.../npm/" />
+          </div>
+        </template>
         <details class="retry-detail">
           <summary>{{ t("remote.advanced") }}</summary>
           <div class="adv-body">
@@ -311,7 +326,7 @@ pnpm install &amp;&amp; pnpm build</pre>
       </details>
       <div class="modal-actions">
         <button class="btn" @click="retryOpen = false">{{ retryKind === 'network' ? t("remote.cancel") : t("remote.gotIt") }}</button>
-        <button v-if="retryKind === 'network'" class="btn primary" @click="retryInstall">{{ t("remote.retryWithRegistry") }}</button>
+        <button v-if="retryKind !== 'unknown'" class="btn primary" @click="retryInstall">{{ t("remote.retryWithRegistry") }}</button>
         <button v-else class="btn primary" @click="retryOpen = false">{{ t("remote.ok") }}</button>
       </div>
     </div>

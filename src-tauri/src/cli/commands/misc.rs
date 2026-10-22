@@ -290,7 +290,7 @@ pub fn cmd_run(version: &str, json: bool) -> i32 {
     } else {
         3080
     };
-    let (ok, msg) = crate::launcher::spawn_web_console(
+    let (ok, msg) = crate::launcher::spawn_web_console_detached(
         &vdir,
         &home,
         &ctx.dirs.store,
@@ -464,6 +464,21 @@ pub fn cmd_setup_runtime(dry_run: bool, json: bool) -> i32 {
 pub fn cmd_update(dry_run: bool, json: bool) -> i32 {
     let info = crate::updater::check();
     if !info.has_update {
+        if let Some(err) = &info.error {
+            if json {
+                println!(
+                    "{}",
+                    json_str(&serde_json::json!({
+                        "has_update": false,
+                        "current": info.current,
+                        "error": err,
+                    }))
+                );
+            } else {
+                eprintln!("检查更新失败：{}", err);
+            }
+            return 1;
+        }
         if json {
             println!(
                 "{}",
