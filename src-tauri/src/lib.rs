@@ -247,6 +247,19 @@ pub fn run() {
                                 &format!("版本 {} 启动失败: {}", version_for_launch, e),
                             );
                             eprintln!("[dsh-multiver] 启动失败: {}", e);
+                            // R-13：快捷方式启动失败时通知前端进入错误态，
+                            // 否则加载页会停在 preparing/waiting 不动。
+                            {
+                                use tauri::Emitter;
+                                let _ = app_handle.emit(
+                                    "launch-progress",
+                                    serde_json::json!({
+                                        "version": version_for_launch,
+                                        "stage": "error",
+                                        "error": e.to_string(),
+                                    }),
+                                );
+                            }
                             // 启动失败时把主窗口显示出来，避免用户看到"什么都没有"
                             if let Some(main) = app_handle.get_webview_window("main") {
                                 let _ = main.show();

@@ -179,6 +179,8 @@ onMounted(async () => {
   listen("launch-progress", (e) => {
     const p = e.payload || {};
     if (p.stage) launchStage.value = p.stage;
+    // R-13：快捷方式启动失败时后端带上错误文本，加载页据此显示失败原因。
+    if (p.stage === "error" && p.error) launchError.value = p.error;
   }).then((u) => { unlistenProgress = u; }).catch(() => {});
 
   // 启动模式：用户看的是加载页，不需要版本列表——跳过 refresh（省 ~1s）。
