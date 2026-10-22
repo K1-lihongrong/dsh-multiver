@@ -1,5 +1,5 @@
 <script setup>
-import { computed } from "vue";
+import { computed, ref, watch, onBeforeUnmount } from "vue";
 import { t } from "../composables/useI18n.js";
 import { isDark } from "../composables/useTheme.js";
 import bgLight from "../assets/loading-bg-light-1280.webp";
@@ -17,8 +17,31 @@ const props = defineProps({
 const emit = defineEmits(["back", "view-logs"]);
 
 // R-13：错误态背景（设计稿「故障页」，浅色/深色主题共用同一张）。
+// 失败切换时先播放约 800ms 的「信号崩坏」干扰（抖动 + 水平条纹），再切故障页。
+const glitching = ref(false);
+let glitchTimer = 0;
+let wasError = false;
+
+watch(
+  () => props.stage,
+  (s) => {
+    if (s === "error" && !wasError) {
+      wasError = true;
+      glitching.value = true;
+      glitchTimer = window.setTimeout(() => { glitching.value = false; }, 800);
+    } else if (s !== "error") {
+      wasError = false;
+      glitching.value = false;
+      if (glitchTimer) { window.clearTimeout(glitchTimer); glitchTimer = 0; }
+    }
+  },
+  { immediate: true }
+);
+onBeforeUnmount(() => { if (glitchTimer) window.clearTimeout(glitchTimer); });
+
+// 干扰期间仍显示正常加载页背景，结束后才换故障页。
 const bgSrc = computed(() => {
-  if (props.stage === "error") return bgError;
+  if (props.stage === "error" && !glitching.value) return bgError;
   return isDark() ? bgDark : bgLight;
 });
 
@@ -29,10 +52,13 @@ const statusText = computed(() => {
 </script>
 
 <template>
-  <div class="splash" :class="{ dark: isDark() }">
+  <div class="splash" :class="{ dark: isDark(), glitching }">
     <div class="splash-bg" aria-hidden="true">
-      <img class="splash-bg-img" :src="bgSrc" alt="" />
+      <img class="splash-bg-img" :src="bgSrc" :class="{ 'bg-enter': stage === 'error' && !glitching }" alt="" />
       <div class="splash-scrim"></div>
+      <div v-if="glitching" class="splash-glitch" aria-hidden="true">
+        <span class="glitch-bar" v-for="i in 6" :key="i" :style="{ '--i': i }"></span>
+      </div>
     </div>
 
     <section class="splash-stage">
@@ -159,9 +185,48 @@ const statusText = computed(() => {
   0% { left: -40%; }
   100% { left: 100%; }
 }
+/* R-13：失败切换的「信号崩坏」干扰（约 800ms），随后故障页淡入 */
+.splash.glitching .splash-stage { animation: glitchShake .8s steps(2, end) both; }
+.splash-glitch {
+  position: absolute; inset: 0; z-index: 2; pointer-events: none;
+  mix-blend-mode: screen;
+}
+.splash-glitch .glitch-bar {
+  position: absolute; left: 0; right: 0; height: 6%;
+  top: calc((var(--i) - 1) * 16%);
+  background: linear-gradient(90deg, transparent, rgba(120,200,255,.55), rgba(255,255,255,.75), rgba(120,200,255,.55), transparent);
+  opacity: 0;
+  animation: glitchBar .8s steps(3, end) both;
+  animation-delay: calc(var(--i) * 45ms);
+}
+@keyframes glitchShake {
+  0%, 100% { transform: translate3d(0, 0, 0); filter: none; }
+  12% { transform: translate3d(-3px, 1px, 0); filter: contrast(1.15) saturate(1.2); }
+  28% { transform: translate3d(4px, -2px, 0); filter: contrast(1.25) brightness(1.08); }
+  46% { transform: translate3d(-5px, 2px, 0); filter: contrast(1.1); }
+  64% { transform: translate3d(3px, -1px, 0); filter: contrast(1.3) brightness(1.12); }
+  82% { transform: translate3d(-2px, 1px, 0); filter: contrast(1.1); }
+}
+@keyframes glitchBar {
+  0% { opacity: 0; transform: translateX(-12%); }
+  20% { opacity: .9; transform: translateX(6%); }
+  45% { opacity: .35; transform: translateX(-4%); }
+  70% { opacity: .85; transform: translateX(3%); }
+  100% { opacity: 0; transform: translateX(0); }
+}
+/* 故障页淡入 + 轻微回落 */
+.splash-bg-img.bg-enter { animation: bgEnter .26s ease-out both; }
+@keyframes bgEnter {
+  from { opacity: .2; transform: scale(1.02); }
+  to { opacity: 1; transform: scale(1); }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .splash-dots .dot { animation: none; opacity: .6; }
   .splash-stream { animation: none; left: 30%; opacity: .5; }
+  .splash.glitching .splash-stage { animation: none; }
+  .splash-glitch { display: none; }
+  .splash-bg-img.bg-enter { animation: none; }
 }
 
 .splash-status {
