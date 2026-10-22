@@ -75,7 +75,7 @@
   - **L-32**：registry 检查改为 8s 超时 HTTP `/-/ping`，不再用 `pnpm view`（其离线缓存会误报可达）；离线/死代理明确失败，耗时从 ~71s 降到 ≤8s。
   - **L-09**：Linux 环境检查新增中文字体项（`fc-list :lang=zh`，非致命），缺字体时提示安装 `fonts-noto-cjk`。
   - **D20**：Node 版本低于下限时，环境检查误报「未找到 node 命令」（与「真没装」共用 i18n 文案）。新增 `env.node.detail_low`，区分两种原因，4 语言同步。
-  - **L-18**：Linux 下「浏览器打开」改为管理器捕获 URL 后自行打开；无浏览器时弹窗展示完整 URL，不再静默失败。**Windows 保持原设计**：新控制台窗口 + dsh 自己打开浏览器（用户可看实时输出、关窗即停）。
+  - **L-18**：GUI「浏览器打开」严格按交互设计约定保留控制台窗口：Windows 用新控制台 + dsh 自己开浏览器；Linux 查找系统终端模拟器承载控制台（无浏览器时 URL/token 仍可见，无终端则明确报错）。
   - **L-31**：镜像源子包缺失（`ERR_PNPM_NO_MATCHING_VERSION`）时，失败弹窗提供换官方源重试；弹窗文案改为「镜像未同步 / 可换源重试」，避免与换源入口自相矛盾。
   - **R-12**：镜像完全未发布某子包时（`ERR_PNPM_NO_VERSIONS`，此前归为 `unknown` 只弹 toast）一并归入 `incomplete-version`，与 `NO_MATCHING_VERSION` 同样触发换源重试。
   - **L-29**：更新检查失败写入 `error` 字段；GUI 显示可关闭的错误横幅，CLI 返回 `error` + exit 1，不再伪装「无更新」。
