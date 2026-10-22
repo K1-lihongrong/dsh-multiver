@@ -15,7 +15,20 @@ const props = defineProps({
 });
 const emit = defineEmits(["back", "view-logs"]);
 
-const bgSrc = computed(() => (isDark() ? bgDark : bgLight));
+// R-13：错误态背景。
+// 目前设计尚未提供错误态图（见 docs/开发缺口.md R-13），先把结构留出：
+// 一旦把 `loading-bg-error-light/dark-*.webp` 放进 assets，只需在此导入并替换 `null`。
+const bgErrorLight = null;
+const bgErrorDark = null;
+
+const bgSrc = computed(() => {
+  const dark = isDark();
+  if (props.stage === "error") {
+    const err = dark ? bgErrorDark : bgErrorLight;
+    if (err) return err; // 错误态图到位后用它的
+  }
+  return dark ? bgDark : bgLight;
+});
 
 const statusText = computed(() => {
   if (props.stage === "error") return t("launch.failed");
