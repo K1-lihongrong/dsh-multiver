@@ -2,6 +2,9 @@
 
 > ⚠️ **破坏性变更**：CLI 从 `--flag` 风格改为子命令风格。旧语法已移除。
 
+> 📋 **验收范围**：本版本以 **Windows 侧**功能与体验定稿为准，已完成本机验收（自动 10 项 + 手动 5 项，含 R-05 / R-12 / R-13 / D18 / D19 / D20 与 B1 面板抽查），详见 [验收记录-Windows本机-2026-10-22](https://github.com/K1-lihongrong/dsh-multiver/blob/main/docs/验收记录-Windows本机-2026-10-22.md)。
+> **Linux 侧**代码已实现，但未做完整验收（真桌面矩阵、L-18 三场景、Wayland 输入法等），相关项后置到 v0.3.x，见 [开发缺口 · Linux 适配后置](https://github.com/K1-lihongrong/dsh-multiver/blob/main/docs/开发缺口.md#linux-适配后置v03x)。
+
 ### 🔧 CLI 子命令风格（破坏性变更）
 
 ```bash
