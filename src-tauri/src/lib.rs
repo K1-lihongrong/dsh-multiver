@@ -76,6 +76,16 @@ pub(crate) fn manager_dir_plain() -> PathBuf {
 pub fn run() {
     // 进程启动计时起点（v0.2.13 启动耗时打点）
     PROC_START.set(std::time::Instant::now()).ok();
+
+    // 配置损坏检测（D18）：CLI 与 GUI 分流之前统一执行一次。
+    // 副作用：config.json 解析失败时写 app.log 警告 + 重命名为 config.json.broken-<ts>。
+    // 返回值丢弃——后续所有读取仍走纯读取的 Config::load（此时文件已被重命名，会返回默认值）。
+    // 设计依据：docs/交互设计约定.md §2.5。
+    {
+        let mdir = manager_dir_plain();
+        let _ = Config::load_checked(&mdir);
+    }
+
     // ── 无头 CLI 模式 ──
     // 带任一 CLI 参数则不初始化 GUI，执行后按退出码退出。
     // 分流必须早于 tauri::Builder，避免白白起一个 GUI 进程。

@@ -1,5 +1,5 @@
 <script setup>
-import { ref, onMounted, onUnmounted } from "vue";
+import { ref, computed, onMounted, onUnmounted } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import EnvCheck from "./components/EnvCheck.vue";
@@ -23,6 +23,14 @@ const updateInfo = ref(null);
 const updateDismissed = ref(false);
 // 更新检查失败（网络/代理/GitHub API）：与「无更新」区分，给用户可关闭提示
 const updateError = ref("");
+
+// D19：数据根可写状态。不可写时显示**不可关闭**横幅（持续状态，不是一次性事件）
+const rootWritable = computed(() => state.value?.root_writable !== false);
+const rootWritableError = computed(() => state.value?.root_writable_error || "");
+function goToRootSettings() {
+  const el = document.querySelector("#path-settings");
+  if (el) el.scrollIntoView({ behavior: "smooth", block: "center" });
+}
 
 // ── v0.2.14 启动态（快捷方式启动 / 运行按钮共用）──
 // launching：是否显示启动态；launchVersion：启动的版本号；launchStage：preparing/waiting/error
@@ -262,6 +270,16 @@ onUnmounted(() => {
   </header>
 
   <main class="content">
+    <!-- D19：数据根不可写。持续状态 → 不可关闭；根目录改好后 state 刷新即自动消失 -->
+    <div class="update-banner root-unwritable-banner" v-if="!rootWritable">
+      <span class="update-text">
+        {{ t("root.unwritable", { path: state?.root_dir || "", err: rootWritableError }) }}
+      </span>
+      <span class="update-actions">
+        <button class="btn small primary" @click="goToRootSettings">{{ t("root.goSettings") }}</button>
+      </span>
+    </div>
+
     <div class="update-banner update-banner-error" v-if="updateError && !updateDismissed">
       <span class="update-text">{{ t("update.checkFailed", { err: updateError }) }}</span>
       <span class="update-actions">
@@ -315,6 +333,7 @@ onUnmounted(() => {
     />
 
     <PathSettings
+      id="path-settings"
       :state="state"
       :default-version="state && state.default_version"
       @refresh="refresh"
@@ -389,6 +408,8 @@ onUnmounted(() => {
 .update-text { color: var(--text); }
 .update-actions { display: flex; gap: 8px; align-items: center; }
 .update-banner-error { border-color: var(--danger, #e5484d); background: rgba(229, 72, 77, 0.08); }
+.root-unwritable-banner { border-color: var(--danger, #e5484d); background: rgba(229, 72, 77, 0.08); }
+.root-unwritable-banner .update-text { color: var(--danger, #e5484d); }
 .update-progress { font-size: 12px; color: var(--text-3); }
 
 .runtime-banner {

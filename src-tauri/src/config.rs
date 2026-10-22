@@ -63,6 +63,9 @@ impl Config {
     pub const FILE_NAME: &'static str = "config.json";
 
     /// 读取配置。config_path 为管理器自身的目录（exe 所在目录）
+    ///
+    /// **纯读取，无副作用。** 文件不存在或解析失败时静默回退到默认配置。
+    /// 需要「损坏时留痕」的启动路径应调用 [`Config::load_checked`]。
     pub fn load(manager_dir: &Path) -> Self {
         let path = manager_dir.join(Self::FILE_NAME);
         if let Ok(text) = std::fs::read_to_string(&path) {
@@ -71,6 +74,40 @@ impl Config {
             }
         }
         Config::default()
+    }
+
+    /// 启动路径专用：读取配置，**文件损坏时写警告日志 + 重命名保留现场**。
+    ///
+    /// 与 [`Config::load`] 的区别仅在「解析失败」这一种情况：
+    /// - 文件不存在 → 与 load 相同，返回默认配置（首次启动的正常路径，不告警）
+    /// - 文件存在但解析失败 → 写 `<manager_dir>/logs/app.log` 警告，把原文件重命名为
+    ///   `config.json.broken-<时间戳>` 保留现场，返回默认配置
+    ///
+    /// 设计依据见 `docs/交互设计约定.md` §2.5。技术债 D18。
+    pub fn load_checked(manager_dir: &Path) -> Self {
+        let path = manager_dir.join(Self::FILE_NAME);
+        let text = match std::fs::read_to_string(&path) {
+            Ok(t) => t,
+            // 文件不存在或读不了：首次启动的正常路径，不告警
+            Err(_) => return Config::default(),
+        };
+        match serde_json::from_str::<Config>(&text) {
+            Ok(cfg) => cfg,
+            Err(e) => {
+                // 配置损坏：留痕 + 保留现场 + 回退默认
+                let ts = crate::logging::stamp_compact(crate::logging::now_secs());
+                let broken = manager_dir.join(format!("{}.broken-{}", Self::FILE_NAME, ts));
+                let rename_ok = std::fs::rename(&path, &broken).is_ok();
+                let mut msg = format!("config.json 解析失败，已回退默认配置：{}", e);
+                if rename_ok {
+                    msg.push_str(&format!("；原文件已保留为 {}", broken.display()));
+                } else {
+                    msg.push_str("；但原文件重命名失败，未保留现场");
+                }
+                crate::logging::write_line(&manager_dir.join("logs"), "app.log", &msg);
+                Config::default()
+            }
+        }
     }
 
     /// 保存配置到管理器目录
@@ -300,6 +337,66 @@ mod tests {
         std::fs::write(dir.join(Config::FILE_NAME), "{ not valid json").unwrap();
         let cfg = Config::load(&dir);
         assert!(cfg.default_version.is_none());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn load_checked_missing_file_returns_default_without_side_effects() {
+        // 首次启动：文件不存在 → 返回默认配置，不写日志、不重命名
+        let dir = tmp("checked-missing");
+        let cfg = Config::load_checked(&dir);
+        assert!(cfg.root_dir.is_none());
+        // 不应产生 logs/ 或 broken 文件
+        assert!(!dir.join("logs").exists());
+        assert!(std::fs::read_dir(&dir).unwrap().next().is_none());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn load_checked_valid_file_returns_config_without_side_effects() {
+        let dir = tmp("checked-valid");
+        let c = Config {
+            default_version: Some("1.2.3".to_string()),
+            ..Config::default()
+        };
+        c.save(&dir).unwrap();
+        let cfg = Config::load_checked(&dir);
+        assert_eq!(cfg.default_version.as_deref(), Some("1.2.3"));
+        // 原文件仍在，无 broken 文件、无 logs
+        assert!(dir.join(Config::FILE_NAME).exists());
+        assert!(!dir.join("logs").exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn load_checked_corrupt_file_renames_and_logs() {
+        // D18：损坏时重命名保留现场 + 写 app.log 警告
+        let dir = tmp("checked-corrupt");
+        let cfg_path = dir.join(Config::FILE_NAME);
+        std::fs::write(&cfg_path, "{ not valid json").unwrap();
+
+        let cfg = Config::load_checked(&dir);
+        assert!(cfg.default_version.is_none());
+
+        // 原文件已被重命名（不存在了）
+        assert!(!cfg_path.exists());
+        // 产生了 config.json.broken-<ts> 文件
+        let broken: Vec<_> = std::fs::read_dir(&dir)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .filter(|e| {
+                e.file_name()
+                    .to_string_lossy()
+                    .starts_with("config.json.broken-")
+            })
+            .collect();
+        assert_eq!(broken.len(), 1, "应有一个 broken 文件");
+
+        // app.log 里有警告，且含「解析失败」
+        let log = std::fs::read_to_string(dir.join("logs").join("app.log")).unwrap();
+        assert!(log.contains("解析失败"));
+        assert!(log.contains("已回退默认配置"));
+
         let _ = std::fs::remove_dir_all(&dir);
     }
 
