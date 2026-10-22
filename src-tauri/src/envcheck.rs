@@ -217,24 +217,46 @@ pub fn check_node(root: &Path) -> CheckItem {
         Some(v) => {
             let ok_ver = parse_semver(&v).map(node_version_ok).unwrap_or(false);
             if !ok_ver {
-                return node_fallback_or_fail(root, format!("{}（需要 22.19+ 或 24.2+）", v));
+                return node_fallback_or_fail(
+                    root,
+                    format!("{}（需要 22.19+ 或 24.2+）", v),
+                    "env.node.detail_low",
+                    &v,
+                );
             }
             // 版本号通过 → 特性探测兜底
             match probe_import_meta_main() {
                 Some(false) => node_fallback_or_fail(
                     root,
                     format!("{}（版本看似满足，但缺少 import.meta.main 特性）", v),
+                    "env.node.detail_low",
+                    &v,
                 ),
                 _ => ok_item("Node.js", format!("{}（满足 22.19+ / 24.2+）", v), true)
                     .i18n_detail("env.node.detail_ok", serde_json::json!({ "v": v })),
             }
         }
-        None => node_fallback_or_fail(root, "未找到 node 命令".to_string()),
+        None => node_fallback_or_fail(
+            root,
+            "未找到 node 命令".to_string(),
+            "env.node.detail_missing",
+            "",
+        ),
     }
 }
 
 /// 系统 Node 不可用时的处理：便携 Node 就绪 → 通过；否则失败。
-fn node_fallback_or_fail(root: &Path, detail: String) -> CheckItem {
+///
+/// `detail_key` 区分失败原因：没装用 `detail_missing`，装了但版本低/缺特性用 `detail_low`。
+/// 曾共用 `detail_missing`，导致装了旧版的用户看到「未找到 node 命令」的误导提示。
+///
+/// `version` 传给 i18n 占位符 `{v}`；`detail_missing` 文案无占位符，传空串即可。
+fn node_fallback_or_fail(
+    root: &Path,
+    detail: String,
+    detail_key: &str,
+    version: &str,
+) -> CheckItem {
     if crate::runtime::bundled_node_ok(root) {
         return ok_item("Node.js", format!("{}（将使用便携 Node）", detail), true).i18n_detail(
             "env.node.detail_bundled",
@@ -260,7 +282,7 @@ fn node_fallback_or_fail(root: &Path, detail: String) -> CheckItem {
         hint_key,
         "https://nodejs.org/zh-cn/download",
     )
-    .i18n_detail("env.node.detail_missing", serde_json::Value::Null)
+    .i18n_detail(detail_key, serde_json::json!({ "v": version }))
 }
 
 /// 检查 pnpm 是否可用。

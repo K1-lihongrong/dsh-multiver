@@ -35,6 +35,7 @@ export default {
     "env.node.detail_old": "{v} (requires 22.19+ or 24.2+)",
     "env.node.detail_feature": "{v} (version looks OK but lacks import.meta.main)",
     "env.node.detail_missing": "node not found; please install Node.js 22.19+ (or 24.2+)",
+  "env.node.detail_low": "Node.js {v} is too old; 22.19+ or 24.2+ is required",
     "env.node.detail_bundled": "{v} (will use bundled Node)",
     "env.pnpm.detail_missing": "pnpm not found; please install pnpm",
     "env.pnpm.detail_bundled": "will use bundled pnpm",
