@@ -1,8 +1,0 @@
-docs: 新增 Windows 本机验收记录（2026-10-22）
-
-Windows 侧完成本机验收：自动 10 项（sha256 一致、cargo test 148 passed、clippy、
-list/which/env、set-default 与转发脚本、D18、D20、R-05 两分支）+ 手动 5 项
-（M-5 L-18 控制台窗口、M-1 D19 不可写横幅、M-4 B1 面板、M-2 R-12 换源、M-3 R-13 错误态）。
-全部通过。另附手动项清单，便于复跑。
-
-用户可见变化：无（仅新增文档）
