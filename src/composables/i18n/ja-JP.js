@@ -5,6 +5,8 @@ export default {
     "app.rootDir": "ルート",
     "app.toastHint": "クリックで全文を表示",
     "app.openLinkFailed": "リンクを開けませんでした",
+    "root.unwritable": "データルートに書き込めません：{path}（{err}）。インストール・アンインストールが失敗します。書き込み可能なディレクトリに変更してください。",
+    "root.goSettings": "設定へ",
     "update.available": "新しいバージョン {latest} があります（現在 {current}）",
     "update.download": "ダウンロード",
     "update.viewRelease": "リリースノート",

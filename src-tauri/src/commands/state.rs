@@ -36,6 +36,10 @@ pub(crate) struct AppState {
     official_home_dir: Option<String>,
     /// 用户是否已忽略「缺少运行时」启动提示（v0.2.9）
     runtime_prompt_dismissed: bool,
+    /// 数据根是否可写（D19）：`Dirs::ensure()` 是否成功。false 时前端显示不可关闭横幅
+    root_writable: bool,
+    /// 不可写时的具体错误（供横幅展示）；可写时为 None
+    root_writable_error: Option<String>,
 }
 
 #[tauri::command]
@@ -44,7 +48,8 @@ pub(crate) fn get_state(app: tauri::AppHandle) -> AppState {
     let cfg = Config::load(&mdir);
     let root = cfg.resolve_root(&mdir);
     let dirs = Dirs::new(root.clone());
-    let _ = dirs.ensure();
+    // D19：记录 ensure 结果供前端横幅使用（不再静默忽略）
+    let ensure_err = dirs.ensure().err().map(|e| e.to_string());
     let extra_dirs = vec![
         ExtraDir {
             name: "logs".into(),
@@ -84,6 +89,8 @@ pub(crate) fn get_state(app: tauri::AppHandle) -> AppState {
         official_home_dir: crate::paths::official_dsh_home()
             .map(|p| p.to_string_lossy().to_string()),
         runtime_prompt_dismissed: cfg.runtime_prompt_dismissed,
+        root_writable: ensure_err.is_none(),
+        root_writable_error: ensure_err,
     }
 }
 

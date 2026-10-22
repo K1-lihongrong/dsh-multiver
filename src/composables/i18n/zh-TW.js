@@ -5,6 +5,8 @@ export default {
     "app.rootDir": "根目錄",
     "app.toastHint": "點擊查看完整內容",
     "app.openLinkFailed": "開啟連結失敗",
+    "root.unwritable": "資料根不可寫：{path}（{err}）。安裝、卸載等功能會失敗，請改到可寫目錄。",
+    "root.goSettings": "去設定",
     "update.available": "發現新版本 {latest}（目前 {current}）",
     "update.download": "下載更新",
     "update.viewRelease": "查看更新說明",

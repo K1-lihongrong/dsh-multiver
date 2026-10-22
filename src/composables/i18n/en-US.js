@@ -5,6 +5,8 @@ export default {
     "app.rootDir": "Root",
     "app.toastHint": "Click to view full content",
     "app.openLinkFailed": "Failed to open link",
+    "root.unwritable": "Data root is not writable: {path} ({err}). Install/uninstall will fail; please switch to a writable directory.",
+    "root.goSettings": "Go to settings",
     "update.available": "New version {latest} available (current {current})",
     "update.download": "Download",
     "update.viewRelease": "Release notes",
