@@ -4,6 +4,7 @@ import { t } from "../composables/useI18n.js";
 import { isDark } from "../composables/useTheme.js";
 import bgLight from "../assets/loading-bg-light-1280.webp";
 import bgDark from "../assets/loading-bg-dark-1280.webp";
+import bgError from "../assets/loading-bg-error-1280.webp";
 import dshLogo from "../assets/dsh-logo.png";
 
 // v0.2.14：启动加载页（全屏背景 + 底部玻璃面板）。
@@ -15,19 +16,10 @@ const props = defineProps({
 });
 const emit = defineEmits(["back", "view-logs"]);
 
-// R-13：错误态背景。
-// 目前设计尚未提供错误态图（见 docs/开发缺口.md R-13），先把结构留出：
-// 一旦把 `loading-bg-error-light/dark-*.webp` 放进 assets，只需在此导入并替换 `null`。
-const bgErrorLight = null;
-const bgErrorDark = null;
-
+// R-13：错误态背景（设计稿「故障页」，浅色/深色主题共用同一张）。
 const bgSrc = computed(() => {
-  const dark = isDark();
-  if (props.stage === "error") {
-    const err = dark ? bgErrorDark : bgErrorLight;
-    if (err) return err; // 错误态图到位后用它的
-  }
-  return dark ? bgDark : bgLight;
+  if (props.stage === "error") return bgError;
+  return isDark() ? bgDark : bgLight;
 });
 
 const statusText = computed(() => {
