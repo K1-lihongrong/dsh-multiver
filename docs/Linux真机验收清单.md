@@ -154,7 +154,7 @@ WEBKIT_DISABLE_COMPOSITING_MODE=1 ./dsh-multiver_*.AppImage
 完整记录见 [验收记录-Linux容器-2026-10-22](验收记录-Linux容器-2026-10-22.md)（Ubuntu 24.04 + Xvfb/Openbox + Sway headless，仍非真实桌面）。
 
 - 20 项通过/部分通过；不通过 **L-31**（镜像滞后）、**L-32**（离线误报 + ~71s）；7 项 N/A。
-- 已修复：L-32（8s HTTP ping）、L-29（错误可见）、L-09（字体提示）、L-18（URL 回退）、L-31（换源重试）、Node 24.2 口径、L-11 多开文档。
+- 已修复并回归通过（2026-10-22 第二轮，见验收记录 §6）：L-32（8s HTTP ping，离线 ≤10s 明确失败）、L-29（错误可见）、L-09（字体提示）、L-18（URL 回退）、L-31（换源重试）、Node 24.2 口径、L-11 多开文档；回归项 L-23（7 项）、setup-runtime、`--help`/`--version` 均通过。
 - 仍需真桌面：L-06、L-33~L-35、AppImage/deb 安装后的 GUI、L-17 输入法/剪贴板、L-30 GNOME 代理。
 
 ## 相关文档
