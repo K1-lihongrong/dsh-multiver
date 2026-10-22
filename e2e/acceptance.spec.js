@@ -1,7 +1,7 @@
 ﻿import { test, expect } from "@playwright/test";
 import { mockTauri, makeVersion } from "./helpers.js";
 
-test("L-18 无浏览器时展示完整 URL（而不是静默成功）", async ({ page }) => {
+test("浏览器打开返回失败结构时展示 URL（前端兜底能力）", async ({ page }) => {
   await mockTauri(page, {
     installed: [makeVersion("0.2.1-rc.2", { isolated: true })],
     extra: {
