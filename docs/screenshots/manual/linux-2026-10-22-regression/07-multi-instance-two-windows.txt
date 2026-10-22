@@ -1,0 +1,25 @@
+== wmctrl -l ==
+0x00200003  0 all-in-one-74-s2qqr about:blank - Chromium
+0x00c00003  0 all-in-one-74-s2qqr DSH 版本管理器
+0x01400003  0 all-in-one-74-s2qqr DSH 版本管理器
+
+== pgrep -x dsh-multiver ==
+15853
+16716
+count=2
+
+== config.json ==
+{
+  "root_dir": "/tmp/acc3/app",
+  "default_version": null,
+  "isolated_versions": [],
+  "broken_versions": [],
+  "maintenance": {
+    "auto_enabled": true,
+    "last_prune_at": 1792638698,
+    "last_cleanup_at": 1792639047,
+    "last_cleanup_count": 0
+  },
+  "use_official_dsh_home": false,
+  "runtime_prompt_dismissed": false
+}
