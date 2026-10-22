@@ -26,6 +26,20 @@ pub struct UpdateInfo {
     /// 新 exe 的 SHA256（十六进制小写，来自 Release asset 的 digest 字段）。
     /// 用于下载后校验完整性（v0.2.10）。
     pub sha256: Option<String>,
+    /// 检查失败原因（成功时为 None）。GUI 显示「检查更新失败」而不是静默当作「无更新」。
+    pub error: Option<String>,
+}
+
+fn failure(current: &str, error: String) -> UpdateInfo {
+    UpdateInfo {
+        has_update: false,
+        current: current.to_string(),
+        latest: None,
+        release_url: None,
+        download_url: None,
+        sha256: None,
+        error: Some(error),
+    }
 }
 
 /// GitHub 仓库（用于查询 Releases）
@@ -36,14 +50,6 @@ const REPO: &str = "K1-lihongrong/dsh-multiver";
 /// 网络 / 解析失败时返回 `has_update: false`（静默失败，不打扰用户）。
 pub fn check() -> UpdateInfo {
     let current = crate::cli::VERSION.to_string();
-    let none = UpdateInfo {
-        has_update: false,
-        current: current.clone(),
-        latest: None,
-        release_url: None,
-        download_url: None,
-        sha256: None,
-    };
 
     let url = format!("https://api.github.com/repos/{}/releases/latest", REPO);
     let client = match crate::runtime::blocking_client_ua(
@@ -51,18 +57,25 @@ pub fn check() -> UpdateInfo {
         Some("dsh-multiver"),
     ) {
         Ok(c) => c,
-        Err(_) => return none,
+        Err(e) => return failure(&current, format!("无法创建网络客户端：{}", e)),
     };
     let resp = match client.get(&url).send() {
         Ok(r) => r,
-        Err(_) => return none,
+        Err(e) => {
+            let msg = if e.is_timeout() {
+                "连接 GitHub API 超时（10s）".to_string()
+            } else {
+                format!("连接 GitHub API 失败：{}", e)
+            };
+            return failure(&current, msg);
+        }
     };
     if !resp.status().is_success() {
-        return none;
+        return failure(&current, format!("GitHub API 返回 HTTP {}", resp.status()));
     }
     let body: serde_json::Value = match resp.json() {
         Ok(v) => v,
-        Err(_) => return none,
+        Err(e) => return failure(&current, format!("解析 GitHub API 响应失败：{}", e)),
     };
 
     let tag = body.get("tag_name").and_then(|v| v.as_str()).unwrap_or("");
@@ -95,7 +108,7 @@ pub fn check() -> UpdateInfo {
 
     let latest = tag.trim_start_matches('v').to_string();
     if latest.is_empty() {
-        return none;
+        return failure(&current, "GitHub API 响应缺少 tag_name".to_string());
     }
     let has_update = is_newer(&latest, &current);
     UpdateInfo {
@@ -105,6 +118,7 @@ pub fn check() -> UpdateInfo {
         release_url: html_url,
         download_url,
         sha256,
+        error: None,
     }
 }
 

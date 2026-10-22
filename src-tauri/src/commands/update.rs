@@ -13,6 +13,7 @@ pub(crate) async fn check_update() -> crate::updater::UpdateInfo {
             release_url: None,
             download_url: None,
             sha256: None,
+            error: Some("更新检查任务异常结束".to_string()),
         })
 }
 

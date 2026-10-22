@@ -1,4 +1,4 @@
-//! 安装 / 卸载 / 错误分类（D5 拆分：原 versions.rs 的 install 相关）。
+﻿//! 安装 / 卸载 / 错误分类（D5 拆分：原 versions.rs 的 install 相关）。
 use serde::Serialize;
 use std::path::Path;
 use std::process::Command;
@@ -414,7 +414,7 @@ pub fn classify_error(raw: &str) -> &'static str {
 fn friendly_error(raw: &str) -> String {
     if raw.contains("ERR_PNPM_NO_MATCHING_VERSION") || raw.contains("No matching version found") {
         format!(
-            "该版本在官方源上发布不完整（依赖子包缺失），无法安装。\n建议换一个版本重试。\n\n原始信息：\n{}",
+            "该版本依赖的子包在当前 npm 源缺失（可能是镜像源未同步，或版本发布不完整），无法安装。\n可切换官方源重试；若仍失败请换一个版本。\n\n原始信息：\n{}",
             raw
         )
     } else if raw.contains("ERR_PNPM_FETCH") || raw.contains("UND_ERR") || raw.contains("ETIMEDOUT")

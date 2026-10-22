@@ -68,6 +68,14 @@
   - 环境检查新增 **git**（非致命，Git 来源插件需要）；pnpm 增加 **10+ 版本校验**（`allowBuilds` 依赖）。
   - HTTP 下载/更新/安装源探测统一客户端：未设置代理环境变量时**读取 Windows 系统代理**（注册表 Internet Settings）。
   - 2026-10-22 WSL 实测补漏：CLI `setup-runtime` 在非 Windows 明确报错并 **exit 1**（`--json` 返回 `supported:false`）；补回 `--help/-h`、`--version/-V` 别名；只读挂载 0 MB 文案澄清；Linux 源码构建依赖补 `libdbus-1-dev`（文档）。
+- **Linux 验收第二轮修复（2026-10-22，容器实测）**：
+  - **L-32**：registry 检查改为 8s 超时 HTTP `/-/ping`，不再用 `pnpm view`（其离线缓存会误报可达）；离线/死代理明确失败，耗时从 ~71s 降到 ≤8s。
+  - **L-09**：Linux 环境检查新增中文字体项（`fc-list :lang=zh`，非致命），缺字体时提示安装 `fonts-noto-cjk`。
+  - **L-18**：「浏览器打开」改为管理器捕获 URL 后自行打开；无浏览器时弹窗展示完整 URL，不再静默失败（CLI `run` 保留原控制台行为）。
+  - **L-31**：镜像源子包缺失（`ERR_PNPM_NO_MATCHING_VERSION`）时，失败弹窗提供换官方源重试。
+  - **L-29**：更新检查失败写入 `error` 字段；GUI 显示可关闭的错误横幅，CLI 返回 `error` + exit 1，不再伪装「无更新」。
+  - Node 下限口径统一为 `22.19+ / 24.2+`（24.0/24.1 缺 `import.meta.main`）。
+  - L-11：文档声明支持多开（共享数据根注意事项）。
 
 ### 文档
 - 新增 [CLI 迁移指南](docs/CLI迁移指南-v0.3.0.md)（旧→新对照 + 脚本迁移示例）。

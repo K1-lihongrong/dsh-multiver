@@ -275,6 +275,13 @@ pub(crate) fn create_shortcut(app: tauri::AppHandle, version: String) -> Result<
 /// home 与「运行」一致：非隔离用共享 home，隔离用独立 home。
 ///
 /// 交互：
+#[derive(serde::Serialize)]
+pub(crate) struct OpenInBrowserResult {
+    pub url: Option<String>,
+    pub opened: bool,
+    pub message: String,
+}
+
 /// - 若该版本已有内嵌窗口（ProcMap 中存在 dsh-<版本>），先弹原生对话框确认「再开一个？」
 /// - 端口固定 3080；若被占用，弹原生对话框让用户选择「换随机端口」或「取消」
 #[tauri::command]
@@ -282,7 +289,7 @@ pub(crate) async fn open_in_browser(
     app: tauri::AppHandle,
     procs: tauri::State<'_, ProcMap>,
     version: String,
-) -> Result<String, String> {
+) -> Result<OpenInBrowserResult, String> {
     use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
 
     let mdir = manager_dir(&app);
@@ -311,7 +318,11 @@ pub(crate) async fn open_in_browser(
             ))
             .blocking_show();
         if !ok {
-            return Ok("已取消".to_string());
+            return Ok(OpenInBrowserResult {
+                url: None,
+                opened: false,
+                message: "已取消".to_string(),
+            });
         }
     }
 
@@ -333,25 +344,62 @@ pub(crate) async fn open_in_browser(
             ))
             .blocking_show();
         if !use_random {
-            return Ok("已取消".to_string());
+            return Ok(OpenInBrowserResult {
+                url: None,
+                opened: false,
+                message: "已取消".to_string(),
+            });
         }
         port = 0;
     }
 
-    // 3) 启动（新控制台，不传 --no-open，让 dsh 打开系统浏览器）
-    let (ok, msg) =
-        launcher::spawn_web_console(&vdir, &home, &dirs.store, &dirs.cache, &dirs.state, port);
-    if ok {
-        // 提示：端口 + 数据目录
-        Ok(format!("{}；数据目录：{}", msg, home.to_string_lossy()))
+    // 3) 启动（--no-open，由管理器打开浏览器；失败时把 URL 返回给用户）
+    let (_child, url) = match launcher::spawn_web_console(
+        &vdir,
+        &home,
+        &dirs.store,
+        &dirs.cache,
+        &dirs.state,
+        port,
+    ) {
+        Ok(v) => v,
+        Err(msg) => {
+            logging::log_app_error(
+                &dirs.root,
+                "open_in_browser",
+                &format!("{} ({})", version, msg),
+            );
+            return Err(msg);
+        }
+    };
+    let (opened, open_err) = match actions::open_url_checked(&url) {
+        Ok(()) => (true, String::new()),
+        Err(e) => {
+            logging::log_app_error(
+                &dirs.root,
+                "open_in_browser",
+                &format!("打开浏览器失败（{}）：{}", version, e),
+            );
+            (false, e)
+        }
+    };
+    let message = if opened {
+        format!(
+            "已启动 dsh web：{}；数据目录：{}",
+            url,
+            home.to_string_lossy()
+        )
     } else {
-        logging::log_app_error(
-            &dirs.root,
-            "open_in_browser",
-            &format!("{} ({})", version, msg),
-        );
-        Err(msg)
-    }
+        format!(
+            "dsh 已启动，但无法自动打开浏览器（{}）。请手动访问：{}",
+            open_err, url
+        )
+    };
+    Ok(OpenInBrowserResult {
+        url: Some(url),
+        opened,
+        message,
+    })
 }
 
 /// 重启某版本窗口对应的 dsh web 进程：

@@ -21,6 +21,8 @@ const installed = ref([]);
 // 更新提醒（C1）：查到有新版则显示横幅；可关闭（本次会话内不再提示）
 const updateInfo = ref(null);
 const updateDismissed = ref(false);
+// 更新检查失败（网络/代理/GitHub API）：与「无更新」区分，给用户可关闭提示
+const updateError = ref("");
 
 // ── v0.2.14 启动态（快捷方式启动 / 运行按钮共用）──
 // launching：是否显示启动态；launchVersion：启动的版本号；launchStage：preparing/waiting/error
@@ -103,12 +105,18 @@ async function openUrl(url) {
   catch (e) { notify(t("app.openLinkFailed") + "：" + e); }
 }
 
-/// 更新检查（后台，静默失败）
+/// 更新检查（后台；失败时展示可关闭的错误提示，不再静默当作“无更新”）
 async function checkUpdate() {
   try {
     const info = await invoke("check_update");
-    if (info && info.has_update) updateInfo.value = info;
-  } catch (_) { /* 静默：更新检查不该打扰用户 */ }
+    if (info && info.has_update) {
+      updateInfo.value = info;
+    } else if (info && info.error) {
+      updateError.value = info.error;
+    }
+  } catch (e) {
+    updateError.value = "" + e;
+  }
 }
 
 // v0.2.10 一键更新：下载 + 校验 + 替换 + 重启
@@ -254,6 +262,14 @@ onUnmounted(() => {
   </header>
 
   <main class="content">
+    <div class="update-banner update-banner-error" v-if="updateError && !updateDismissed">
+      <span class="update-text">{{ t("update.checkFailed", { err: updateError }) }}</span>
+      <span class="update-actions">
+        <button class="btn small" @click="updateError = ''; checkUpdate()">{{ t("update.retryCheck") }}</button>
+        <button class="btn small" @click="updateError = ''">×</button>
+      </span>
+    </div>
+
     <div class="update-banner" v-if="updateInfo && !updateDismissed">
       <span class="update-text">
         {{ t("update.available", { latest: updateInfo.latest, current: updateInfo.current }) }}
@@ -372,6 +388,7 @@ onUnmounted(() => {
 }
 .update-text { color: var(--text); }
 .update-actions { display: flex; gap: 8px; align-items: center; }
+.update-banner-error { border-color: var(--danger, #e5484d); background: rgba(229, 72, 77, 0.08); }
 .update-progress { font-size: 12px; color: var(--text-3); }
 
 .runtime-banner {

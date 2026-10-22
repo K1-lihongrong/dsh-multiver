@@ -1,4 +1,4 @@
-﻿# dsh-multiver
+# dsh-multiver
 
 一个**轻量、便携**的 DeepSeek Harness（dsh）版本管理器，用于在同一台机器上安装、切换、运行多个 dsh 版本。
 
@@ -223,7 +223,7 @@ node gen-icons.mjs
 - Linux：WebKitGTK 4.1、libayatana-appindicator3 等（AppImage 已内含大部分）
 
 **开发 / 从源码构建**：
-- Node.js `^22.19.0` 或 `>=24`
+- Node.js `^22.19.0` 或 `>=24.2`
 - pnpm 10+（建议 11.x 及以上；便携版内置 12.11.2）
 - Rust 工具链
 - Windows：MSVC C++ 构建工具 + Windows SDK
@@ -245,7 +245,8 @@ node gen-icons.mjs
 - Windows 系统代理会自动用于下载/更新（仅在未设置 HTTP(S)_PROXY 环境变量时）
 - Windows 图标有缓存，更新 exe 后若图标未变，需清缓存（`ie4uinit.exe -show` 或重启资源管理器）
 - 部分早期 dsh 版本依赖已下架的私有包，任何源都无法安装（界面会标灰并提示换版本）
-- 使用 npm 官方源时，国内下载可能较慢；淘宝镜像同步滞后，可能出现子包缺失
+- 使用 npm 官方源时，国内下载可能较慢；淘宝镜像同步滞后，可能出现子包缺失（安装失败可换官方源重试）
+- 支持多开：多个管理器实例共享同一数据根，修改类操作建议只保留一个窗口
 - **macOS 暂未支持**（Windows 与 Linux 均已支持）
 - **Linux 内嵌窗口「重新连接中」已修复**（v0.2.4，根因是管理器进程管理缺陷，非平台差异）
 - Linux 构建产物为 AppImage / deb（暂无 rpm、Snap、Flatpak）

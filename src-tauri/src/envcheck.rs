@@ -65,6 +65,7 @@ fn name_to_key(name: &str) -> &'static str {
         "Node.js" => "env.node.name",
         "pnpm" => "env.pnpm.name",
         "git" => "env.git.name",
+        "中文字体" => "env.fonts.name",
         "根目录可写" => "env.writable.name",
         "磁盘空间" => "env.disk.name",
         "npm 源连通" => "env.registry.name",
@@ -152,13 +153,13 @@ fn parse_semver(s: &str) -> Option<(u32, u32, u32)> {
     Some((major, minor, patch))
 }
 
-/// dsh 需要的 Node 版本：`^22.19.0` 或 `>=24`。
+/// dsh 需要的 Node 版本：`^22.19.0` 或 `>=24.2.0`。
 ///
 /// 为什么不是简单的 ">= 22"：dsh 的入口用了 `import.meta.main`（Node 22.18/22.19 一线
-/// 回溯支持、24.2 正式引入）。**22.16 这类">= 22 但不含该特性"的版本会静默失败**——
-/// `dsh` 零输出、exit 0，表现为内嵌窗口连不上。故下限收紧到 22.19。
+/// 回溯支持、24.2 正式引入）。**22.16 / 24.0 / 24.1 这类">= 22 但不含该特性"的版本会静默失败**——
+/// `dsh` 零输出、exit 0，表现为内嵌窗口连不上。故下限收紧到 22.19 / 24.2。
 fn node_version_ok((major, minor, _patch): (u32, u32, u32)) -> bool {
-    (major == 22 && minor >= 19) || major >= 24
+    (major == 22 && minor >= 19) || (major == 24 && minor >= 2) || major > 24
 }
 
 /// 特性探测：当前 node 是否支持 `import.meta.main`（dsh 启动的必要条件）。
@@ -210,13 +211,13 @@ pub fn system_pnpm_ok() -> bool {
 /// 2. 系统不满足但**便携 Node 已就绪** → 通过（提示将用便携运行时）
 /// 3. 都没有 → 失败（引导下载；可用 `--setup-runtime` 自动下载）
 ///
-/// 系统的两层判断：版本号（需 `^22.19.0` 或 `>=24`）+ 特性探测（`import.meta.main`）。
+/// 系统的两层判断：版本号（需 `^22.19.0` 或 `>=24.2`）+ 特性探测（`import.meta.main`）。
 pub fn check_node(root: &Path) -> CheckItem {
     match run_version("node") {
         Some(v) => {
             let ok_ver = parse_semver(&v).map(node_version_ok).unwrap_or(false);
             if !ok_ver {
-                return node_fallback_or_fail(root, format!("{}（需要 22.19+ 或 24+）", v));
+                return node_fallback_or_fail(root, format!("{}（需要 22.19+ 或 24.2+）", v));
             }
             // 版本号通过 → 特性探测兜底
             match probe_import_meta_main() {
@@ -224,7 +225,7 @@ pub fn check_node(root: &Path) -> CheckItem {
                     root,
                     format!("{}（版本看似满足，但缺少 import.meta.main 特性）", v),
                 ),
-                _ => ok_item("Node.js", format!("{}（满足 22.19+ / 24+）", v), true)
+                _ => ok_item("Node.js", format!("{}（满足 22.19+ / 24.2+）", v), true)
                     .i18n_detail("env.node.detail_ok", serde_json::json!({ "v": v })),
             }
         }
@@ -242,12 +243,12 @@ fn node_fallback_or_fail(root: &Path, detail: String) -> CheckItem {
     }
     let (hint, hint_key) = if cfg!(windows) {
         (
-            "可运行 dsh-multiver setup-runtime 自动下载便携 Node，或到 Node.js 官网下载 LTS 版（22.19+ / 24+）安装。",
+            "可运行 dsh-multiver setup-runtime 自动下载便携 Node，或到 Node.js 官网下载 LTS 版（22.19+ / 24.2+）安装。",
             "env.node.hint_missing",
         )
     } else {
         (
-            "请用系统包管理器安装 Node.js（如 apt install nodejs），或到 Node.js 官网下载 22.19+ / 24+ 版本。",
+            "请用系统包管理器安装 Node.js（如 apt install nodejs），或到 Node.js 官网下载 22.19+ / 24.2+ 版本。",
             "env.node.hint_missing_linux",
         )
     };
@@ -318,7 +319,6 @@ pub fn check_pnpm(root: &Path) -> CheckItem {
 }
 
 /// 检查 git（非致命）：安装 Git 来源插件/依赖时需要。
-///
 /// 官方插件安装支持 `github:` / `git+https:` 等 spec，pnpm 拉取这些依赖依赖 `git` 可执行文件；
 /// 缺失时安装只会得到晦涩的 pnpm 报错，故单独提示（不阻塞 Node/pnpm 主流程）。
 pub fn check_git() -> CheckItem {
@@ -334,6 +334,57 @@ pub fn check_git() -> CheckItem {
         )
         .i18n_detail("env.git.detail_missing", serde_json::Value::Null),
     }
+}
+
+/// 检查中文字体（仅 Linux，非致命）。
+///
+/// GTK/WebKit 缺少 CJK 字体时，界面中文会变成空白（不是方块），用户无法判断原因。
+/// 用 `fc-list :lang=zh` 探测；Windows 系统自带字体，不做该项。
+#[cfg(unix)]
+pub fn check_fonts() -> CheckItem {
+    use crate::console_decode::decode_console;
+
+    match Command::new("fc-list").arg(":lang=zh").output() {
+        Ok(out) if out.status.success() => {
+            if has_font_output(&decode_console(&out.stdout)) {
+                ok_item("中文字体", "中文字体可用".to_string(), false)
+                    .i18n_detail("env.fonts.detail_ok", serde_json::Value::Null)
+            } else {
+                fail_item(
+                    "中文字体",
+                    "未检测到中文字体".to_string(),
+                    false,
+                    "请安装中文字体（如 sudo apt install fonts-noto-cjk），否则界面中文可能显示为空白。",
+                    "env.fonts.hint",
+                    "",
+                )
+                .i18n_detail("env.fonts.detail_missing", serde_json::Value::Null)
+            }
+        }
+        Ok(_) => fail_item(
+            "中文字体",
+            "未检测到中文字体".to_string(),
+            false,
+            "请安装中文字体（如 sudo apt install fonts-noto-cjk），否则界面中文可能显示为空白。",
+            "env.fonts.hint",
+            "",
+        )
+        .i18n_detail("env.fonts.detail_missing", serde_json::Value::Null),
+        Err(_) => fail_item(
+            "中文字体",
+            "未找到 fc-list（fontconfig），无法检测中文字体".to_string(),
+            false,
+            "请安装 fontconfig 与中文字体（如 sudo apt install fontconfig fonts-noto-cjk）。",
+            "env.fonts.hint",
+            "",
+        )
+        .i18n_detail("env.fonts.detail_no_fc", serde_json::Value::Null),
+    }
+}
+
+#[cfg(unix)]
+fn has_font_output(s: &str) -> bool {
+    !s.trim().is_empty()
 }
 
 /// 检查根目录可写
@@ -437,13 +488,14 @@ fn human_bytes(n: u64) -> String {
     }
 }
 
-/// 检查 npm registry 是否可达。
-///
-/// v0.2.9：系统 pnpm 不可用时回退到**便携 pnpm**（`<root>/tools/pnpm/pnpm.exe`）。
-/// 否则"仅有便携运行时"的场景下，本项会误报失败（实际不影响安装）。
-pub fn check_registry(root: &Path) -> CheckItem {
-    // 用 pnpm view 查询一个轻量包，验证 registry 连通。
-    // 系统 pnpm 优先；不可用时用便携 pnpm 的完整路径（独立可执行文件，无需走 cmd）。
+/// 当前 pnpm 会使用的 registry（用于连通性探测；失败时回退官方源）。
+fn active_registry(root: &Path) -> String {
+    if let Ok(v) = std::env::var("npm_config_registry") {
+        let t = v.trim();
+        if t.starts_with("http://") || t.starts_with("https://") {
+            return normalize_registry(t);
+        }
+    }
     let mut cmd = if system_pnpm_ok() {
         cmd_command("pnpm")
     } else {
@@ -452,58 +504,123 @@ pub fn check_registry(root: &Path) -> CheckItem {
         if bundled.is_file() {
             Command::new(bundled)
         } else {
-            // 系统与便携都没有 → 直接用 cmd_command("pnpm")，让下面的 Err 分支给出引导
             cmd_command("pnpm")
         }
     };
-    cmd.arg("view").arg("@deepseek-ai/dsh").arg("version");
-    match cmd.output() {
-        Ok(out) if out.status.success() => {
-            // pnpm view 返回的是最新版本号；包成"可达（最新 X）"让用户明白查到了什么
-            let ver = crate::console_decode::decode_console(&out.stdout)
+    cmd.args(["config", "get", "registry"]);
+    if let Ok(out) = cmd.output() {
+        if out.status.success() {
+            let s = crate::console_decode::decode_console(&out.stdout)
                 .trim()
                 .to_string();
-            let detail = if ver.is_empty() {
-                "可达".to_string()
-            } else {
-                format!("可达（最新 {}）", ver)
-            };
-            let item = ok_item("npm 源连通", detail, false);
-            if ver.is_empty() {
-                item.i18n_detail("env.registry.detail_ok", serde_json::Value::Null)
-            } else {
-                item.i18n_detail(
-                    "env.registry.detail_latest",
-                    serde_json::json!({ "v": ver }),
-                )
+            if s.starts_with("http://") || s.starts_with("https://") {
+                return normalize_registry(&s);
             }
         }
-        Ok(out) => {
-            let e = crate::console_decode::decode_console(&out.stderr)
-                .trim()
-                .to_string();
-            fail_item(
+    }
+    "https://registry.npmjs.org/".to_string()
+}
+
+/// 统一 registry 末尾的 `/`（pnpm/npm 允许带或不带）。
+fn normalize_registry(s: &str) -> String {
+    format!("{}/", s.trim().trim_end_matches('/'))
+}
+
+/// registry 的 ping 地址。
+fn registry_ping_url(reg: &str) -> String {
+    format!("{}-/ping", reg)
+}
+
+/// HTTP 响应是否说明 registry 网络可达。
+///
+/// 401/403/404 都说明服务端有响应（私有源可能不支持 `/-/ping`），只有 5xx / 网络错误判失败。
+fn registry_status_reachable(status: u16) -> bool {
+    status < 500
+}
+
+/// 检查 npm registry 是否可达。
+///
+/// **不再用 `pnpm view`**：pnpm 在联网失败时会回退本地元数据缓存并成功返回，
+/// 造成“断网也显示源可达”的误报（2026-10-22 Linux 验收 L-32，离线耗时 ~71s）。
+/// 改为带 8s 超时的 HTTP `/-/ping` 探测；代理由 `runtime::blocking_client` 处理
+/// （Linux 读环境变量；Windows 读系统代理）。
+pub fn check_registry(root: &Path) -> CheckItem {
+    use std::time::{Duration, Instant};
+
+    let registry = active_registry(root);
+    let url = registry_ping_url(&registry);
+    let client = match crate::runtime::blocking_client(Duration::from_secs(8)) {
+        Ok(c) => c,
+        Err(e) => {
+            return fail_item(
                 "npm 源连通",
-                if e.is_empty() { "无法访问 npm 源".to_string() } else { e.lines().next().unwrap_or("").to_string() },
+                format!("无法创建 HTTP 客户端：{}", e),
                 false,
-                "可能是网络或代理问题。安装时若失败，可在弹窗里换一个 npm 源（如阿里云 npmmirror）重试。",
+                "可能是网络或代理问题。安装时若失败，可在弹窗里换一个 npm 源重试。",
                 "env.registry.hint",
                 "",
             )
-            .i18n_detail("env.registry.detail_fail", serde_json::json!({ "err": e }))
+            .i18n_detail("env.registry.detail_err", serde_json::json!({ "err": e }));
         }
-        Err(e) => fail_item(
-            "npm 源连通",
-            format!("检查失败：{}", e),
-            false,
-            "可能是网络或代理问题。安装时若失败，可在弹窗里换一个 npm 源重试。",
-            "env.registry.hint",
-            "",
-        )
-        .i18n_detail(
-            "env.registry.detail_err",
-            serde_json::json!({ "err": e.to_string() }),
-        ),
+    };
+    let started = Instant::now();
+    match client.get(&url).send() {
+        Ok(resp) => {
+            let status = resp.status().as_u16();
+            let ms = started.elapsed().as_millis() as u64;
+            if registry_status_reachable(status) {
+                ok_item(
+                    "npm 源连通",
+                    format!("可达（HTTP {}，{}ms）", status, ms),
+                    false,
+                )
+                .i18n_detail(
+                    "env.registry.detail_ping",
+                    serde_json::json!({ "status": status, "ms": ms }),
+                )
+            } else {
+                fail_item(
+                    "npm 源连通",
+                    format!("源返回 HTTP {}（{}）", status, registry),
+                    false,
+                    "服务端返回错误。安装时若失败，可在弹窗里换一个 npm 源重试。",
+                    "env.registry.hint",
+                    "",
+                )
+                .i18n_detail(
+                    "env.registry.detail_http",
+                    serde_json::json!({ "status": status }),
+                )
+            }
+        }
+        Err(e) => {
+            let timed_out = e.is_timeout();
+            let msg = if timed_out {
+                "连接超时（8s）".to_string()
+            } else {
+                format!("连接失败：{}", e)
+            };
+            fail_item(
+                "npm 源连通",
+                msg,
+                false,
+                "可能是网络或代理问题。检查网络/代理后重试，或安装时在弹窗里换一个 npm 源。",
+                "env.registry.hint",
+                "",
+            )
+            .i18n_detail(
+                if timed_out {
+                    "env.registry.detail_timeout"
+                } else {
+                    "env.registry.detail_err"
+                },
+                if timed_out {
+                    serde_json::Value::Null
+                } else {
+                    serde_json::json!({ "err": e.to_string() })
+                },
+            )
+        }
     }
 }
 
@@ -517,6 +634,8 @@ pub fn run_all(root: &Path, include_registry: bool) -> Vec<CheckItem> {
         let h_node = s.spawn(|| check_node(root));
         let h_pnpm = s.spawn(|| check_pnpm(root));
         let h_git = s.spawn(check_git);
+        #[cfg(unix)]
+        let h_fonts = s.spawn(check_fonts);
         let h_writable = s.spawn(|| check_writable(root));
         let h_disk = s.spawn(|| check_disk(root));
         let h_registry = if include_registry {
@@ -528,11 +647,15 @@ pub fn run_all(root: &Path, include_registry: bool) -> Vec<CheckItem> {
             h_node.join().unwrap_or_else(|_| panic_item("Node.js")),
             h_pnpm.join().unwrap_or_else(|_| panic_item("pnpm")),
             h_git.join().unwrap_or_else(|_| panic_item("git")),
+        ];
+        #[cfg(unix)]
+        items.push(h_fonts.join().unwrap_or_else(|_| panic_item("中文字体")));
+        items.extend([
             h_writable
                 .join()
                 .unwrap_or_else(|_| panic_item("根目录可写")),
             h_disk.join().unwrap_or_else(|_| panic_item("磁盘空间")),
-        ];
+        ]);
         if let Some(h) = h_registry {
             items.push(h.join().unwrap_or_else(|_| panic_item("npm 源连通")));
         }
@@ -557,6 +680,40 @@ mod tests {
     }
 
     #[test]
+    fn registry_urls_normalized() {
+        assert_eq!(
+            normalize_registry("https://registry.npmmirror.com"),
+            "https://registry.npmmirror.com/"
+        );
+        assert_eq!(
+            normalize_registry("https://registry.npmjs.org/"),
+            "https://registry.npmjs.org/"
+        );
+        assert_eq!(
+            registry_ping_url("https://registry.npmjs.org/"),
+            "https://registry.npmjs.org/-/ping"
+        );
+    }
+
+    #[test]
+    fn registry_status_reachable_rules() {
+        assert!(registry_status_reachable(200));
+        assert!(registry_status_reachable(401));
+        assert!(registry_status_reachable(403));
+        assert!(registry_status_reachable(404));
+        assert!(!registry_status_reachable(500));
+        assert!(!registry_status_reachable(503));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn fonts_output_nonempty() {
+        assert!(has_font_output("Noto Sans CJK SC\n"));
+        assert!(!has_font_output(" \n\t"));
+        assert!(!has_font_output(""));
+    }
+
+    #[test]
     fn parse_semver_basic() {
         assert_eq!(parse_semver("v22.19.0"), Some((22, 19, 0)));
         assert_eq!(parse_semver("24.2.0"), Some((24, 2, 0)));
@@ -573,10 +730,11 @@ mod tests {
         assert!(!node_version_ok((22, 18, 0)));
         assert!(node_version_ok((22, 19, 0)));
         assert!(node_version_ok((22, 20, 1)));
-        // 23 处于 22 与 24 之间，按 ^22.19 || >=24 的语义**不满足**
+        // 23 处于 22 与 24 之间，按 ^22.19 || >=24.2 的语义**不满足**
         assert!(!node_version_ok((23, 5, 0)));
-        // 24+ 任意次版本均可
-        assert!(node_version_ok((24, 0, 0)));
+        // 24.0/24.1 不含 import.meta.main，需 24.2+
+        assert!(!node_version_ok((24, 0, 0)));
+        assert!(!node_version_ok((24, 1, 0)));
         assert!(node_version_ok((24, 2, 0)));
         assert!(node_version_ok((25, 0, 0)));
     }

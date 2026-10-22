@@ -24,6 +24,26 @@ pub fn spawn_web_hidden(
     cache_dir: &Path,
     state_dir: &Path,
 ) -> Result<(Child, String, Option<crate::jobobj::ProcessGuard>), String> {
+    spawn_web_inner(
+        version_dir,
+        home_dir,
+        store_dir,
+        cache_dir,
+        state_dir,
+        0,
+        true,
+    )
+}
+
+fn spawn_web_inner(
+    version_dir: &Path,
+    home_dir: &Path,
+    store_dir: &Path,
+    cache_dir: &Path,
+    state_dir: &Path,
+    port: u16,
+    attach_job: bool,
+) -> Result<(Child, String, Option<crate::jobobj::ProcessGuard>), String> {
     let bin = version_dir
         .join("node_modules")
         .join(".bin")
@@ -43,7 +63,7 @@ pub fn spawn_web_hidden(
 
     cmd.arg("web")
         .arg("--port")
-        .arg("0")
+        .arg(port.to_string())
         .arg("--no-open")
         .env("DSH_HOME", home_dir)
         .env("npm_config_store_dir", store_dir)
@@ -79,7 +99,11 @@ pub fn spawn_web_hidden(
     // - Windows：加入 Job（KILL_ON_JOB_CLOSE），管理器退出即由 OS 杀光组内进程
     // - Unix：进程组已在 configure 阶段设好，此处返回占位句柄
     // 根除"窗口关了但 node 还在"的孤儿进程问题。
-    let job = crate::jobobj::attach(&child);
+    let job = if attach_job {
+        crate::jobobj::attach(&child)
+    } else {
+        None
+    };
 
     // ── 会话日志（阶段一：可观测性）──
     // 每次启动 dsh 生成一个带时间戳的会话文件，记录 stdout + stderr 全量输出，
@@ -109,7 +133,7 @@ pub fn spawn_web_hidden(
         let mut f = f;
         let stamp = crate::logging::stamp_compact(crate::logging::now_secs());
         let _ = writeln!(f, "===== DSH {} session @ {} =====", version_name, stamp);
-        let _ = writeln!(f, "cmd: dsh web --port 0 --no-open");
+        let _ = writeln!(f, "cmd: dsh web --port {} --no-open", port);
         let _ = writeln!(f, "env DSH_HOME={}", home_dir.to_string_lossy());
         let _ = writeln!(
             f,
@@ -255,13 +279,34 @@ pub fn kill_tree(child: &mut Child) {
     let _ = child.kill();
 }
 
-/// 用**新控制台窗口**启动某版本的 dsh web（供「浏览器打开」按钮）。
+/// 用**后台进程**启动 dsh web（供「浏览器打开」按钮），返回子进程与完整 URL。
 ///
-/// - 不传 --no-open：让 dsh 自动打开系统默认浏览器显示 WebUI
-/// - 传 --port 0：避免多版本撞端口；dsh 会把完整 URL（含 token）打印在终端里，供用户复制
-/// - 新控制台窗口保留，用户可查看 dsh 输出（含 URL、token）
-/// - home 与「运行」一致（由调用方传入：非隔离用共享 home，隔离用独立 home）
+/// - `--no-open`：由管理器负责打开浏览器，这样无浏览器时才能把 URL 反馈给用户；
+/// - stdout/stderr 被捕获（不弹控制台），输出写入 `<root>/logs/session-*.log`；
+/// - **不挂 Job**：浏览器模式进程允许在管理器退出后继续运行（保持旧行为）。
 pub fn spawn_web_console(
+    version_dir: &Path,
+    home_dir: &Path,
+    store_dir: &Path,
+    cache_dir: &Path,
+    state_dir: &Path,
+    port: u16,
+) -> Result<(Child, String), String> {
+    let (child, url, _job) = spawn_web_inner(
+        version_dir,
+        home_dir,
+        store_dir,
+        cache_dir,
+        state_dir,
+        port,
+        false,
+    )?;
+    Ok((child, url))
+}
+
+/// CLI `run` 专用：新控制台窗口启动，由 dsh 自己打开系统浏览器（保持旧语义：
+/// 关闭控制台窗口即停止服务）。GUI 的「浏览器打开」改用 `spawn_web_console`。
+pub fn spawn_web_console_detached(
     version_dir: &Path,
     home_dir: &Path,
     store_dir: &Path,
@@ -283,7 +328,6 @@ pub fn spawn_web_console(
         c.arg("/C").arg(&bin);
         c
     };
-    // Unix：不依赖终端模拟器（探测脆弱），直接后台启动；dsh 会自行打开默认浏览器
     #[cfg(not(windows))]
     let mut cmd = Command::new(&bin);
 
@@ -295,7 +339,6 @@ pub fn spawn_web_console(
         .env("npm_config_cache_dir", cache_dir)
         .env("npm_config_state_dir", state_dir);
 
-    // 运行时适配（v0.2.9）：同 spawn_web_hidden，注入便携运行时 PATH。
     if let Some(root) = version_dir.parent().and_then(|p| p.parent()) {
         if let Some(new_path) = crate::runtime::path_env_additions(root) {
             cmd.env("PATH", new_path);
@@ -305,20 +348,17 @@ pub fn spawn_web_console(
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
-        // 新控制台窗口，让用户看到 dsh 输出（含 URL/token）
         const CREATE_NEW_CONSOLE: u32 = 0x00000010;
         cmd.creation_flags(CREATE_NEW_CONSOLE);
     }
 
-    // Unix：脱离父会话/终端，避免随管理器退出被 SIGHUP（配合新进程组，由 configure 设定）
     #[cfg(unix)]
     {
-        cmd.stdin(std::process::Stdio::null())
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null());
+        cmd.stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
     }
 
-    // spawn 前：平台相关配置（Unix 下设为新进程组；Windows 无操作）
     crate::jobobj::configure_command(&mut cmd);
 
     match cmd.spawn() {

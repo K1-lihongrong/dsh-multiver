@@ -252,6 +252,68 @@ pub fn open_url(url: &str) -> (bool, String) {
     }
 }
 
+/// 打开 URL，并尽量确认浏览器启动器是否成功（失败时把错误交给调用方）。
+///
+/// - Linux/macOS：等待启动器 ≤3s；非 0 退出码（如无浏览器时 xdg-open 返回 3）判失败；
+/// - Windows：`cmd /C start` 是 best-effort（壳会吞掉浏览器缺失错误），spawn 成功即视为成功。
+pub fn open_url_checked(url: &str) -> Result<(), String> {
+    #[cfg(windows)]
+    {
+        windows_open_checked(url)
+    }
+    #[cfg(not(windows))]
+    {
+        unix_open_checked(url)
+    }
+}
+
+#[cfg(windows)]
+fn windows_open_checked(url: &str) -> Result<(), String> {
+    use std::os::windows::process::CommandExt;
+    const CREATE_NO_WINDOW: u32 = 0x08000000;
+    Command::new("cmd")
+        .args(["/C", "start", "", url])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .creation_flags(CREATE_NO_WINDOW)
+        .spawn()
+        .map(|_| ())
+        .map_err(|e| e.to_string())
+}
+
+#[cfg(not(windows))]
+fn unix_open_checked(url: &str) -> Result<(), String> {
+    use std::time::{Duration, Instant};
+
+    #[cfg(target_os = "macos")]
+    let program = "open";
+    #[cfg(not(target_os = "macos"))]
+    let program = "xdg-open";
+
+    let mut child = Command::new(program)
+        .arg(url)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .map_err(|e| format!("无法启动 {}：{}", program, e))?;
+    let started = Instant::now();
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) if status.success() => return Ok(()),
+            Ok(Some(status)) => {
+                return Err(format!(
+                    "{} 退出码 {}（可能没有可用浏览器）",
+                    program, status
+                ));
+            }
+            Ok(None) if started.elapsed() > Duration::from_secs(3) => return Ok(()),
+            Ok(None) => std::thread::sleep(Duration::from_millis(50)),
+            Err(e) => return Err(format!("等待 {} 失败：{}", program, e)),
+        }
+    }
+}
+
 /// 打开文件夹
 pub fn open_folder(path: &Path) -> (bool, String) {
     #[cfg(windows)]
