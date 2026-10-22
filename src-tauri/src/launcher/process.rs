@@ -279,11 +279,12 @@ pub fn kill_tree(child: &mut Child) {
     let _ = child.kill();
 }
 
-/// 用**后台进程**启动 dsh web（供「浏览器打开」按钮），返回子进程与完整 URL。
+/// 用**新控制台窗口**启动某版本的 dsh web（供「浏览器打开」按钮）。
 ///
-/// - `--no-open`：由管理器负责打开浏览器，这样无浏览器时才能把 URL 反馈给用户；
-/// - stdout/stderr 被捕获（不弹控制台），输出写入 `<root>/logs/session-*.log`；
-/// - **不挂 Job**：浏览器模式进程允许在管理器退出后继续运行（保持旧行为）。
+/// 设计意图：给用户一个**显式的终端窗口**，行为特征与用户自己开终端敲 `dsh web` 一致。
+/// - 不传 `--no-open`：让 dsh 自动打开系统默认浏览器显示 WebUI
+/// - 新控制台窗口保留：用户可查看 dsh 输出（含 URL、token），关掉窗口即停止服务
+/// - home 与「运行」一致（由调用方传入：非隔离用共享 home，隔离用独立 home）
 pub fn spawn_web_console(
     version_dir: &Path,
     home_dir: &Path,
@@ -291,21 +292,12 @@ pub fn spawn_web_console(
     cache_dir: &Path,
     state_dir: &Path,
     port: u16,
-) -> Result<(Child, String), String> {
-    let (child, url, _job) = spawn_web_inner(
-        version_dir,
-        home_dir,
-        store_dir,
-        cache_dir,
-        state_dir,
-        port,
-        false,
-    )?;
-    Ok((child, url))
+) -> (bool, String) {
+    spawn_web_console_detached(version_dir, home_dir, store_dir, cache_dir, state_dir, port)
 }
 
 /// CLI `run` 专用：新控制台窗口启动，由 dsh 自己打开系统浏览器（保持旧语义：
-/// 关闭控制台窗口即停止服务）。GUI 的「浏览器打开」改用 `spawn_web_console`。
+/// 关闭控制台窗口即停止服务）。GUI 的「浏览器打开」也复用此函数。
 pub fn spawn_web_console_detached(
     version_dir: &Path,
     home_dir: &Path,

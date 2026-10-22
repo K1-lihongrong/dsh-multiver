@@ -353,52 +353,23 @@ pub(crate) async fn open_in_browser(
         port = 0;
     }
 
-    // 3) 启动（--no-open，由管理器打开浏览器；失败时把 URL 返回给用户）
-    let (_child, url) = match launcher::spawn_web_console(
-        &vdir,
-        &home,
-        &dirs.store,
-        &dirs.cache,
-        &dirs.state,
-        port,
-    ) {
-        Ok(v) => v,
-        Err(msg) => {
-            logging::log_app_error(
-                &dirs.root,
-                "open_in_browser",
-                &format!("{} ({})", version, msg),
-            );
-            return Err(msg);
-        }
-    };
-    let (opened, open_err) = match actions::open_url_checked(&url) {
-        Ok(()) => (true, String::new()),
-        Err(e) => {
-            logging::log_app_error(
-                &dirs.root,
-                "open_in_browser",
-                &format!("打开浏览器失败（{}）：{}", version, e),
-            );
-            (false, e)
-        }
-    };
-    let message = if opened {
-        format!(
-            "已启动 dsh web：{}；数据目录：{}",
-            url,
-            home.to_string_lossy()
-        )
-    } else {
-        format!(
-            "dsh 已启动，但无法自动打开浏览器（{}）。请手动访问：{}",
-            open_err, url
-        )
-    };
+    // 3) 启动（新控制台窗口，不传 --no-open，由 dsh 自己打开系统浏览器）
+    // 设计意图：用户拿到一个显式终端窗口，行为与「自己开终端敲 dsh web」一致。
+    let (ok, msg) =
+        launcher::spawn_web_console(&vdir, &home, &dirs.store, &dirs.cache, &dirs.state, port);
+    if !ok {
+        logging::log_app_error(
+            &dirs.root,
+            "open_in_browser",
+            &format!("{} ({})", version, msg),
+        );
+        return Err(msg);
+    }
+    // 控制台窗口模式：URL/token 由 dsh 自己打印在终端里，管理器不再捕获。
     Ok(OpenInBrowserResult {
-        url: Some(url),
-        opened,
-        message,
+        url: None,
+        opened: true,
+        message: format!("{}；数据目录：{}", msg, home.to_string_lossy()),
     })
 }
 
