@@ -1,4 +1,4 @@
-import { test, expect } from "@playwright/test";
+﻿import { test, expect } from "@playwright/test";
 import { mockTauri, makeVersion } from "./helpers.js";
 
 test("L-18 无浏览器时展示完整 URL（而不是静默成功）", async ({ page }) => {
@@ -51,7 +51,7 @@ test("L-31 镜像子包缺失时提供换源重试", async ({ page }) => {
   await page.locator(".install-row button").click();
   await page.waitForTimeout(400);
 
-  await expect(page.locator(".modal")).toContainText("镜像源尚未同步");
+  await expect(page.locator(".modal")).toContainText("镜像未同步");
   await expect(page.locator(".modal select")).toBeVisible();
   await page.locator(".modal select").selectOption("https://registry.npmjs.org/");
   await page.getByRole("button", { name: "换源重试", exact: true }).click();
