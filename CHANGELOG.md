@@ -77,6 +77,7 @@
   - **D20**：Node 版本低于下限时，环境检查误报「未找到 node 命令」（与「真没装」共用 i18n 文案）。新增 `env.node.detail_low`，区分两种原因，4 语言同步。
   - **L-18**：Linux 下「浏览器打开」改为管理器捕获 URL 后自行打开；无浏览器时弹窗展示完整 URL，不再静默失败。**Windows 保持原设计**：新控制台窗口 + dsh 自己打开浏览器（用户可看实时输出、关窗即停）。
   - **L-31**：镜像源子包缺失（`ERR_PNPM_NO_MATCHING_VERSION`）时，失败弹窗提供换官方源重试；弹窗文案改为「镜像未同步 / 可换源重试」，避免与换源入口自相矛盾。
+  - **R-12**：镜像完全未发布某子包时（`ERR_PNPM_NO_VERSIONS`，此前归为 `unknown` 只弹 toast）一并归入 `incomplete-version`，与 `NO_MATCHING_VERSION` 同样触发换源重试。
   - **L-29**：更新检查失败写入 `error` 字段；GUI 显示可关闭的错误横幅，CLI 返回 `error` + exit 1，不再伪装「无更新」。
   - Node 下限口径统一为 `22.19+ / 24.2+`（24.0/24.1 缺 `import.meta.main`）。
   - L-11：文档声明支持多开（共享数据根注意事项）。
