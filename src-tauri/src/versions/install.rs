@@ -1,4 +1,4 @@
-﻿//! 安装 / 卸载 / 错误分类（D5 拆分：原 versions.rs 的 install 相关）。
+//! 安装 / 卸载 / 错误分类（D5 拆分：原 versions.rs 的 install 相关）。
 use serde::Serialize;
 use std::path::Path;
 use std::process::Command;
@@ -394,8 +394,14 @@ pub fn classify_error(raw: &str) -> &'static str {
     {
         return "private-package";
     }
-    // 版本不完整（子包缺失）
-    if raw.contains("ERR_PNPM_NO_MATCHING_VERSION") || raw.contains("No matching version found") {
+    // 版本不完整（子包缺失或整包缺失）
+    // - NO_MATCHING_VERSION：包有、但所需版本没有（镜像版本滞后）
+    // - NO_VERSIONS：整包都没有（镜像未同步该子包）
+    // 两者根因相同、用户对策相同（换源重试），故归为一类。R-12。
+    if raw.contains("ERR_PNPM_NO_MATCHING_VERSION")
+        || raw.contains("No matching version found")
+        || raw.contains("ERR_PNPM_NO_VERSIONS")
+    {
         return "incomplete-version";
     }
     // 网络类
@@ -412,7 +418,10 @@ pub fn classify_error(raw: &str) -> &'static str {
 
 /// 把原始错误转成更易懂的提示
 fn friendly_error(raw: &str) -> String {
-    if raw.contains("ERR_PNPM_NO_MATCHING_VERSION") || raw.contains("No matching version found") {
+    if raw.contains("ERR_PNPM_NO_MATCHING_VERSION")
+        || raw.contains("No matching version found")
+        || raw.contains("ERR_PNPM_NO_VERSIONS")
+    {
         format!(
             "该版本依赖的子包在当前 npm 源缺失（可能是镜像源未同步，或版本发布不完整），无法安装。\n可切换官方源重试；若仍失败请换一个版本。\n\n原始信息：\n{}",
             raw
@@ -520,5 +529,51 @@ mod read_lines_bytes_tests {
     fn blank_line_is_kept() {
         let got = read_lines_bytes(&b"a\n\nb"[..]);
         assert_eq!(got, vec![b"a".to_vec(), Vec::new(), b"b".to_vec()]);
+    }
+}
+
+#[cfg(test)]
+mod classify_tests {
+    use super::{classify_error, friendly_error};
+
+    #[test]
+    fn no_matching_version_is_incomplete() {
+        let raw =
+            "ERR_PNPM_NO_MATCHING_VERSION  No matching version found for @aws-sdk/types@^3.975.0";
+        assert_eq!(classify_error(raw), "incomplete-version");
+        assert!(friendly_error(raw).contains("npm 源缺失"));
+    }
+
+    #[test]
+    fn no_versions_is_incomplete() {
+        // R-12：镜像完全没发布该子包，此前被归为 unknown，只弹 toast
+        let raw = "ERR_PNPM_NO_VERSIONS  No versions available for @aws-sdk/types";
+        assert_eq!(classify_error(raw), "incomplete-version");
+        assert!(friendly_error(raw).contains("npm 源缺失"));
+    }
+
+    #[test]
+    fn fetch_404_on_deepseek_is_private_package() {
+        let raw =
+            "ERR_PNPM_FETCH_404  GET https://registry.npmjs.org/@deepseek-ai/foo - Not Found - 404";
+        assert_eq!(classify_error(raw), "private-package");
+    }
+
+    #[test]
+    fn network_errors_are_network() {
+        for raw in [
+            "ERR_PNPM_FETCH_500",
+            "UND_ERR_SOCKET",
+            "ETIMEDOUT",
+            "ECONNRESET",
+            "ENOTFOUND",
+        ] {
+            assert_eq!(classify_error(raw), "network", "raw = {raw}");
+        }
+    }
+
+    #[test]
+    fn unknown_falls_through() {
+        assert_eq!(classify_error("something totally unexpected"), "unknown");
     }
 }
