@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "dsh-multiver 版本管理",
+    "description": "在 dsh 内查看已安装版本、切换默认版本。版本安装与隔离仍由 dsh-multiver 完成。"
+  }
+}

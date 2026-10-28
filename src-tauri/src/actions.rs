@@ -158,6 +158,11 @@ pub fn build_forward_script(version: &str, root_dir: &str, dsh_home: &str) -> St
     // 版本号直接写死在脚本里（由 Rust 在设默认时生成），避免解析 JSON 的脆弱性
     s.push_str(&format!("set \"VER={}\"\r\n", version));
     s.push_str(&format!("set \"ROOT={}\"\r\n", root_dir));
+    // M3b：终端启动也带标记，供 dsh 插件识别版本与来源。
+    // 不注入 MODE/PID：这里没有 launcher 进程，PID 会误导判定。
+    s.push_str("set \"DSH_MULTIVER_VERSION=%VER%\"\r\n");
+    s.push_str("set \"DSH_MULTIVER_ROOT=%ROOT%\"\r\n");
+    s.push_str("set \"DSH_MULTIVER_EXE=%ROOT%\\dsh-multiver.exe\"\r\n");
     s.push_str(&format!("set \"DSH_HOME_CANDIDATE={}\"\r\n", home));
     s.push_str("set \"BIN=%ROOT%\\versions\\%VER%\\node_modules\\.bin\\dsh.cmd\"\r\n");
     s.push_str("if not exist \"%BIN%\" (\r\n");
@@ -195,6 +200,9 @@ pub fn build_forward_script(version: &str, root_dir: &str, dsh_home: &str) -> St
          fi\n\
          VER='{version}'\n\
          ROOT='{root}'\n\
+         export DSH_MULTIVER_VERSION=\"$VER\"\n\
+         export DSH_MULTIVER_ROOT=\"$ROOT\"\n\
+         export DSH_MULTIVER_EXE=\"$ROOT/dsh-multiver.exe\"\n\
          BIN=\"$ROOT/versions/$VER/node_modules/.bin/dsh\"\n\
          if [ ! -x \"$BIN\" ]; then\n\
          \x20 echo \"[dsh] 找不到版本 $VER 的入口: $BIN\" >&2\n\
@@ -349,5 +357,17 @@ mod tests {
         let s = build_forward_script("1.0.0", "D:\\data\\", "D:\\data\\home");
         assert!(s.contains("set \"DSH_HOME_CANDIDATE=D:\\data\\home\""));
         assert!(!s.contains("D:\\data\\\\home"));
+    }
+
+    #[test]
+    fn forward_script_injects_multiver_env() {
+        // M3b：终端启动也要带版本/根/exe 标记，供 dsh 插件识别来源。
+        // 不含 MODE/PID —— 终端没有 launcher 进程，PID 会误导判定。
+        let s = build_forward_script("0.1.7", "D:\\DSH", "D:\\DSH\\home");
+        assert!(s.contains("set \"DSH_MULTIVER_VERSION=%VER%\""));
+        assert!(s.contains("set \"DSH_MULTIVER_ROOT=%ROOT%\""));
+        assert!(s.contains("set \"DSH_MULTIVER_EXE=%ROOT%\\dsh-multiver.exe\""));
+        assert!(!s.contains("DSH_MULTIVER_MODE"));
+        assert!(!s.contains("DSH_MULTIVER_PID"));
     }
 }

@@ -1,0 +1,6 @@
+- insert:
+    - id: multiver-bridge
+      name: dsh-multiver-bridge
+      config:
+        exe: ""
+        commandTimeoutMs: 15000

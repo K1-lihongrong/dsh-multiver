@@ -11,7 +11,7 @@
 
 > **破坏性变更**：CLI 从 `--flag` 风格改为子命令风格。旧语法已移除，迁移见 [CLI 迁移指南](docs/CLI迁移指南-v0.3.0.md)。
 >
-> **验收范围**：Windows 侧已完成本机验收（自动 9 项 + 手动 5 项，见 [验收记录-Windows本机-2026-10-22](docs/验收记录-Windows本机-2026-10-22.md)）；Linux 侧已实现但未做完整验收，相关项后置到 v0.3.x（见 [开发缺口 · Linux 适配后置](docs/开发缺口.md#linux-适配后置v03x)）。
+> **验收范围**：Windows 侧已完成本机验收（自动 9 项 + 手动 5 项；验收记录已归档，不随仓库发布）；Linux 侧已实现但未做完整验收，相关项后置到 v0.3.x（见 [开发缺口 · Linux 适配后置](docs/开发缺口.md#linux-适配后置v03x)）。
 
 ### 破坏性变更
 - **CLI 子命令风格**：`--list` → `list`，`--install X` → `install X` 等（全部 21 个命令）。
@@ -39,6 +39,27 @@
 - **进度回调去重（D15）**：`cmd_setup_runtime` 里 Node 与 pnpm 两段逐字重复的进度闭包，抽成 `runtime_progress_cb`。
 - **错误态切换动效（R-13 补充）**：启动失败时加载页先播放约 800ms 的「信号崩坏」干扰（抖动 + 水平条纹），再淡入故障页；此前为瞬间跳变。
 - **桌面快捷方式启动失败卡住（R-13 补充）**：此前用 `--launch-version` 快捷方式启动失败时，前端收不到错误事件，加载页停在「正在启动」不动。现由后端补发 `launch-progress(stage="error")` 并携带错误文本，前端进入错误态并显示原因。
+- **单实例锁（D17 / M2m）**：取消「多管理器多开」，改为单实例。重复启动时第二实例立即退出，已运行实例的窗口恢复并聚焦。
+  - 版本桌面快捷方式（`--launch-version V`）在管理器已运行时**仍然有效**：不再新开管理器，而是在已运行实例里打开该版本的内嵌窗口（同版本已有窗口则聚焦）。
+  - 主窗口已被 `--launch-version` 流程关闭时，再次启动会按 `tauri.conf.json` 重建主窗口。
+  - CLI 不受影响：`list --json` / `set-default --dry-run --json` 等命令仍在 `tauri::Builder` 之前分流，立即返回。
+  - 已知限制：锁按应用标识全局生效，同一用户下两个不同目录的副本也不能同时运行。
+  - 用户可见变化：管理器不再能开第二个实例；需要对比版本时在同一个管理器内分别点「运行」。
+- **用户安装的插件无法卸载（验收 #5）**：插件面板用 `isBundle()` 禁用卸载按钮，而来源徽标用 `isOfficial()` 显示「用户安装」——自相矛盾。`dsh plugin add` 安装声明了 `dsh.bundle` 的包（如 `dsh-multiver-bridge`）会写进 profile 的 `bundles`，于是被当成内置组合包锁定。
+  - 改为只按 `isOfficial()` 判定：仅「随 DSH 提供」的官方组合包保持锁定，用户安装的 bundle 可卸载。
+  - 后端 `source` / `is_bundle` 语义不变（其它 UI 与排序依赖它）。
+  - 文案改为「DSH 随附的官方组合包不能单独卸载」，四语言同步。
+  - 用户可见变化：B1 插件面板里用户自己安装的插件/组合包可以卸载；官方组合包仍锁定。
+- **「浏览器打开」控制台全空白（验收 #1）**：GUI 进程（Tauri，无控制台）只设 `CREATE_NEW_CONSOLE` 时，子进程标准句柄没有被可靠绑定到新控制台，dsh 的两行输出写进空句柄，窗口存在但全空白。
+  - 显式 `stdio(inherit)` + `CREATE_NEW_CONSOLE`，让新控制台初始化标准句柄。
+  - 用户可见变化：「浏览器打开」弹出带 dsh 实时输出的控制台窗口（含 URL/token）。
+  - 关窗即停已验证：关闭控制台窗口后 `cmd` 与 `node` 同时终止，无残留。
+- **官方随附 bundle 被误判为用户安装（验收 #5b）**：官方清单只读 `OPTIONAL_BUNDLES` / `DEFAULT_PROFILE_BUNDLES` / `ON_DEMAND_BUNDLES` 三处，而 `@deepseek-ai/dsh-web-app` 只出现在 `PROFILE_TEMPLATES.web.bundles` 里，因此被当成用户安装、卸载按钮可点。
+  - 清单补上 `PROFILE_TEMPLATES` 所有模板的 bundles 并去重（15 项 → 20 项）。
+  - 用户可见变化：官方随附的 `dsh-web-app` 不再显示为可卸载。
+- **点「插件」按钮闪黑框（验收 #5c）**：`query_official_bundles` 启动 `node` 读取官方清单时没设 `CREATE_NO_WINDOW`，GUI 进程无控制台，Windows 为 `node` 分配了可见控制台窗口。
+  - 补上该 flag，与插件命令执行路径一致。
+  - 用户可见变化：点「插件」按钮不再闪黑框。
 
 ### 新增（双向桥 B1）
 - **dsh 插件管理面板**：已安装版本的「插件」按钮 → 展开面板，管理该版本 dsh profile 的插件。
@@ -88,9 +109,23 @@
   - Node 下限口径统一为 `22.19+ / 24.2+`（24.0/24.1 缺 `import.meta.main`）。
   - L-11：文档声明支持多开（共享数据根注意事项）。
 
+### 新增（双向桥 B2–B4，dsh 插件）
+- **新包 `dsh-plugin/`（`dsh-multiver-bridge`）**：在 dsh 设置页提供「版本管理」，Host 半走 `ctx.webServer.register` 路由 + `ctx.connection.requestRejection` 鉴权，Client 半在 `settings.section` 渲染。
+  - 状态条：默认版本 / 运行版本（含 `high` / `low` / `conflict` / `unknown` 置信度徽标）/ 待重启提示 / 一致性校对详情。
+  - 版本表：与 `dsh-multiver list --json` 逐字段一致；「设为默认」带内联确认条。
+  - 三个送回动作：打开 multiver 目录、打开版本目录、复制诊断信息（剪贴板不可用时降级为可选中文本框）。
+  - 「打开 multiver」按钮：仅非内嵌模式显示（契约 v1.2 的 `open.launch-multiver`）。
+  - 中英双语；冲突态不误报「待重启」。
+- **刷新策略**：页面可见时每 60 秒轮询；从隐藏恢复可见时立即刷新一次；隐藏时停 timer；`visibilitychange` 与 timer 在组件卸载时清理。
+- **环境变量注入（`launcher/process.rs` + `actions.rs`）**：multiver 启动 dsh 时注入 `DSH_MULTIVER_VERSION` / `ROOT` / `EXE` / `MODE` / `PID`，供插件识别启动来源与模式。终端 `dsh` 转发脚本只注入前三项——那里没有 launcher 进程，PID 会误导判定。
+- **multiver 主界面**：窗口获得焦点或从隐藏恢复可见时自动刷新（300ms 去抖），在 dsh 内切完默认版本后回到 multiver 即可看到新状态。
+- **「运行中」徽标**：版本列表标出正在内嵌窗口里运行的版本（基于内存 ProcMap，5 秒轮询，仅页面可见时）。console 启动与终端 `dsh` 没有进程内记录，不在范围（已在悬停提示说明）。
+- **单实例锁**：同 build 的第二个实例在插件 setup 阶段被拦下并转发 `--launch-version`；不同副本启动时弹原生对话框提示两个路径、聚焦已有窗口、写日志。对话框改为非阻塞 `.show()`，避免阻塞插件事件窗口过程。
+- **插件打包与安装**：`pnpm pack` 产出 tarball；`install.ps1` / `uninstall.ps1` 存为 UTF-8 with BOM 并检查 `$LASTEXITCODE`；缺 `dsh-web-app` 时默认报错，`-Force` 才降级。
+
 ### 文档
 - 新增 [CLI 迁移指南](docs/CLI迁移指南-v0.3.0.md)（旧→新对照 + 脚本迁移示例）。
-- 新增 [dsh 双向桥交接文档](docs/dsh双向桥-交接文档.md)（B2-B4 交 dsh）。
+- 新增 dsh 双向桥交接文档（已归档，不随仓库发布；B2-B4 交 dsh）。
 - 使用手册、README、CUCKOO.md 同步更新。
 
 ### 新增

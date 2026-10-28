@@ -460,7 +460,7 @@ pub(crate) fn build_topbar_script(version: &str, url: &str) -> String {
 /// 前端 onMounted 主动查，比事件可靠（setup emit 时前端可能还没监听）。
 #[tauri::command]
 pub(crate) fn get_launch_mode() -> Option<String> {
-    crate::LAUNCH_MODE.get().cloned()
+    crate::lock_launch_mode().clone()
 }
 
 /// v0.2.14：前端渲染出"启动态"后调用，显示主窗口。
@@ -478,4 +478,15 @@ pub(crate) fn show_main_window(app: tauri::AppHandle) {
 #[tauri::command]
 pub(crate) fn is_version_open(procs: tauri::State<'_, ProcMap>, version: String) -> bool {
     lock_procs(procs.inner()).contains_key(&version)
+}
+
+/// M3b：列出当前有内嵌窗口在运行的版本号。
+///
+/// 只覆盖 embedded 窗口——基于内存 ProcMap。console 启动与终端 dsh
+/// 没有进程内记录，不在本命令范围（已知限制，见 M3b 交接单）。
+#[tauri::command]
+pub(crate) fn list_running_versions(procs: tauri::State<'_, ProcMap>) -> Vec<String> {
+    let mut out: Vec<String> = lock_procs(procs.inner()).keys().cloned().collect();
+    out.sort();
+    out
 }

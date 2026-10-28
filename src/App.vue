@@ -96,6 +96,22 @@ async function refresh() {
   installed.value = inst;
 }
 
+/// M3b：窗口获得焦点或从隐藏变可见时刷新一次，带 300ms 去抖。
+///
+/// 目的：multiver 在 dsh 内切换默认版本后，回到 multiver 窗口即能看到新状态，
+/// 不必手动点刷新。去抖用于合并「focus 与 visibilitychange 同时触发」。
+let focusRefreshTimer = null;
+function onAppVisibility() {
+  if (document.visibilityState === 'visible') scheduleFocusRefresh();
+}
+function scheduleFocusRefresh() {
+  if (focusRefreshTimer) clearTimeout(focusRefreshTimer);
+  focusRefreshTimer = setTimeout(() => {
+    focusRefreshTimer = null;
+    refresh().catch(() => {});
+  }, 300);
+}
+
 /// 调 EnvCheck 组件跑一次环境检查（安装前用），返回是否通过。
 async function runEnvCheck() {
   return envCheckRef.value ? envCheckRef.value.run() : false;
@@ -183,6 +199,10 @@ onMounted(async () => {
     if (p.stage === "error" && p.error) launchError.value = p.error;
   }).then((u) => { unlistenProgress = u; }).catch(() => {});
 
+  // M3b：窗口焦点 / 可见性变化时刷新（去抖 300ms）
+  window.addEventListener("focus", scheduleFocusRefresh);
+  document.addEventListener("visibilitychange", onAppVisibility);
+
   // 启动模式：用户看的是加载页，不需要版本列表——跳过 refresh（省 ~1s）。
   // 非启动模式：正常加载主界面数据。
   if (!props.launchMode) {
@@ -244,6 +264,10 @@ onUnmounted(() => {
   if (unlistenCrash) unlistenCrash();
   if (unlistenModeStart) unlistenModeStart();
   if (unlistenProgress) unlistenProgress();
+  // M3b：移除焦点/可见性监听并清掉未触发的去抖 timer
+  window.removeEventListener("focus", scheduleFocusRefresh);
+  document.removeEventListener("visibilitychange", onAppVisibility);
+  if (focusRefreshTimer) { clearTimeout(focusRefreshTimer); focusRefreshTimer = null; }
 });
 </script>
 

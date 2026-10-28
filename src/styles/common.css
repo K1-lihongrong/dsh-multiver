@@ -129,6 +129,7 @@ body {
 }
 .badge-iso { background: var(--warn-weak); color: var(--warn); }
 .badge-shared { background: var(--gray-chip); color: var(--text-3); cursor: help; }
+.badge-running { background: var(--ok-weak); color: var(--ok); cursor: help; }
 .badge-ok { background: var(--ok-weak); color: var(--ok); font-size: 11px; padding: 2px 8px; border-radius: 10px; margin-left: 6px; }
 .badge-err { background: var(--danger-weak); color: var(--danger); font-size: 11px; padding: 2px 8px; border-radius: 10px; margin-left: 6px; }
 

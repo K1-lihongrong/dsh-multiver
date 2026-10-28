@@ -124,11 +124,11 @@ const filteredPlugins = computed(() => {
   );
 });
 
-async function doAction(action, pkg, bundle) {
+async function doAction(action, pkg, locked) {
   const name = (pkg || "").trim();
   if (!name) return;
-  // 内置 bundle 不属于 dependencies，卸载会失败/无效，直接拦下。
-  if (action === "remove" && bundle) {
+  // 仅 DSH 随附的官方组合包不允许单独卸载；用户安装的 bundle 可卸载。
+  if (action === "remove" && locked) {
     notify(t("dsplugins.bundleLocked"));
     return;
   }
@@ -617,9 +617,9 @@ onUnmounted(() => {
           </button>
           <button
             class="dp-btn dp-btn-danger dp-btn-sm"
-            @click="doAction('remove', pl.name, isBundle(pl))"
-            :disabled="busy || isBundle(pl)"
-            :title="isBundle(pl) ? t('dsplugins.bundleLocked') : ''"
+            @click="doAction('remove', pl.name, isOfficial(pl))"
+            :disabled="busy || isOfficial(pl)"
+            :title="isOfficial(pl) ? t('dsplugins.bundleLocked') : ''"
           >
             {{ t("dsplugins.remove") }}
           </button>

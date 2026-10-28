@@ -52,7 +52,54 @@ pub(crate) static WIN_READY_MS: std::sync::OnceLock<u128> = std::sync::OnceLock:
 
 /// 启动模式（v0.2.14）：命令行带 --launch-version 时，记录待启动的版本号。
 /// 前端 onMounted 主动查（比事件可靠——setup 里 emit 时前端可能还没监听）。
-pub(crate) static LAUNCH_MODE: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+///
+/// M2m（B1）：由 `OnceLock` 改为 `Mutex<Option>`。原因：launch-version 流程启动成功后
+/// 会 close 主窗口；用户再双击图标触发 `ensure_main_window` 重建主窗口时，
+/// 新窗口前端仍会读到旧值 → 卡在「正在启动」。重建前需要能**清除**它。
+pub(crate) static LAUNCH_MODE: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+
+/// 锁定 `LAUNCH_MODE`；中毒时继续用内部数据（同 `lock_procs` 的理由）。
+pub(crate) fn lock_launch_mode() -> std::sync::MutexGuard<'static, Option<String>> {
+    LAUNCH_MODE.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// M2m（B5）：判断第二实例与当前实例是否为同一份可执行文件。
+///
+/// 单实例锁按 app identifier 全局生效，同一用户下两个不同目录的副本也会互斥。
+/// 此时**不能**把 `--launch-version` 转发给当前实例——不同副本可能用不同数据根，
+/// 转发会操作错数据。应弹对话框说明并聚焦当前实例。
+///
+/// 比较前先 `canonicalize`（展开 8.3 短路径与符号链接）；Windows 忽略大小写。
+pub(crate) fn is_same_exe(second: &str, current: &std::path::Path) -> bool {
+    let canon = |p: &std::path::Path| std::fs::canonicalize(p).ok();
+    let a = canon(std::path::Path::new(second));
+    let b = canon(current);
+
+    match (a, b) {
+        (Some(a), Some(b)) => {
+            #[cfg(windows)]
+            {
+                a.to_string_lossy().eq_ignore_ascii_case(&b.to_string_lossy())
+            }
+            #[cfg(not(windows))]
+            {
+                a == b
+            }
+        }
+        _ => {
+            // canonicalize 失败（如路径已被删除）时退化为字符串比较
+            #[cfg(windows)]
+            {
+                second.eq_ignore_ascii_case(&current.to_string_lossy())
+            }
+            #[cfg(not(windows))]
+            {
+                second == current.to_string_lossy()
+            }
+        }
+    }
+}
+
 
 /// 管理器自身所在目录（config.json 的存放处）
 pub(crate) fn manager_dir(_app: &tauri::AppHandle) -> PathBuf {
@@ -121,7 +168,7 @@ pub fn run() {
     // Tauri 在 setup 前就建了主窗口、前端可能早于 setup 完成 onMounted，
     // 故在此（run 开头）就 set，确保前端 get_launch_mode 一定查得到。
     if let Some(version) = window::parse_launch_version(&std::env::args().collect::<Vec<_>>()) {
-        let _ = LAUNCH_MODE.set(version);
+        *lock_launch_mode() = Some(version);
     }
 
     // 进程级 AUMID 必须在任何窗口创建之前设置（Tauri 在 setup 回调前就建了主窗口）。
@@ -131,6 +178,123 @@ pub fn run() {
     let procs: ProcMap = Arc::new(Mutex::new(HashMap::new()));
     let procs_setup = procs.clone();
     tauri::Builder::default()
+        // M2m：单实例锁必须是第一个注册的 plugin（Tauri 要求）。
+        // 回调在第二实例被检测到时于已运行实例内执行：
+        //  - 带 --launch-version V → 转发给 launch_window 打开该版本内嵌窗口（保留版本快捷方式语义）
+        //  - 否则 → 确保主窗口存在并聚焦（主窗口可能已被 launch-version 流程 close）
+        .plugin(tauri_plugin_single_instance::init({
+            let procs_for_si = procs.clone();
+            move |app, args, _cwd| {
+                // M2m（B3）：release 版 `windows_subsystem = "windows"` 没有控制台，
+                // eprintln! 会全部丢失。关键失败路径一律同时写 `logs/app.log`。
+                let log_app = |ctx: &str, msg: &str| {
+                    let mdir = manager_dir(app);
+                    let root = Config::load(&mdir).resolve_root(&mdir);
+                    logging::log_app_error(&root, ctx, msg);
+                    eprintln!("[dsh-multiver] {}: {}", ctx, msg);
+                };
+
+                // M2m（B5）：单实例锁按 app identifier 全局生效，同一用户下两个不同
+                // 目录的副本也会互斥。此时不能把 --launch-version 转发给当前实例——
+                // 不同副本可能用不同数据根，转发会操作错数据。改为弹对话框说明并聚焦。
+                let second_exe = args.first().map(|s| s.as_str()).unwrap_or("");
+                log_app(
+                    "single-instance",
+                    &format!(
+                        "回调触发：second_exe={} args={:?}",
+                        second_exe, args
+                    ),
+                );
+                let same_copy = match std::env::current_exe() {
+                    Ok(cur) => is_same_exe(second_exe, &cur),
+                    Err(_) => true, // 拿不到当前 exe 时按同副本处理，保持原有行为
+                };
+
+                if !same_copy {
+                    use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
+                    let cur = std::env::current_exe()
+                        .map(|p| p.display().to_string())
+                        .unwrap_or_else(|_| "(unknown)".to_string());
+                    log_app(
+                        "single-instance",
+                        &format!(
+                            "拦截不同副本启动：second={} current={}",
+                            second_exe, cur
+                        ),
+                    );
+                    let _ = window::ensure_main_window(app);
+                    // 非阻塞：此回调运行在插件的事件窗口过程（主线程消息泵）里，
+                    // blocking_show() 会阻塞消息泵，存在死锁与残留进程风险。
+                    app.dialog()
+                        .message(format!(
+                            "同一时间只允许一个管理器运行。\n\n已运行的副本：\n{}\n\n本次启动的副本：\n{}\n\n请使用已运行的窗口，或先关闭它再启动本副本。",
+                            cur, second_exe
+                        ))
+                        .title("已有管理器在运行")
+                        .kind(MessageDialogKind::Warning)
+                        .buttons(MessageDialogButtons::OkCustom("知道了".to_string()))
+                        .show(|_| {});
+                    return;
+                }
+
+                if let Some(version) = window::parse_launch_version(&args) {
+                    let app_handle = app.clone();
+                    let procs_for_launch = procs_for_si.clone();
+                    let version_for_launch = version.clone();
+                    tauri::async_runtime::spawn(async move {
+                        match commands::launch_window(
+                            app_handle.clone(),
+                            procs_for_launch,
+                            version_for_launch.clone(),
+                        )
+                        .await
+                        {
+                            Ok(msg) => {
+                                eprintln!(
+                                    "[dsh-multiver] 单实例转发 launch-version {}: {}",
+                                    version_for_launch, msg
+                                );
+                            }
+                            Err(e) => {
+                                // B2：转发失败不能只写日志——屏幕上什么都不发生，用户以为没响应。
+                                // 回退到「确保主窗口存在并聚焦」，并把错误落到日志供事后排查。
+                                let mdir = manager_dir(&app_handle);
+                                let root = Config::load(&mdir).resolve_root(&mdir);
+                                logging::log_launch_error(
+                                    &root,
+                                    &format!(
+                                        "单实例转发启动失败（版本 {}）: {}",
+                                        version_for_launch, e
+                                    ),
+                                );
+                                logging::log_app_error(
+                                    &root,
+                                    "single-instance",
+                                    &format!(
+                                        "转发 launch-version {} 失败，回退主窗口: {}",
+                                        version_for_launch, e
+                                    ),
+                                );
+                                eprintln!(
+                                    "[dsh-multiver] 单实例转发启动失败（已回退主窗口）: {}",
+                                    e
+                                );
+                                let _ = window::ensure_main_window(&app_handle);
+                            }
+                        }
+                    });
+                } else {
+                    match window::ensure_main_window(app) {
+                        Ok(path) => {
+                            eprintln!("[dsh-multiver] 单实例：主窗口 {}", path);
+                        }
+                        Err(e) => {
+                            log_app("single-instance", &format!("主窗口恢复失败: {}", e));
+                        }
+                    }
+                }
+            }
+        }))
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .manage(procs.clone())
@@ -174,6 +338,7 @@ pub fn run() {
             commands::get_launch_mode,
             commands::show_main_window,
             commands::is_version_open,
+            commands::list_running_versions,
             commands::ds_list_plugins,
             commands::ds_plugin_action,
             commands::ds_init_profile,

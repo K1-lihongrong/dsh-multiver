@@ -126,3 +126,65 @@ pub(crate) fn set_window_app_user_model_id(
     }
     Ok(())
 }
+
+
+/// M2m：确保主窗口存在并聚焦。
+///
+/// 场景：第二实例被单实例插件转交给已运行实例。
+/// - 主窗口还在 → unminimize + show + set_focus
+/// - 主窗口已被 launch-version 流程 close（lib.rs 里 launch 成功后 close main）→ 按 tauri.conf.json 重建
+///
+/// Windows 前台锁可能拒绝 set_focus（用户正在别的应用里操作）；此时退化 request_user_attention。
+/// 返回值说明用了哪条路径，便于日志与验收记录。
+pub(crate) fn ensure_main_window(app: &tauri::AppHandle) -> Result<&'static str, String> {
+    use tauri::Manager;
+
+    if let Some(main) = app.get_webview_window("main") {
+        let _ = main.unminimize();
+        let _ = main.show();
+        match main.set_focus() {
+            Ok(()) => return Ok("focused"),
+            Err(e) => {
+                // 前台锁拒绝：退化到任务栏闪烁提示
+                let _ = main.request_user_attention(Some(tauri::UserAttentionType::Informational));
+                // M2m（B3）：release 无控制台，eprintln 会丢，同时写文件日志。
+                let mdir = crate::manager_dir(app);
+                let root = crate::Config::load(&mdir).resolve_root(&mdir);
+                crate::logging::log_app_error(
+                    &root,
+                    "ensure-main-window",
+                    &format!("聚焦失败（已退化任务栏提示）: {}", e),
+                );
+                eprintln!("[dsh-multiver] 单实例聚焦失败（已退化任务栏提示）: {}", e);
+                return Ok("attention");
+            }
+        }
+    }
+
+    // 主窗口不存在：按配置重建。
+    //
+    // M2m（B1）：重建前必须清除启动态。原因：若本进程最初是以 `--launch-version V`
+    // 启动的，`LAUNCH_MODE` 仍是 V；新窗口前端 `onMounted` 调 `get_launch_mode()`
+    // 会读到 V 而进入「启动态」，但 `launch-mode-start` / `launch-progress` 事件
+    // 只在首次启动流程发出，重建窗口收不到 → 永远卡在「正在启动」。
+    *crate::lock_launch_mode() = None;
+
+    let config = app
+        .config()
+        .app
+        .windows
+        .iter()
+        .find(|w| w.label == "main")
+        .cloned()
+        .ok_or_else(|| "tauri.conf.json 中找不到 label=main 的窗口配置".to_string())?;
+
+    let win = tauri::WebviewWindowBuilder::from_config(app, &config)
+        .map_err(|e| format!("重建主窗口失败（from_config）: {}", e))?
+        .build()
+        .map_err(|e| format!("重建主窗口失败（build）: {}", e))?;
+
+    let _ = win.unminimize();
+    let _ = win.show();
+    let _ = win.set_focus();
+    Ok("rebuilt")
+}

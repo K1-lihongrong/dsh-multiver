@@ -23,6 +23,8 @@ tauri-plugin-opener = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tauri-plugin-dialog = "2"
+# M2m 单实例锁：重复启动转交给已运行实例（见 lib.rs）
+tauri-plugin-single-instance = "2"
 # 更新提醒：查询 GitHub Releases 最新版本（见 updater.rs）
 # 只用到阻塞式 client + json，关闭默认 features 减小体积（不用 TLS 后端之外的特性）
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }

@@ -253,14 +253,24 @@ fn official_bundle_lib(version_dir: &Path) -> Option<PathBuf> {
 
 fn query_official_bundles(version_dir: &Path) -> Option<Vec<String>> {
     let lib = official_bundle_lib(version_dir)?;
-    const JS: &str = "const {pathToFileURL} = await import('node:url');\nconst m = await import(pathToFileURL(process.argv[1]).href);\nconsole.log(JSON.stringify([...(m.OPTIONAL_BUNDLES||[]),...(m.DEFAULT_PROFILE_BUNDLES||[]),...(m.ON_DEMAND_BUNDLES||[])]));";
-    let out = std::process::Command::new("node")
-        .arg("--input-type=module")
+    // 官方随附的 bundle 分布在四处：
+    //   OPTIONAL_BUNDLES（可选实验特性）、DEFAULT_PROFILE_BUNDLES（无模板时的默认）、
+    //   ON_DEMAND_BUNDLES（按需子代理）、PROFILE_TEMPLATES[*].bundles（各 profile 模板，
+    //   如 web 模板带入 dsh-web-app）。漏掉最后一项会把 dsh-web-app 误判为用户安装。
+    const JS: &str = "const {pathToFileURL} = await import('node:url');\nconst m = await import(pathToFileURL(process.argv[1]).href);\nconst tpl = Object.values(m.PROFILE_TEMPLATES||{}).flatMap(t => t.bundles||[]);\nconsole.log(JSON.stringify([...new Set([...(m.OPTIONAL_BUNDLES||[]),...(m.DEFAULT_PROFILE_BUNDLES||[]),...(m.ON_DEMAND_BUNDLES||[]),...tpl])]));";
+    let mut cmd = std::process::Command::new("node");
+    cmd.arg("--input-type=module")
         .arg("-e")
         .arg(JS)
-        .arg(&lib)
-        .output()
-        .ok()?;
+        .arg(&lib);
+    // GUI 进程无控制台，不设 CREATE_NO_WINDOW 会闪一下黑框
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x08000000;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+    let out = cmd.output().ok()?;
     if !out.status.success() {
         return None;
     }

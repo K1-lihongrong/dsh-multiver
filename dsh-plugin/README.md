@@ -1,0 +1,84 @@
+# dsh-multiver-bridge
+
+dsh-multiver 的双向桥插件：在 dsh 设置页查看已安装版本、切换默认版本、查看运行状态与一致性校对。
+
+## 状态
+
+**v0.3.0 已完成 B2–B4**：设置页「版本管理」提供状态条（默认版本 / 运行版本 + 置信度 / 待重启提示 / 一致性校对详情）、版本表、「设为默认」、三个送回动作（打开 multiver 目录 / 打开版本目录 / 复制诊断），以及「打开 multiver」按钮（仅非内嵌模式显示）。
+
+## 安装
+
+### 方式一：tarball（推荐，交付形态）
+
+```powershell
+# 1. 生成 tarball
+cd dsh-plugin
+pnpm pack
+# 产物：dsh-multiver-bridge-0.1.0.tgz
+
+# 2. 装进目标 profile（不写死版本号）
+.\install.ps1 -DshCmd '<dsh.cmd 路径>' -Profile web -PackageDir '.\dsh-multiver-bridge-0.1.0.tgz'
+```
+
+### 方式二：目录安装（仅开发用）
+
+```powershell
+.\install.ps1 -DshCmd '<dsh.cmd 路径>' -Profile mvtest
+```
+
+> 目录安装是 link，移动源码目录会失效。交付请用 tarball。
+
+### 脚本行为
+
+- **profile 不存在** → 用 `--from-default-profile web` 建新 profile（含 `dsh-base` + `dsh-web-app`），再装插件。
+- **profile 已存在但缺 `dsh-web-app`** → 默认报错退出，加 `-Force` 才降级为警告。
+
+> ⚠️ `--from-default-profile` 的语义是**重建**（把旧目录 rename 走、放入官方模板新目录），**会清空已装 bundle**。它只能用于「创建全新 profile」，不能当成「补 web-app」的补丁。
+
+**装完必须重启 dsh 才生效。**
+
+## 卸载
+
+```powershell
+.\uninstall.ps1 -DshCmd '<dsh.cmd 路径>' -Profile web
+```
+
+重启后 `dsh --profile <name> --dump-config` 不应再出现 `multiver-bridge`。
+
+## 配置
+
+`cordis.patch.yml` 中两个字段：
+
+| 字段 | 默认 | 说明 |
+|:---|:---|:---|
+| `exe` | `""` | dsh-multiver.exe 绝对路径；空 = 自动探测（优先 `DSH_MULTIVER_EXE`） |
+| `commandTimeoutMs` | `15000` | 单次 CLI 调用超时 |
+
+## 运行来源识别
+
+multiver 启动 dsh 时会注入以下环境变量，插件据此判断「谁启动的、哪个版本」：
+
+| 变量 | 值 | 注入方 |
+|:---|:---|:---|
+| `DSH_MULTIVER_VERSION` | 版本号 | 内嵌窗口 / 控制台 / 终端 `dsh` |
+| `DSH_MULTIVER_ROOT` | 数据根 | 同上 |
+| `DSH_MULTIVER_EXE` | 管理器 exe 路径 | 同上 |
+| `DSH_MULTIVER_MODE` | `embedded` / `console` | 仅 multiver 启动（终端无） |
+| `DSH_MULTIVER_PID` | multiver 进程 PID | 仅 multiver 启动（终端无） |
+
+终端 `dsh` 不注入 MODE/PID——那里没有 launcher 进程，PID 会误导判定。
+
+## 已知限制
+
+- `engines.dsh` 精确锁 `0.2.1-rc.2`，dsh 升级后需复验并重打包。
+- 目录安装是 link，移动源码目录会失效；交付用 `pnpm pack` 出的 tarball。
+- 卸载后 `node_modules` 可能残留 link（dsh 的已知行为，不影响加载）。
+- 「运行中」徽标只统计 multiver 打开的内嵌窗口；console 启动与终端 `dsh` 没有进程内记录，不在范围。
+- 切换版本只改默认版本，**对下一次启动生效**；运行中的 dsh 无法热替换自身。
+- 内嵌窗口里隐藏「打开 multiver」按钮——点它只会再开一个管理器，无意义。
+
+## tarball 内容
+
+`pnpm pack` 产物包含：`package.json`、`cordis.patch.yml`、`index.js`、`client.js`、`locale/*.json`、`icon.svg`、`README.md`、`install.ps1`、`uninstall.ps1`（`LICENSE` 由打包工具自动带入）。
+
+`*.tgz` 已加入 `.gitignore`，随 Release 分发，不进仓库。

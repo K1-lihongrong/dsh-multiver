@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "dsh-multiver Version Manager",
+    "description": "View installed versions and switch the default inside dsh. Installation and isolation stay in dsh-multiver."
+  }
+}

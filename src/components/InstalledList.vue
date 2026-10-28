@@ -1,5 +1,5 @@
 <script setup>
-import { ref } from "vue";
+import { ref, onMounted, onUnmounted } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import { ask } from "@tauri-apps/plugin-dialog";
 import { useToast } from "../composables/useToast.js";
@@ -55,6 +55,16 @@ function onSharedHomeChoice(choice) {
 }
 
 const runningVersion = ref(""); // 正在启动的版本号
+// M3b：「运行中」徽标——只覆盖 embedded 窗口（内存 ProcMap）。
+// console 启动与终端 dsh 没有进程内记录，不在本列表范围（已知限制）。
+const openVersions = ref(new Set());
+let openPollTimer = null;
+async function refreshOpenVersions() {
+  try {
+    const list = await invoke("list_running_versions");
+    openVersions.value = new Set(list || []);
+  } catch (_) { /* 查询失败保持原状 */ }
+}
 const uninstalling = ref("");   // 正在卸载的版本号
 const browserOpenResult = ref(null); // 浏览器打开失败时展示 URL
 const installedNoteVer = ref(null); // 当前展开更新说明的版本号
@@ -115,6 +125,19 @@ async function confirmSharedHome(v) {
   if (!ver || ver.isolated) return true; // 隔离版本无此风险
   return await sharedHomeDialog(v);
 }
+
+onMounted(() => {
+  refreshOpenVersions();
+  // 5 秒轮询：打开/关闭内嵌窗口后徽标能跟上。
+  // 不在隐藏时轮询——窗口不可见时没必要花这个 IPC。
+  openPollTimer = setInterval(() => {
+    if (document.visibilityState === 'visible') refreshOpenVersions();
+  }, 5000);
+});
+
+onUnmounted(() => {
+  if (openPollTimer) { clearInterval(openPollTimer); openPollTimer = null; }
+});
 
 async function run(v) {
   if (!(await confirmSharedHome(v))) return;
@@ -287,6 +310,7 @@ function toggleInstalledNote(v) {
           <span class="ver-num ver-num-clickable" :title="t('installed.clickNotes')" @click="toggleInstalledNote(v.version)">
             {{ v.version }}<span class="ver-caret">{{ installedNoteVer === v.version ? "▾" : "▸" }}</span>
           </span>
+          <span class="badge badge-running" v-if="openVersions.has(v.version)" :title="t('installed.openWindowTip')">{{ t("installed.openWindow") }}</span>
           <span class="badge" v-if="v.is_default">{{ t("installed.default") }}</span>
           <span class="badge badge-iso" v-if="v.isolated">{{ t("installed.isolated") }}</span>
           <span class="badge badge-shared" v-else :title="t('installed.sharedHomeTip')">{{ t("installed.sharedHome") }}</span>

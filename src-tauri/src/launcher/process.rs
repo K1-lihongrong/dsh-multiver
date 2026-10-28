@@ -11,6 +11,28 @@ use std::path::Path;
 use std::process::{Child, Command, Stdio};
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
+/// M3b：为 dsh 子进程注入 DSH_MULTIVER_* 标记，供插件识别「谁启动的、哪个版本」。
+///
+/// - `DSH_MULTIVER_VERSION` / `DSH_MULTIVER_ROOT`：从 `<root>/versions/<ver>` 反推
+/// - `DSH_MULTIVER_EXE`：multiver 自身可执行文件路径（拿不到时跳过该项）
+/// - `DSH_MULTIVER_MODE`：`embedded`（内嵌窗口）/ `console`（控制台或浏览器打开）
+/// - `DSH_MULTIVER_PID`：启动该 dsh 的 multiver 进程 PID
+///
+/// 终端 `dsh` 转发脚本不注入 MODE/PID（那里没有 launcher 进程，PID 会误导）。
+fn inject_multiver_env(cmd: &mut Command, version_dir: &Path, mode: &str) {
+    if let Some(version) = version_dir.file_name() {
+        cmd.env("DSH_MULTIVER_VERSION", version);
+    }
+    if let Some(root) = version_dir.parent().and_then(|p| p.parent()) {
+        cmd.env("DSH_MULTIVER_ROOT", root);
+    }
+    if let Ok(exe) = std::env::current_exe() {
+        cmd.env("DSH_MULTIVER_EXE", exe);
+    }
+    cmd.env("DSH_MULTIVER_MODE", mode);
+    cmd.env("DSH_MULTIVER_PID", std::process::id().to_string());
+}
+
 /// 启动 dsh web（隐藏窗口），返回子进程句柄与**完整访问 URL**（含 token）。
 ///
 /// 用 --port 0 让系统自动分配空闲端口；dsh 启动后会打印：
@@ -71,6 +93,8 @@ fn spawn_web_inner(
         .env("npm_config_state_dir", state_dir)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+
+    inject_multiver_env(&mut cmd, version_dir, "embedded");
 
     // 运行时适配（v0.2.9）：若系统缺 Node，把便携 Node 目录注入 dsh 子进程 PATH，
     // 使 dsh.cmd 的 "就近 node.exe → PATH 兜底" 解析到便携 Node（已实测有效）。
@@ -399,6 +423,7 @@ fn spawn_web_console_terminal(
             .env("npm_config_store_dir", store_dir)
             .env("npm_config_cache_dir", cache_dir)
             .env("npm_config_state_dir", state_dir);
+        inject_multiver_env(&mut cmd, version_dir, "console");
         if let Some(new_path) = crate::runtime::path_env_additions(root) {
             cmd.env("PATH", new_path);
         }
@@ -445,34 +470,52 @@ pub fn spawn_web_console_detached(
         return (false, format!("找不到启动入口: {}", bin.to_string_lossy()));
     }
 
+    // 启动 dsh web（不带 --no-open，由 dsh 自己打开浏览器）。
+    //
+    // Windows 的 #1 修复（v0.3.0 验收发现窗口全空白）：
+    // GUI 进程（Tauri，windows_subsystem = "windows"）本身没有控制台。
+    // 原实现只设 CREATE_NEW_CONSOLE，标准句柄没有被可靠绑定到新控制台，
+    // dsh 的输出写进了空句柄，窗口存在但全空白。
+    //
+    // 现在显式 stdio(inherit) + CREATE_NEW_CONSOLE：
+    // 子进程的标准句柄由新控制台初始化，dsh 的两行输出（URL/token 与
+    // "opening the default browser"）才能显示在窗口里。
+    //
+    // 交互约束（交互设计约定 §2.1）：
+    // - 新控制台 + dsh 自开浏览器 ✅
+    // - 关窗即停 ✅（实测：关闭控制台窗口后 cmd 与 node 同时终止，无残留）
+    // - 管理器退出不杀 dsh ✅（靠 configure_command 不挂 Job 保证）
     #[cfg(windows)]
     let mut cmd = {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NEW_CONSOLE: u32 = 0x00000010;
+
         let mut c = Command::new("cmd");
         c.arg("/C").arg(&bin);
+        // 显式 inherit：让子进程的标准句柄由新控制台初始化，
+        // 而不是从无控制台的 GUI 父进程继承空句柄。
+        c.stdin(Stdio::inherit())
+            .stdout(Stdio::inherit())
+            .stderr(Stdio::inherit())
+            .creation_flags(CREATE_NEW_CONSOLE);
         c
     };
     #[cfg(not(windows))]
     let mut cmd = Command::new(&bin);
 
-    cmd.arg("web")
-        .arg("--port")
-        .arg(port.to_string())
-        .env("DSH_HOME", home_dir)
+    cmd.arg("web").arg("--port").arg(port.to_string());
+
+    cmd.env("DSH_HOME", home_dir)
         .env("npm_config_store_dir", store_dir)
         .env("npm_config_cache_dir", cache_dir)
         .env("npm_config_state_dir", state_dir);
+
+    inject_multiver_env(&mut cmd, version_dir, "console");
 
     if let Some(root) = version_dir.parent().and_then(|p| p.parent()) {
         if let Some(new_path) = crate::runtime::path_env_additions(root) {
             cmd.env("PATH", new_path);
         }
-    }
-
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        const CREATE_NEW_CONSOLE: u32 = 0x00000010;
-        cmd.creation_flags(CREATE_NEW_CONSOLE);
     }
 
     #[cfg(unix)]
@@ -519,5 +562,45 @@ mod tests {
         assert!(s.contains("'/tmp/a b/dsh' web --port 3080"));
         assert!(!s.contains("--no-open"));
         assert!(s.contains("按回车关闭窗口"));
+    }
+}
+
+/// M3b：env 注入的跨平台验证。Command::get_envs 不依赖实际 spawn。
+#[cfg(test)]
+mod env_tests {
+    use super::inject_multiver_env;
+    use std::collections::HashMap;
+    use std::path::Path;
+    use std::process::Command;
+
+    fn collect_envs(cmd: &Command) -> HashMap<String, String> {
+        cmd.get_envs()
+            .filter_map(|(k, v)| Some((
+                k.to_string_lossy().to_string(),
+                v?.to_string_lossy().to_string(),
+            )))
+            .collect()
+    }
+
+    #[test]
+    fn injects_version_root_mode_pid() {
+        let mut cmd = Command::new("dsh");
+        inject_multiver_env(&mut cmd, Path::new("R:/root/versions/1.2.3"), "embedded");
+        let envs = collect_envs(&cmd);
+        assert_eq!(envs.get("DSH_MULTIVER_VERSION").map(String::as_str), Some("1.2.3"));
+        assert_eq!(envs.get("DSH_MULTIVER_ROOT").map(String::as_str), Some("R:/root"));
+        assert_eq!(envs.get("DSH_MULTIVER_MODE").map(String::as_str), Some("embedded"));
+        assert!(envs.contains_key("DSH_MULTIVER_PID"));
+        assert!(envs.contains_key("DSH_MULTIVER_EXE"));
+    }
+
+    #[test]
+    fn console_mode_is_passed_through() {
+        let mut cmd = Command::new("dsh");
+        inject_multiver_env(&mut cmd, Path::new("R:/root/versions/2.0.0"), "console");
+        assert_eq!(
+            collect_envs(&cmd).get("DSH_MULTIVER_MODE").map(String::as_str),
+            Some("console")
+        );
     }
 }

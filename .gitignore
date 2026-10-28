@@ -47,3 +47,6 @@ docs/screenshots/theme/
 test-results/
 playwright-report/
 blob-report/
+
+# 插件包发布产物（pnpm pack 出的 tarball，随 Release 分发，不进仓库）
+dsh-plugin/*.tgz
