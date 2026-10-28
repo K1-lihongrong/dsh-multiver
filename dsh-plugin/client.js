@@ -395,7 +395,8 @@ window.__ModuleLoader__.load({
           style: { padding: '24px 16px', textAlign: 'center', opacity: 0.75, fontSize: 14, lineHeight: '22px' },
         },
           h('div', { style: { fontWeight: 600, marginBottom: 6 } }, t('emptyTitle')),
-          h('div', null, t('emptyHint'))
+          h('div', null, t('emptyHint')),
+          h('div', { style: { marginTop: 8, fontSize: 12, opacity: 0.7, lineHeight: '19px' } }, t('emptyNote'))
         ),
         // 版本表
         v.versions.length > 0 && h('table', { style: { width: '100%', borderCollapse: 'collapse', fontSize: 14 } },
@@ -593,8 +594,9 @@ window.__ModuleLoader__.load({
             'err.invalid-version': '版本号格式不正确',
             'err.unknown-endpoint': '未知的接口',
             'err.internal': '内部错误',
-            emptyTitle: '还没有已安装的版本',
-            emptyHint: '请先在 dsh-multiver 里安装一个版本，再回到这里管理。',
+            emptyTitle: 'multiver 还没有安装任何 dsh 版本',
+            emptyHint: '请在 dsh-multiver 里安装一个版本，再回到这里管理。',
+            emptyNote: 'multiver 只管它自己装的那份 dsh（位于数据根的 versions/ 目录）。你通过 npm、pnpm、Python wheel 或 DeepSeek Harness 桌面版装的 dsh 是独立的一份，不受本插件影响，也不会出现在这个列表里。',
             'err.network': '网络或鉴权失败',
             'err.invalid-target': '目标不受支持',
             'err.outside-root': '路径超出数据根',
@@ -687,8 +689,9 @@ window.__ModuleLoader__.load({
             'err.invalid-version': 'Invalid version string',
             'err.unknown-endpoint': 'Unknown endpoint',
             'err.internal': 'Internal error',
-            emptyTitle: 'No versions installed yet',
-            emptyHint: 'Install a version in dsh-multiver first, then come back here.',
+            emptyTitle: 'multiver has no dsh versions yet',
+            emptyHint: 'Install a version in dsh-multiver, then come back here.',
+            emptyNote: 'multiver only manages the dsh copies it installed itself (under versions/ in the data root). A dsh installed via npm, pnpm, a Python wheel, or DeepSeek Harness Desktop is a separate installation — unaffected by this plugin and never listed here.',
             'err.network': 'Network or auth failure',
             'err.invalid-target': 'Unsupported target',
             'err.outside-root': 'Path is outside the data root',
