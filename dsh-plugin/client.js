@@ -71,6 +71,166 @@ window.__ModuleLoader__.load({
       })
     }
 
+    // 部署向导（阶段 2）：provisioned=false 时替代全部功能 UI。
+    // 三步：选工作目录 → 获取 exe（下载/已有）→ 完成并启动。
+    function ProvisionWizard(props) {
+      const t = React.useContext(LocaleCtx) ?? ((k) => k)
+      const info = props.provision || {}
+      const [step, setStep] = React.useState(1)
+      const [workdir, setWorkdir] = React.useState(info.defaultWorkdir || '')
+      const [adoptPath, setAdoptPath] = React.useState('')
+      const [mode, setMode] = React.useState('download') // download | adopt
+      const [busy, setBusy] = React.useState(false)
+      const [err, setErr] = React.useState(null)
+      const [result, setResult] = React.useState(null)
+
+      const run = React.useCallback(async (payload, onOk) => {
+        setBusy(true)
+        setErr(null)
+        try {
+          const r = await rpc('provision', payload)
+          if (r.ok) { onOk(r.value) } else { setErr(r.error) }
+        } catch (e) {
+          setErr({ code: 'network', message: String(e?.message ?? e) })
+        } finally {
+          setBusy(false)
+        }
+      }, [])
+
+      const doAcquire = React.useCallback(() => {
+        if (mode === 'adopt') {
+          run({ step: 'adopt', exe: adoptPath }, (v) => {
+            setResult({ exe: v.exe, verified: false, adopted: true })
+            setStep(3)
+          })
+        } else {
+          run({ step: 'download', workdir }, (v) => {
+            setResult(v)
+            setStep(3)
+          })
+        }
+      }, [mode, adoptPath, workdir, run])
+
+      const doFinish = React.useCallback(() => {
+        const exe = result?.exe
+        run({ step: 'setRoot', exe, workdir }, () => {
+          run({ step: 'launch' }, () => { props.onDone && props.onDone() })
+        })
+      }, [result, workdir, run, props])
+
+      const errText = (e) => {
+        if (!e) return null
+        const key = 'err.' + e.code
+        const mapped = t(key)
+        return (mapped && mapped !== key ? mapped : e.code) + (e.message ? '：' + e.message : '')
+      }
+
+      const box = { padding: '16px 20px', maxWidth: 720 }
+      const card = {
+        border: '1px solid rgba(128,128,128,.25)', borderRadius: 8,
+        padding: '14px 16px', marginBottom: 12,
+      }
+      const inputStyle = {
+        width: '100%', padding: '7px 10px', borderRadius: 6, fontSize: 13,
+        border: '1px solid rgba(128,128,128,.35)', background: 'transparent',
+        color: 'inherit', fontFamily: 'ui-monospace, monospace',
+      }
+      const rowGap = { display: 'flex', gap: 8, marginTop: 10, flexWrap: 'wrap' }
+
+      return h('div', { style: box },
+        h('div', { style: { fontSize: 15, fontWeight: 600, marginBottom: 4 } }, t('provision.title')),
+        h('div', { style: { fontSize: 13, opacity: .7, marginBottom: 16 } }, t('provision.subtitle')),
+
+        // 步骤指示
+        h('div', { style: { display: 'flex', gap: 18, fontSize: 12, marginBottom: 16, opacity: .8 } },
+          [1, 2, 3].map((n) => h('span', {
+            key: n,
+            style: { fontWeight: step === n ? 700 : 400, opacity: step >= n ? 1 : .5 },
+          }, `${n}. ${t('provision.step' + n)}`))
+        ),
+
+        // 步骤 1：选工作目录
+        step === 1 && h('div', { style: card },
+          h('div', { style: { fontSize: 13, marginBottom: 8 } }, t('provision.pickDirHint')),
+          h('input', {
+            style: inputStyle,
+            value: workdir,
+            placeholder: info.defaultWorkdir || 'D:/dsh-multiver',
+            onChange: (e) => setWorkdir(e.target.value),
+            disabled: busy,
+          }),
+          h('div', { style: rowGap },
+            h('button', {
+              style: btnStyle,
+              disabled: busy || !workdir.trim(),
+              onClick: () => { setErr(null); setStep(2) },
+            }, t('provision.next'))
+          )
+        ),
+
+        // 步骤 2：获取 exe
+        step === 2 && h('div', { style: card },
+          h('div', { style: { display: 'flex', gap: 14, marginBottom: 10, fontSize: 13 } },
+            h('label', { style: { display: 'flex', gap: 5, alignItems: 'center', cursor: 'pointer' } },
+              h('input', { type: 'radio', checked: mode === 'download', onChange: () => setMode('download'), disabled: busy }),
+              t('provision.modeDownload')),
+            h('label', { style: { display: 'flex', gap: 5, alignItems: 'center', cursor: 'pointer' } },
+              h('input', { type: 'radio', checked: mode === 'adopt', onChange: () => setMode('adopt'), disabled: busy }),
+              t('provision.modeAdopt'))
+          ),
+          mode === 'download'
+            ? h('div', null,
+                h('div', { style: { fontSize: 12, opacity: .7, marginBottom: 6 } },
+                  t('provision.downloadHint', { repo: info.releaseRepo || '' })),
+                h('div', { style: { fontSize: 11, fontFamily: 'ui-monospace, monospace', opacity: .6, wordBreak: 'break-all' } },
+                  workdir + '/' + (info.platform === 'win32' ? 'dsh-multiver.exe' : 'dsh-multiver')))
+            : h('div', null,
+                h('div', { style: { fontSize: 12, opacity: .7, marginBottom: 6 } }, t('provision.adoptHint')),
+                h('input', {
+                  style: inputStyle,
+                  value: adoptPath,
+                  placeholder: 'D:/tools/dsh-multiver.exe',
+                  onChange: (e) => setAdoptPath(e.target.value),
+                  disabled: busy,
+                })),
+          busy && h('div', { style: { marginTop: 10, fontSize: 12, opacity: .75 } }, t('provision.working')),
+          err && h('div', {
+            style: { marginTop: 10, padding: '8px 12px', borderRadius: 6, background: 'rgba(220,50,50,.12)', fontSize: 12 },
+          }, errText(err)),
+          h('div', { style: rowGap },
+            h('button', { style: btnStyle, disabled: busy, onClick: () => { setErr(null); setStep(1) } }, t('provision.back')),
+            h('button', {
+              style: { ...btnStyle, opacity: busy || (mode === 'adopt' ? !adoptPath.trim() : !workdir.trim()) ? .5 : 1 },
+              disabled: busy || (mode === 'adopt' ? !adoptPath.trim() : !workdir.trim()),
+              onClick: doAcquire,
+            }, mode === 'download' ? t('provision.doDownload') : t('provision.doAdopt'))
+          )
+        ),
+
+        // 步骤 3：完成并启动
+        step === 3 && h('div', { style: card },
+          h('div', { style: { fontSize: 13, marginBottom: 8 } }, t('provision.acquired')),
+          h('div', { style: { fontSize: 11.5, fontFamily: 'ui-monospace, monospace', opacity: .75, wordBreak: 'break-all' } }, result?.exe || ''),
+          result?.verified && h('div', { style: { fontSize: 12, color: '#2a9d3f', marginTop: 6 } },
+            t('provision.checksumOk')),
+          result?.adopted && h('div', { style: { fontSize: 12, opacity: .7, marginTop: 6 } },
+            t('provision.adoptNoChecksum')),
+          err && h('div', {
+            style: { marginTop: 10, padding: '8px 12px', borderRadius: 6, background: 'rgba(220,50,50,.12)', fontSize: 12 },
+          }, errText(err)),
+          h('div', { style: rowGap },
+            h('button', { style: btnStyle, disabled: busy, onClick: () => { setErr(null); setResult(null); setStep(2) } }, t('provision.back')),
+            h('button', { style: { ...btnStyle, fontWeight: 600 }, disabled: busy, onClick: doFinish },
+              busy ? t('provision.working') : t('provision.finish'))
+          )
+        ),
+
+        info.reasons && info.reasons.length > 0 && step === 1 && h('div', {
+          style: { marginTop: 8, fontSize: 11.5, opacity: .55 },
+        }, t('provision.reasonPrefix') + ' ' + info.reasons.join(', '))
+      )
+    }
+
     function VersionsPage(props) {
       const t = React.useContext(LocaleCtx) ?? ((k) => k)
       const [state, setState] = React.useState({ kind: 'loading' })
@@ -164,6 +324,14 @@ window.__ModuleLoader__.load({
           h('div', { style: { opacity: 0.75, marginBottom: 12, fontSize: 13 } }, state.error.message),
           h('button', { onClick: load, style: btnStyle }, t('retry'))
         )
+      }
+
+      // 阶段 2 门控：未配置数据根时只显示部署向导，不渲染版本表与任何功能按钮
+      if (!state.value.provisioned) {
+        return h(ProvisionWizard, {
+          provision: state.value.provision,
+          onDone: load,
+        })
       }
 
       const v = state.value
@@ -447,6 +615,39 @@ window.__ModuleLoader__.load({
             consistencyBad: '不一致',
             consistencyUnknown: '无法确定',
             compatUnverified: '当前 dsh {running} 未经验证。插件按 {list} 验证，功能可能在后续版本失效；如遇问题请在 multiver 侧反馈。',
+            'provision.title': '首次使用：部署 dsh-multiver',
+            'provision.subtitle': '需要先准备好 dsh-multiver.exe 并选择工作目录，之后即可在这里管理 dsh 版本。',
+            'provision.step1': '选择工作目录',
+            'provision.step2': '获取 dsh-multiver.exe',
+            'provision.step3': '完成并启动',
+            'provision.pickDirHint': '选择存放版本与配置的目录（不存在会自动创建，不会使用系统目录）：',
+            'provision.next': '下一步',
+            'provision.back': '上一步',
+            'provision.modeDownload': '自动下载最新版',
+            'provision.modeAdopt': '使用已有的 exe',
+            'provision.downloadHint': '将从 GitHub Release（{repo}）下载，并校验 SHA256。',
+            'provision.adoptHint': '填写本机已有的 dsh-multiver.exe 绝对路径：',
+            'provision.doDownload': '下载并校验',
+            'provision.doAdopt': '使用此文件',
+            'provision.working': '处理中…',
+            'provision.acquired': '已就绪的 dsh-multiver.exe：',
+            'provision.checksumOk': 'SHA256 校验通过',
+            'provision.adoptNoChecksum': '已有文件不做校验，请自行确认来源可信',
+            'provision.finish': '设置工作目录并启动',
+            'provision.reasonPrefix': '检测到：',
+            'err.invalid-dir': '目录路径无效',
+            'err.invalid-exe': 'exe 路径无效',
+            'err.exe-missing': '找不到 dsh-multiver.exe',
+            'err.dir-create-failed': '无法创建目录',
+            'err.dir-readonly': '目录不可写',
+            'err.download-failed': '下载失败',
+            'err.http-error': '服务器返回错误',
+            'err.checksum-mismatch': 'SHA256 校验失败，已拒绝该文件',
+            'err.checksum-missing': '校验文件中没有该文件的记录',
+            'err.rename-failed': '无法写入目标位置（文件可能正被占用）',
+            'err.insecure-url': '仅支持 HTTPS 下载',
+            'err.invalid-step': '未知的部署步骤',
+            'err.write-failed': '写入文件失败',
           },
           en: {
             section: 'Versions',
@@ -508,6 +709,39 @@ window.__ModuleLoader__.load({
             consistencyBad: 'mismatch',
             consistencyUnknown: 'unknown',
             compatUnverified: 'This dsh ({running}) is not a verified version. The plugin was verified against {list}; later releases may break it. Please report issues on the multiver side.',
+            'provision.title': 'First run: set up dsh-multiver',
+            'provision.subtitle': 'Prepare dsh-multiver.exe and pick a working directory, then you can manage dsh versions here.',
+            'provision.step1': 'Choose directory',
+            'provision.step2': 'Get dsh-multiver.exe',
+            'provision.step3': 'Finish and launch',
+            'provision.pickDirHint': 'Where versions and config will live (created if missing; system directories are never used by default):',
+            'provision.next': 'Next',
+            'provision.back': 'Back',
+            'provision.modeDownload': 'Download the latest',
+            'provision.modeAdopt': 'Use an existing exe',
+            'provision.downloadHint': 'Downloads from the GitHub Release ({repo}) and verifies SHA256.',
+            'provision.adoptHint': 'Absolute path to an existing dsh-multiver.exe:',
+            'provision.doDownload': 'Download and verify',
+            'provision.doAdopt': 'Use this file',
+            'provision.working': 'Working…',
+            'provision.acquired': 'Ready:',
+            'provision.checksumOk': 'SHA256 verified',
+            'provision.adoptNoChecksum': 'Existing file is not verified — make sure the source is trustworthy',
+            'provision.finish': 'Set directory and launch',
+            'provision.reasonPrefix': 'Detected:',
+            'err.invalid-dir': 'Invalid directory path',
+            'err.invalid-exe': 'Invalid exe path',
+            'err.exe-missing': 'dsh-multiver.exe not found',
+            'err.dir-create-failed': 'Failed to create directory',
+            'err.dir-readonly': 'Directory is not writable',
+            'err.download-failed': 'Download failed',
+            'err.http-error': 'Server returned an error',
+            'err.checksum-mismatch': 'SHA256 mismatch — file rejected',
+            'err.checksum-missing': 'Checksum file has no entry for this file',
+            'err.rename-failed': 'Cannot write target (file may be in use)',
+            'err.insecure-url': 'Only HTTPS downloads are allowed',
+            'err.invalid-step': 'Unknown provisioning step',
+            'err.write-failed': 'Failed to write file',
           },
         }), 'multiver-bridge: dictionaries')
 

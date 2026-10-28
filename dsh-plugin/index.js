@@ -17,13 +17,38 @@
  */
 
 import { execFile, spawn } from 'node:child_process'
-import { existsSync, realpathSync, readFileSync } from 'node:fs'
+import {
+  existsSync, realpathSync, readFileSync, writeFileSync,
+  mkdirSync, createWriteStream, unlinkSync, renameSync, statSync,
+} from 'node:fs'
 import { join, dirname, delimiter, sep } from 'node:path'
+import { createHash } from 'node:crypto'
+import https from 'node:https'
 
 const MAX_BODY = 16 * 1024
 const CHANNEL = '/multiver-bridge'
 const VERSION_RE = /^[A-Za-z0-9][A-Za-z0-9._+-]*$/
 const OPEN_TARGETS = new Set(['version-dir', 'multiver-dir', 'launch-multiver'])
+
+// 部署引导（阶段 2）。下载源固定为本仓库的 latest Release，不接受任意 URL。
+const RELEASE_REPO = 'K1-lihongrong/dsh-multiver'
+const EXE_ASSET = 'dsh-multiver.exe'
+const SUMS_ASSET = 'SHA256SUMS.txt'
+const EXE_NAME = process.platform === 'win32' ? 'dsh-multiver.exe' : 'dsh-multiver'
+const DOWNLOAD_TIMEOUT_MS = 120000
+// 默认工作目录：%LOCALAPPDATA%\dsh-multiver（Win）/ ~/.local/share/dsh-multiver（Unix）
+const DEFAULT_WORKDIR = (() => {
+  try {
+    if (process.platform === 'win32') {
+      const base = process.env.LOCALAPPDATA || process.env.APPDATA
+      if (base) return join(base, 'dsh-multiver')
+    } else {
+      const home = process.env.HOME
+      if (home) return join(home, '.local', 'share', 'dsh-multiver')
+    }
+  } catch {}
+  return null
+})()
 
 // 已验证的 dsh 版本（来自本包 package.json 的 dshMultiver.verifiedDshVersions）。
 // 仅用于 UI 提示，不做安装拦截——engines 字段刻意省略，安装层零约束。
@@ -112,6 +137,7 @@ export function apply(ctx, config) {
           else if (endpoint === 'setDefault') result = await handleSetDefault(cfg, payload)
           else if (endpoint === 'probe') result = await handleProbe(cfg)
           else if (endpoint === 'open') result = await handleOpen(cfg, payload)
+          else if (endpoint === 'provision') result = await handleProvision(cfg, payload)
           else result = fail('unknown-endpoint', endpoint)
         } catch (e) {
           result = fail('internal', String(e?.message ?? e))
@@ -132,8 +158,22 @@ export function apply(ctx, config) {
 
   async function handleState(cfg) {
     const exeInfo = resolveExe(cfg.exe)
-    if (!exeInfo.path) {
-      return fail('exe-not-found', 'dsh-multiver.exe not found', { tried: exeInfo.tried })
+
+    // 部署态探测（阶段 2）：exe 缺失或 root 未设置时，返回 provisioned=false +
+    // 向导所需信息，而不是直接报错——否则 Client 无法进入部署引导。
+    // 真相源是 multiver 自身的 config.json，插件不另存。
+    const provision = probeProvision(exeInfo)
+    if (!provision.provisioned) {
+      return {
+        ok: true,
+        value: {
+          provisioned: false,
+          provision,
+          mode: process.env.DSH_MULTIVER_MODE ?? null,
+          compatibility: compatOf(detectRunningVersion().version),
+          fetchedAt: new Date().toISOString(),
+        },
+      }
     }
 
     const list = await runJson(exeInfo.path, ['list', '--json'], cfg.commandTimeoutMs)
@@ -164,6 +204,8 @@ export function apply(ctx, config) {
     return {
       ok: true,
       value: {
+        provisioned: true,
+        provision,
         exe: exeInfo.path,
         detectedBy: exeInfo.detectedBy,
         mode: process.env.DSH_MULTIVER_MODE ?? null,
@@ -177,13 +219,7 @@ export function apply(ctx, config) {
         pendingRestart,
         // 兼容性提示（不阻断功能）：包内声明的已验证 dsh 版本 vs 当前运行版本。
         // 未知运行版本时 verified 为 null，UI 不显示提示。
-        compatibility: {
-          runningVersion: running.version,
-          verifiedVersions: VERIFIED_DSH_VERSIONS,
-          verified: running.version === null
-            ? null
-            : VERIFIED_DSH_VERSIONS.includes(running.version),
-        },
+        compatibility: compatOf(running.version),
         versions: versions.map((v) => ({
           version: v.version,
           path: v.path,
@@ -385,6 +421,281 @@ export function apply(ctx, config) {
   }
 
   // ---------- exe 探测（§5.6 顺序）----------
+
+  // ---------- 部署引导（阶段 2）----------
+
+  /// 统一入口：按 payload.step 分发。
+  ///   step=prepare  选目录 + 可选下载/校验（返回后续步骤所需信息，不落盘业务状态）
+  ///   step=download 下载 exe + 校验 SHA256 + 落到工作目录
+  ///   step=adopt    采用已有 exe 路径
+  ///   step=setRoot  调用 multiver CLI set-root
+  ///   step=launch   启动 multiver 主界面
+  async function handleProvision(cfg, payload) {
+    const step = payload?.step
+    if (step === 'download') return provisionDownload(payload)
+    if (step === 'adopt') return provisionAdopt(payload)
+    if (step === 'setRoot') return provisionSetRoot(cfg, payload)
+    if (step === 'launch') return provisionLaunch(cfg)
+    return fail('invalid-step', 'step must be one of: download, adopt, setRoot, launch')
+  }
+
+  /// 校验工作目录：必须是绝对路径，且父目录可创建。
+  function validateWorkdir(dir) {
+    if (typeof dir !== 'string' || !dir.trim()) {
+      return fail('invalid-dir', '工作目录不能为空')
+    }
+    const d = dir.trim()
+    // 绝对路径：Windows 盘符或 Unix 前导 /
+    const isAbs = /^[A-Za-z]:[\\/]/.test(d) || d.startsWith('/') || d.startsWith('\\\\')
+    if (!isAbs) {
+      return fail('invalid-dir', '请提供绝对路径')
+    }
+    if (d.split(/[\\/]/).includes('..')) {
+      return fail('invalid-dir', '路径不能包含 ..')
+    }
+    return null
+  }
+
+  /// 下载 exe 与 SHA256SUMS.txt，校验后落到 <workdir>/dsh-multiver.exe。
+  /// 失败时清理临时文件，不留半成品。
+  async function provisionDownload(payload) {
+    const bad = validateWorkdir(payload?.workdir)
+    if (bad) return bad
+    const workdir = payload.workdir.trim()
+    const tag = payload?.tag ? String(payload.tag) : null
+
+    try {
+      mkdirSync(workdir, { recursive: true })
+    } catch (e) {
+      return fail('dir-create-failed', String(e?.message ?? e))
+    }
+    // 可写性探测
+    const probe = join(workdir, '.multiver-bridge-write-test')
+    try {
+      writeFileSync(probe, 'ok')
+      unlinkSync(probe)
+    } catch (e) {
+      return fail('dir-readonly', String(e?.message ?? e))
+    }
+
+    const base = tag
+      ? `https://github.com/${RELEASE_REPO}/releases/download/${tag}`
+      : `https://github.com/${RELEASE_REPO}/releases/latest/download`
+
+    const tmpExe = join(workdir, '.dsh-multiver.exe.download')
+    const tmpSum = join(workdir, '.SHA256SUMS.download')
+
+    try {
+      const dlExe = await downloadFile(`${base}/${EXE_ASSET}`, tmpExe)
+      if (!dlExe.ok) return dlExe
+
+      // SHA256SUMS.txt 可能不存在（旧 Release）；存在则强制校验，不存在只警告
+      const dlSum = await downloadFile(`${base}/${SUMS_ASSET}`, tmpSum)
+      let checksum = null
+      if (dlSum.ok) {
+        const text = readFileSync(tmpSum, 'utf8')
+        const line = text.split(/\r?\n/).find((l) => l.trim().endsWith(EXE_ASSET))
+        if (!line) {
+          cleanup([tmpExe, tmpSum])
+          return fail('checksum-missing', `${SUMS_ASSET} 中未找到 ${EXE_ASSET}`)
+        }
+        checksum = line.trim().split(/\s+/)[0].toLowerCase()
+        const actual = sha256File(tmpExe)
+        if (actual !== checksum) {
+          cleanup([tmpExe, tmpSum])
+          return fail('checksum-mismatch', 'SHA256 校验失败', { expected: checksum, actual })
+        }
+      }
+
+      const finalExe = join(workdir, EXE_NAME)
+      try {
+        renameSync(tmpExe, finalExe)
+      } catch (e) {
+        // Windows 上目标若被占用会失败
+        cleanup([tmpExe, tmpSum])
+        return fail('rename-failed', String(e?.message ?? e))
+      }
+      cleanup([tmpSum])
+
+      return {
+        ok: true,
+        value: {
+          exe: finalExe,
+          verified: !!checksum,
+          checksum: checksum,
+          size: statSync(finalExe).size,
+          workdir,
+          tag,
+        },
+      }
+    } catch (e) {
+      cleanup([tmpExe, tmpSum])
+      return fail('download-failed', String(e?.message ?? e))
+    }
+  }
+
+  /// 采用用户已有的 exe：校验存在且可执行，不复制。
+  function provisionAdopt(payload) {
+    const p = payload?.exe
+    if (typeof p !== 'string' || !p.trim()) {
+      return fail('invalid-exe', 'exe 路径不能为空')
+    }
+    const exe = p.trim()
+    if (!existsSync(exe)) {
+      return fail('exe-missing', `文件不存在：${exe}`)
+    }
+    try {
+      const st = statSync(exe)
+      if (!st.isFile()) return fail('exe-missing', '不是文件')
+    } catch (e) {
+      return fail('exe-missing', String(e?.message ?? e))
+    }
+    return { ok: true, value: { exe, adopted: true } }
+  }
+
+  /// 调用 multiver CLI set-root（唯一写配置的通道，插件不直接改 config.json）。
+  async function provisionSetRoot(cfg, payload) {
+    const bad = validateWorkdir(payload?.workdir)
+    if (bad) return bad
+    const exe = payload?.exe
+    if (typeof exe !== 'string' || !exe.trim() || !existsSync(exe.trim())) {
+      return fail('exe-missing', '请先获取 dsh-multiver.exe')
+    }
+    const r = await runJson(exe.trim(), ['set-root', payload.workdir.trim(), '--json'], cfg.commandTimeoutMs)
+    if (!r.ok) return r
+    return {
+      ok: true,
+      value: {
+        root: r.value?.root ?? payload.workdir.trim(),
+        previous: r.value?.previous ?? null,
+      },
+    }
+  }
+
+  /// 启动 multiver 主界面（部署完成后引导用户进入）。
+  async function provisionLaunch(cfg) {
+    const exeInfo = resolveExe(cfg.exe)
+    if (!exeInfo.path) return fail('exe-not-found', 'dsh-multiver.exe not found')
+    return launchMultiver(exeInfo.path)
+  }
+
+  function cleanup(paths) {
+    for (const p of paths) {
+      try { if (existsSync(p)) unlinkSync(p) } catch {}
+    }
+  }
+
+  function sha256File(p) {
+    return createHash('sha256').update(readFileSync(p)).digest('hex')
+  }
+
+  /// HTTPS GET → 临时文件。仅允许 https，跟随重定向，有超时。
+  function downloadFile(url, dest) {
+    return new Promise((resolve) => {
+      let u
+      try { u = new URL(url) } catch { return resolve(fail('bad-url', url)) }
+      if (u.protocol !== 'https:') {
+        return resolve(fail('insecure-url', '仅允许 https'))
+      }
+      const req = https.get(url, { timeout: DOWNLOAD_TIMEOUT_MS }, (res) => {
+        if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+          res.resume()
+          return resolve(downloadFile(res.headers.location, dest))
+        }
+        if (res.statusCode !== 200) {
+          res.resume()
+          return resolve(fail('http-error', `HTTP ${res.statusCode}`, { url }))
+        }
+        const ws = createWriteStream(dest)
+        res.pipe(ws)
+        ws.on('finish', () => ws.close(() => resolve({ ok: true, value: { bytes: statSync(dest).size } })))
+        ws.on('error', (e) => {
+          cleanup([dest])
+          resolve(fail('write-failed', String(e?.message ?? e)))
+        })
+      })
+      req.on('timeout', () => {
+        req.destroy()
+        cleanup([dest])
+        resolve(fail('timeout', `下载超时（${DOWNLOAD_TIMEOUT_MS}ms）`))
+      })
+      req.on('error', (e) => {
+        cleanup([dest])
+        resolve(fail('network', String(e?.message ?? e)))
+      })
+    })
+  }
+
+  // ---------- 部署态探测（阶段 2）----------
+
+  /// 读 multiver 自身的 config.json，判断「exe 可用 + root_dir 已设置 + 目录可写」。
+  /// 插件不另存部署状态，避免与 multiver 配置分叉。
+  function probeProvision(exeInfo) {
+    const out = {
+      provisioned: false,
+      exe: exeInfo.path,
+      detectedBy: exeInfo.detectedBy,
+      root: null,
+      rootSource: null,
+      exeWritable: false,
+      defaultWorkdir: DEFAULT_WORKDIR,
+      releaseRepo: RELEASE_REPO,
+      platform: process.platform,
+      reasons: [],
+    }
+    if (!exeInfo.path) {
+      out.reasons.push('exe-missing')
+      return out
+    }
+    // root_dir 从 exe 同目录的 config.json 读（multiver 便携版把配置放在 exe 旁）
+    const cfgPath = join(dirname(exeInfo.path), 'config.json')
+    if (!existsSync(cfgPath)) {
+      out.reasons.push('config-missing')
+      return out
+    }
+    let root = null
+    try {
+      const raw = JSON.parse(readFileSync(cfgPath, 'utf8'))
+      const v = raw?.root_dir
+      if (typeof v === 'string' && v.trim()) root = v.trim()
+    } catch {
+      out.reasons.push('config-invalid')
+      return out
+    }
+    if (!root) {
+      // root_dir 为空 = 用户尚未选择工作目录
+      out.reasons.push('root-unset')
+      return out
+    }
+    out.root = root
+    out.rootSource = 'config'
+    if (!existsSync(root)) {
+      out.reasons.push('root-missing')
+      return out
+    }
+    // 可写性：写一个探针文件再删掉
+    const probe = join(root, '.multiver-bridge-write-test')
+    try {
+      writeFileSync(probe, 'ok')
+      unlinkSync(probe)
+      out.rootWritable = true
+    } catch {
+      out.rootWritable = false
+      out.reasons.push('root-readonly')
+      return out
+    }
+    out.rootWritable = true
+    out.provisioned = true
+    return out
+  }
+
+  function compatOf(runningVersion) {
+    return {
+      runningVersion: runningVersion ?? null,
+      verifiedVersions: VERIFIED_DSH_VERSIONS,
+      verified: runningVersion == null ? null : VERIFIED_DSH_VERSIONS.includes(runningVersion),
+    }
+  }
 
   function resolveExe(configured) {
     const tried = []
