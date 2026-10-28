@@ -7,6 +7,21 @@
 
 ---
 
+## [0.3.1] - 未发布
+
+### 插件（dsh-multiver-bridge）
+
+- **安装层零版本约束**：删除 `engines.dsh`，dsh 不再拦截任何版本的安装。此前精确锁 `0.2.1-rc.2`，rc.3 用户安装被直接拒绝（`installation rejected`），只能逐版本手动 `dsh plugin allow-version`。
+- **已验证版本登记**：新增 `package.json` 字段 `dshMultiver.verifiedDshVersions`（当前 `0.2.1-rc.2`、`0.2.1-rc.3`）。该字段不被 dsh 读取，仅作信息记录。
+- **兼容性提示**：Host 的 `state` 端点新增 `compatibility` 字段（`runningVersion` / `verifiedVersions` / `verified`）；Client 在运行版本不在已验证列表时显示黄色提示条，**不阻断功能**。
+- **设置页导航图标**：dsh shell 按 id 白名单硬编码图标，第三方 section 一律拿到齿轮（与「通用设置」重复）。改为按 label 文本定位自身按钮并替换 svg 内容（三条横杠 + 右下圆点）。定位失败时静默降级为原生齿轮，不影响功能。
+- **插件面板搜索框**：位置从顶部工具栏移到插件列表上方独立成行，加放大镜图标，文案改为「筛选已安装的插件…」，避免与「添加插件」按钮混淆。
+
+### 验证
+- dsh `0.2.1-rc.3` 实测：`state` / `probe` / `open` / `setDefault` 四端点、鉴权（401/403）、405、错误码映射、argv 版本探测、设置页 UI 渲染全部正常。
+- 零约束安装实测：rc.3 上删除豁免后直接安装成功，`compatibility.json` 保持空对象。
+- E2E 35 项通过（新增「无插件时不显示筛选框」「筛选框位于列表上方」两条）。
+
 ## [0.3.0] - 未发布
 
 > **破坏性变更**：CLI 从 `--flag` 风格改为子命令风格。旧语法已移除，迁移见 [CLI 迁移指南](docs/CLI迁移指南-v0.3.0.md)。

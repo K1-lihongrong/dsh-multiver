@@ -15,6 +15,47 @@ window.__ModuleLoader__.load({
     const NS = 'multiver-bridge'
     const CH = '/multiver-bridge'
 
+    // 设置页导航图标替换（尽力而为，失败静默）
+    // 三条横杠 + 右下圆点：多版本堆叠的隐喻，尺寸 16×16，跟随 currentColor。
+    function installNavIcon(getLabel) {
+      const ICON_HTML =
+        '<path d="M2.5 4.5h11" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>' +
+        '<path d="M2.5 8h11" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>' +
+        '<path d="M2.5 11.5h6.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>' +
+        '<circle cx="12.4" cy="11.5" r="1.5" fill="currentColor"/>'
+
+      const swap = () => {
+        const label = getLabel()
+        if (!label) return
+        let done = 0
+        document.querySelectorAll('nav button').forEach((btn) => {
+          if ((btn.textContent || '').trim() !== label) return
+          const svg = btn.querySelector('svg')
+          if (!svg || svg.dataset.multiverIcon === '1') return
+          try {
+            svg.innerHTML = ICON_HTML
+            svg.dataset.multiverIcon = '1'
+            done++
+          } catch {}
+        })
+        return done
+      }
+
+      swap()
+
+      let timer = null
+      const obs = new MutationObserver(() => {
+        if (timer) return
+        timer = setTimeout(() => { timer = null; swap() }, 120)
+      })
+      obs.observe(document.body, { childList: true, subtree: true })
+
+      return () => {
+        if (timer) clearTimeout(timer)
+        obs.disconnect()
+      }
+    }
+
     function rpc(endpoint, payload) {
       return fetch(CH + '/' + endpoint, {
         method: 'POST',
@@ -471,6 +512,11 @@ window.__ModuleLoader__.load({
         }), 'multiver-bridge: dictionaries')
 
         const Wrapped = (props) => h(LocaleCtx.Provider, { value: t }, h(VersionsPage, props))
+
+        // 设置页导航图标：dsh 的 shell 按 id 白名单硬编码图标，第三方 section 一律拿到齿轮
+        // （与「通用设置」重复）。slot 契约不提供 icon 字段，故按 label 文本定位我们的按钮，
+        // 替换其内部 svg 内容。定位失败时静默放弃，仍显示原生齿轮，不影响功能。
+        installNavIcon(() => t('section'))
 
         ctx.slots.inject('settings.section', () => {
           let dispose

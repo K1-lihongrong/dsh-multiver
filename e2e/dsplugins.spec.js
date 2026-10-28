@@ -169,6 +169,34 @@ test("搜索过滤插件（B1-10）", async ({ page }) => {
   await expect(page.locator(".dp-item", { hasText: "@deepseek-ai/dsh-base" })).toHaveCount(0);
 });
 
+test("无已安装插件时不显示筛选框", async ({ page }) => {
+  await mockTauri(page, {
+    installed: [makeVersion("0.2.0-rc.1", { isolated: true })],
+    extra: {
+      ds_list_plugins: { dsh_home: "D:/dsh", home_kind: "shared", profiles: [{ name: "web", path: "D:/p", plugins: [] }] },
+    },
+  });
+  await page.goto("/");
+  await page.getByRole("button", { name: "插件", exact: true }).click();
+  await expect(page.locator(".dp-state-empty")).toBeVisible();
+  // 空列表下筛选框无意义，不应出现
+  await expect(page.locator(".dp-filter")).toHaveCount(0);
+  await expect(page.getByPlaceholder("筛选已安装的插件…")).toHaveCount(0);
+});
+
+test("有插件时筛选框位于列表上方（与工具栏分离）", async ({ page }) => {
+  await mockTauri(page, {
+    installed: [makeVersion("0.2.0-rc.1", { isolated: true })],
+    extra: { ds_list_plugins: { dsh_home: "D:/dsh", home_kind: "shared", profiles: [PROFILE] } },
+  });
+  await page.goto("/");
+  await page.getByRole("button", { name: "插件", exact: true }).click();
+  // 筛选框存在，且不在工具栏内
+  await expect(page.locator(".dp-filter .dp-search")).toBeVisible();
+  await expect(page.locator(".dp-toolbar .dp-search")).toHaveCount(0);
+  await expect(page.locator(".dp-filter-icon")).toBeVisible();
+});
+
 test("安装失败 → 显示错误提示（B1-09）", async ({ page }) => {
   await mockTauri(page, {
     installed: [makeVersion("0.2.0-rc.1", { isolated: true })],
