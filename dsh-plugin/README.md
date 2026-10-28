@@ -109,11 +109,13 @@ multiver 启动 dsh 时会注入以下环境变量，插件据此判断「谁启
 |:---|:---|
 | 包名 | `dsh-multiver-bridge` |
 | 版本 | `0.1.0` |
+| npm | https://www.npmjs.com/package/dsh-multiver-bridge |
 | Release | [v0.3.0](https://github.com/K1-lihongrong/dsh-multiver/releases/tag/v0.3.0) |
 | tarball | `dsh-multiver-bridge-0.1.0.tgz`（15995 B） |
 | SHA256 | `89C31151C480E8411420ED2F8D17D2834F50D1AEDD884FCF1360C423B2DC1AE3` |
+| npm shasum | `1c7c456adedd7c6b85f862b4e8bcf269703f06e0` |
 
-Release 通道安装后可用 `Get-FileHash` 或 `sha256sum` 核对下载文件：
+两条通道分发同一份 tarball。npm 通道的完整性由 registry 的 `integrity` 字段保证，无需手动核对；Release 通道建议核对 SHA256：
 
 ```powershell
 (Get-FileHash dsh-multiver-bridge-0.1.0.tgz -Algorithm SHA256).Hash
