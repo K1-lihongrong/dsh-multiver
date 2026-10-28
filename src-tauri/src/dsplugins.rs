@@ -259,10 +259,7 @@ fn query_official_bundles(version_dir: &Path) -> Option<Vec<String>> {
     //   如 web 模板带入 dsh-web-app）。漏掉最后一项会把 dsh-web-app 误判为用户安装。
     const JS: &str = "const {pathToFileURL} = await import('node:url');\nconst m = await import(pathToFileURL(process.argv[1]).href);\nconst tpl = Object.values(m.PROFILE_TEMPLATES||{}).flatMap(t => t.bundles||[]);\nconsole.log(JSON.stringify([...new Set([...(m.OPTIONAL_BUNDLES||[]),...(m.DEFAULT_PROFILE_BUNDLES||[]),...(m.ON_DEMAND_BUNDLES||[]),...tpl])]));";
     let mut cmd = std::process::Command::new("node");
-    cmd.arg("--input-type=module")
-        .arg("-e")
-        .arg(JS)
-        .arg(&lib);
+    cmd.arg("--input-type=module").arg("-e").arg(JS).arg(&lib);
     // GUI 进程无控制台，不设 CREATE_NO_WINDOW 会闪一下黑框
     #[cfg(windows)]
     {

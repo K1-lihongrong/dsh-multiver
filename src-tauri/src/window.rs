@@ -127,7 +127,6 @@ pub(crate) fn set_window_app_user_model_id(
     Ok(())
 }
 
-
 /// M2m：确保主窗口存在并聚焦。
 ///
 /// 场景：第二实例被单实例插件转交给已运行实例。

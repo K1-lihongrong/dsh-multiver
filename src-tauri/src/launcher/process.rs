@@ -575,10 +575,12 @@ mod env_tests {
 
     fn collect_envs(cmd: &Command) -> HashMap<String, String> {
         cmd.get_envs()
-            .filter_map(|(k, v)| Some((
-                k.to_string_lossy().to_string(),
-                v?.to_string_lossy().to_string(),
-            )))
+            .filter_map(|(k, v)| {
+                Some((
+                    k.to_string_lossy().to_string(),
+                    v?.to_string_lossy().to_string(),
+                ))
+            })
             .collect()
     }
 
@@ -587,9 +589,18 @@ mod env_tests {
         let mut cmd = Command::new("dsh");
         inject_multiver_env(&mut cmd, Path::new("R:/root/versions/1.2.3"), "embedded");
         let envs = collect_envs(&cmd);
-        assert_eq!(envs.get("DSH_MULTIVER_VERSION").map(String::as_str), Some("1.2.3"));
-        assert_eq!(envs.get("DSH_MULTIVER_ROOT").map(String::as_str), Some("R:/root"));
-        assert_eq!(envs.get("DSH_MULTIVER_MODE").map(String::as_str), Some("embedded"));
+        assert_eq!(
+            envs.get("DSH_MULTIVER_VERSION").map(String::as_str),
+            Some("1.2.3")
+        );
+        assert_eq!(
+            envs.get("DSH_MULTIVER_ROOT").map(String::as_str),
+            Some("R:/root")
+        );
+        assert_eq!(
+            envs.get("DSH_MULTIVER_MODE").map(String::as_str),
+            Some("embedded")
+        );
         assert!(envs.contains_key("DSH_MULTIVER_PID"));
         assert!(envs.contains_key("DSH_MULTIVER_EXE"));
     }
@@ -599,7 +610,9 @@ mod env_tests {
         let mut cmd = Command::new("dsh");
         inject_multiver_env(&mut cmd, Path::new("R:/root/versions/2.0.0"), "console");
         assert_eq!(
-            collect_envs(&cmd).get("DSH_MULTIVER_MODE").map(String::as_str),
+            collect_envs(&cmd)
+                .get("DSH_MULTIVER_MODE")
+                .map(String::as_str),
             Some("console")
         );
     }
