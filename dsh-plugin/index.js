@@ -17,13 +17,25 @@
  */
 
 import { execFile, spawn } from 'node:child_process'
-import { existsSync, realpathSync } from 'node:fs'
+import { existsSync, realpathSync, readFileSync } from 'node:fs'
 import { join, dirname, delimiter, sep } from 'node:path'
 
 const MAX_BODY = 16 * 1024
 const CHANNEL = '/multiver-bridge'
 const VERSION_RE = /^[A-Za-z0-9][A-Za-z0-9._+-]*$/
 const OPEN_TARGETS = new Set(['version-dir', 'multiver-dir', 'launch-multiver'])
+
+// 已验证的 dsh 版本（来自本包 package.json 的 dshMultiver.verifiedDshVersions）。
+// 仅用于 UI 提示，不做安装拦截——engines 字段刻意省略，安装层零约束。
+const VERIFIED_DSH_VERSIONS = (() => {
+  try {
+    const pkg = JSON.parse(readFileSync(new URL('./package.json', import.meta.url), 'utf8'))
+    const list = pkg?.dshMultiver?.verifiedDshVersions
+    return Array.isArray(list) ? list.filter((v) => typeof v === 'string' && v) : []
+  } catch {
+    return []
+  }
+})()
 
 export const inject = ['connection', 'webServer']
 
@@ -163,6 +175,15 @@ export function apply(ctx, config) {
         confidence: running.confidence,
         consistency,
         pendingRestart,
+        // 兼容性提示（不阻断功能）：包内声明的已验证 dsh 版本 vs 当前运行版本。
+        // 未知运行版本时 verified 为 null，UI 不显示提示。
+        compatibility: {
+          runningVersion: running.version,
+          verifiedVersions: VERIFIED_DSH_VERSIONS,
+          verified: running.version === null
+            ? null
+            : VERIFIED_DSH_VERSIONS.includes(running.version),
+        },
         versions: versions.map((v) => ({
           version: v.version,
           path: v.path,

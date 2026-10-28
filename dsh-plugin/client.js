@@ -162,6 +162,15 @@ window.__ModuleLoader__.load({
             h('div', { style: { fontWeight: 600 } }, t('conflictTitle')),
             h('div', { style: { opacity: 0.85, marginTop: 2 } }, t('conflictHint'))
           ),
+          // 兼容性提示：仅在「运行版本已知且不在已验证列表」时显示，不阻断功能
+          v.compatibility
+            && v.compatibility.verified === false
+            && h('div', {
+              style: { marginTop: 8, padding: '8px 12px', borderRadius: 6, background: 'rgba(255,170,0,.10)', fontSize: 13, opacity: 0.9 },
+            }, t('compatUnverified', {
+              running: v.compatibility.runningVersion,
+              list: (v.compatibility.verifiedVersions || []).join(' / ') || '—',
+            })),
           // M3a：一致性校对详情（有 mismatch 才展开）
           hasConsistencyMismatch(v.consistency) && h('div', {
             style: { marginTop: 8, padding: '8px 12px', borderRadius: 6, background: 'rgba(220,50,50,.12)', fontSize: 13 },
@@ -396,6 +405,7 @@ window.__ModuleLoader__.load({
             consistencySep: '：',
             consistencyBad: '不一致',
             consistencyUnknown: '无法确定',
+            compatUnverified: '当前 dsh {running} 未经验证。插件按 {list} 验证，功能可能在后续版本失效；如遇问题请在 multiver 侧反馈。',
           },
           en: {
             section: 'Versions',
@@ -456,6 +466,7 @@ window.__ModuleLoader__.load({
             consistencySep: ': ',
             consistencyBad: 'mismatch',
             consistencyUnknown: 'unknown',
+            compatUnverified: 'This dsh ({running}) is not a verified version. The plugin was verified against {list}; later releases may break it. Please report issues on the multiver side.',
           },
         }), 'multiver-bridge: dictionaries')
 
