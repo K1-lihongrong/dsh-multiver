@@ -36,6 +36,7 @@ pub fn dispatch(cmd: CliCommand, dry_run: bool, json: bool) -> i32 {
         CliCommand::Info { version } => version::cmd_info(&version, json),
         CliCommand::Versions => version::cmd_versions(json),
         CliCommand::SetDefault { version } => r#default::cmd_set_default(&version, dry_run, json),
+        CliCommand::SetRoot { dir } => r#default::cmd_set_root(&dir, dry_run, json),
         CliCommand::Maintenance { kind } => store::cmd_maintenance(&kind, dry_run, json),
         CliCommand::Clean => store::cmd_clean(dry_run, json),
         CliCommand::Doctor => store::cmd_doctor(json),

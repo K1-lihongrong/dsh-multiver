@@ -6,6 +6,7 @@
 //! 命令（v0.3.0 起为子命令风格）：
 //!   list / which / info <版本> / versions / env / doctor
 //!   install <版本> [--registry <url>] / uninstall <版本> / set-default <版本>
+//!   set-root <目录>（设置数据根；与 GUI 的 set_root 等价）
 //!   isolate <版本> [--off] / clean
 //!   shortcut <版本> / copy-shared <版本> / clear-isolated <版本>
 //!   export [<文件>] / import <文件> / run <版本>
@@ -49,6 +50,10 @@ pub enum CliCommand {
     },
     SetDefault {
         version: String,
+    },
+    /// 设置数据根目录（与 GUI 的 set_root 等价；含 Unix 旧 root 残留进程清理）
+    SetRoot {
+        dir: String,
     },
     /// kind: "cleanup" | "prune" | "all"
     Maintenance {
