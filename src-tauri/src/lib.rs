@@ -79,7 +79,8 @@ pub(crate) fn is_same_exe(second: &str, current: &std::path::Path) -> bool {
         (Some(a), Some(b)) => {
             #[cfg(windows)]
             {
-                a.to_string_lossy().eq_ignore_ascii_case(&b.to_string_lossy())
+                a.to_string_lossy()
+                    .eq_ignore_ascii_case(&b.to_string_lossy())
             }
             #[cfg(not(windows))]
             {
@@ -99,7 +100,6 @@ pub(crate) fn is_same_exe(second: &str, current: &std::path::Path) -> bool {
         }
     }
 }
-
 
 /// 管理器自身所在目录（config.json 的存放处）
 pub(crate) fn manager_dir(_app: &tauri::AppHandle) -> PathBuf {
