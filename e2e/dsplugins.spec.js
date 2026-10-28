@@ -164,7 +164,7 @@ test("搜索过滤插件（B1-10）", async ({ page }) => {
   });
   await page.goto("/");
   await page.getByRole("button", { name: "插件", exact: true }).click();
-  await page.getByPlaceholder("搜索插件…").fill("my-plugin");
+  await page.getByPlaceholder("筛选已安装的插件…").fill("my-plugin");
   await expect(page.locator(".dp-item", { hasText: "my-plugin" })).toBeVisible();
   await expect(page.locator(".dp-item", { hasText: "@deepseek-ai/dsh-base" })).toHaveCount(0);
 });

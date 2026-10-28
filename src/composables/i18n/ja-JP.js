@@ -352,7 +352,7 @@ export default {
     "dsplugins.initPlaceholder": "profile 名（例: web）",
     "dsplugins.initializing": "初期化中…",
     "dsplugins.initDone": "{p} を初期化しました",
-    "dsplugins.searchPlaceholder": "プラグインを検索…",
+    "dsplugins.searchPlaceholder": "インストール済みプラグインを絞り込む…",
     "dsplugins.noMatch": "一致するプラグインがありません。",
     "dsplugins.showLog": "出力を表示",
     "dsplugins.hideLog": "出力を隠す",

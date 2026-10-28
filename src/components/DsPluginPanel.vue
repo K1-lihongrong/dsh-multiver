@@ -574,8 +574,6 @@ onUnmounted(() => {
         </select>
         <span v-else class="dp-profile-tag">{{ activeProfile }}</span>
 
-        <input v-model="search" class="dp-input dp-search" :placeholder="t('dsplugins.searchPlaceholder')" />
-
         <button class="dp-btn dp-btn-primary" @click="openInstall" :disabled="busy">
           ＋ {{ t("dsplugins.addPlugin") }}
         </button>
@@ -589,43 +587,55 @@ onUnmounted(() => {
         <span class="dp-state-icon">🧩</span>
         <span>{{ t("dsplugins.empty") }}</span>
       </div>
-      <ul v-else-if="filteredPlugins.length" class="dp-list">
-        <li v-for="pl in filteredPlugins" :key="pl.name" class="dp-item">
-          <div class="dp-item-main">
-            <span class="dp-item-icon">{{ pl.is_bundle ? "📦" : "🧩" }}</span>
-            <div class="dp-item-info">
-              <code class="dp-item-name" :title="pl.description || ''">{{ pl.name }}</code>
-              <span
-                class="dp-item-ver"
-                v-if="pl.version"
-                :title="pl.spec ? t('dsplugins.specTip', { spec: pl.spec }) : ''"
-              >v{{ pl.version }}</span>
+      <template v-else>
+        <!-- 列表筛选：只过滤已安装项，与上方「添加插件」职责分离 -->
+        <div class="dp-filter">
+          <span class="dp-filter-icon" aria-hidden="true">🔍</span>
+          <input
+            v-model="search"
+            class="dp-input dp-search"
+            :placeholder="t('dsplugins.searchPlaceholder')"
+            :aria-label="t('dsplugins.searchPlaceholder')"
+          />
+        </div>
+        <ul v-if="filteredPlugins.length" class="dp-list">
+          <li v-for="pl in filteredPlugins" :key="pl.name" class="dp-item">
+            <div class="dp-item-main">
+              <span class="dp-item-icon">{{ pl.is_bundle ? "📦" : "🧩" }}</span>
+              <div class="dp-item-info">
+                <code class="dp-item-name" :title="pl.description || ''">{{ pl.name }}</code>
+                <span
+                  class="dp-item-ver"
+                  v-if="pl.version"
+                  :title="pl.spec ? t('dsplugins.specTip', { spec: pl.spec }) : ''"
+                >v{{ pl.version }}</span>
+              </div>
+              <span class="dp-badge" :class="isOfficial(pl) ? 'dp-badge-bundle' : 'dp-badge-user'">{{ srcLabel(pl) }}</span>
+              <span class="dp-badge dp-badge-kind" v-if="!pl.declares_bundle">{{ kindLabel(pl) }}</span>
+              <span class="dp-badge dp-badge-update" v-if="updates[pl.name]">
+                {{ t("dsplugins.newVersion", { v: updates[pl.name].latest }) }}
+              </span>
             </div>
-            <span class="dp-badge" :class="isOfficial(pl) ? 'dp-badge-bundle' : 'dp-badge-user'">{{ srcLabel(pl) }}</span>
-            <span class="dp-badge dp-badge-kind" v-if="!pl.declares_bundle">{{ kindLabel(pl) }}</span>
-            <span class="dp-badge dp-badge-update" v-if="updates[pl.name]">
-              {{ t("dsplugins.newVersion", { v: updates[pl.name].latest }) }}
-            </span>
-          </div>
-          <button
-            v-if="updates[pl.name]"
-            class="dp-btn dp-btn-primary dp-btn-sm"
-            @click="updatePlugin(pl)"
-            :disabled="busy"
-          >
-            {{ t("dsplugins.update") }}
-          </button>
-          <button
-            class="dp-btn dp-btn-danger dp-btn-sm"
-            @click="doAction('remove', pl.name, isOfficial(pl))"
-            :disabled="busy || isOfficial(pl)"
-            :title="isOfficial(pl) ? t('dsplugins.bundleLocked') : ''"
-          >
-            {{ t("dsplugins.remove") }}
-          </button>
-        </li>
-      </ul>
-      <div v-else class="dp-state dp-state-empty">{{ t("dsplugins.noMatch") }}</div>
+            <button
+              v-if="updates[pl.name]"
+              class="dp-btn dp-btn-primary dp-btn-sm"
+              @click="updatePlugin(pl)"
+              :disabled="busy"
+            >
+              {{ t("dsplugins.update") }}
+            </button>
+            <button
+              class="dp-btn dp-btn-danger dp-btn-sm"
+              @click="doAction('remove', pl.name, isOfficial(pl))"
+              :disabled="busy || isOfficial(pl)"
+              :title="isOfficial(pl) ? t('dsplugins.bundleLocked') : ''"
+            >
+              {{ t("dsplugins.remove") }}
+            </button>
+          </li>
+        </ul>
+        <div v-else class="dp-state dp-state-empty">{{ t("dsplugins.noMatch") }}</div>
+      </template>
 
       <!-- B1-08：操作输出（实时进度行） -->
       <div class="dp-log" v-if="logLines.length">
@@ -945,8 +955,13 @@ onUnmounted(() => {
 .dp-init-text { font-size: 12px; }
 .dp-init .dp-add { flex: none; width: 100%; max-width: 420px; }
 
-/* B1-10：搜索框 */
-.dp-search { min-width: 140px; max-width: 220px; flex: none; }
+/* B1-10：列表筛选（只过滤已安装项，与「添加插件」职责分离） */
+.dp-filter {
+  display: flex; align-items: center; gap: 6px;
+  padding: 2px 16px 8px;
+}
+.dp-filter-icon { font-size: 11px; opacity: .6; flex: none; }
+.dp-search { min-width: 160px; max-width: 260px; flex: 1; font-size: 11.5px; }
 
 /* B1-11/B1-12：官方信息（构建脚本 / 版本豁免） */
 .dp-meta { border-top: 1px dashed var(--panel-border); padding: 8px 16px 12px; display: flex; flex-direction: column; gap: 8px; }
