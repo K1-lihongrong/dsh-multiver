@@ -231,6 +231,103 @@ window.__ModuleLoader__.load({
       )
     }
 
+    // 更新管理块（阶段 3）：检查 → 显示 → 用户确认 → 委托 multiver update。
+    function UpdateBlock(props) {
+      const t = React.useContext(LocaleCtx) ?? ((k) => k)
+      const [info, setInfo] = React.useState(null)
+      const [busy, setBusy] = React.useState(false)
+      const [msg, setMsg] = React.useState(null)
+      const [err, setErr] = React.useState(null)
+      const [confirming, setConfirming] = React.useState(false)
+
+      const check = React.useCallback(async () => {
+        setBusy(true); setErr(null); setMsg(null)
+        try {
+          const r = await rpc('update', { step: 'check' })
+          if (r.ok) setInfo(r.value)
+          else setErr(r.error)
+        } catch (e) {
+          setErr({ code: 'network', message: String(e?.message ?? e) })
+        } finally { setBusy(false) }
+      }, [])
+
+      React.useEffect(() => { check() }, [check])
+
+      const apply = React.useCallback(async () => {
+        setConfirming(false); setBusy(true); setErr(null); setMsg(null)
+        try {
+          const r = await rpc('update', { step: 'apply' })
+          if (r.ok) {
+            setMsg(r.value.upToDate ? t('update.upToDate') : (r.value.message || t('update.handedOff')))
+            setInfo((s) => s ? { ...s, hasUpdate: false } : s)
+          } else {
+            setErr(r.error)
+          }
+        } catch (e) {
+          setErr({ code: 'network', message: String(e?.message ?? e) })
+        } finally { setBusy(false) }
+      }, [t])
+
+      const errText = (e) => {
+        if (!e) return null
+        const key = 'err.' + e.code
+        const mapped = t(key)
+        return (mapped && mapped !== key ? mapped : e.code) + (e.message ? '：' + e.message : '')
+      }
+
+      const row = { display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', fontSize: 12 }
+      const btn = (primary) => ({
+        fontSize: 11, padding: '3px 10px', borderRadius: 6, cursor: busy ? 'not-allowed' : 'pointer',
+        border: '1px solid ' + (primary ? 'transparent' : 'rgba(128,128,128,.35)'),
+        background: primary ? '#247bbf' : 'transparent',
+        color: primary ? '#fff' : 'inherit',
+        opacity: busy ? 0.5 : 1,
+      })
+
+      return h('div', {
+        style: {
+          marginTop: 16, paddingTop: 12, borderTop: '1px solid rgba(128,128,128,.18)',
+        },
+      },
+        h('div', { style: { ...row, marginBottom: 6 } },
+          h('span', { style: { fontWeight: 600 } }, t('update.title')),
+          info && info.current && h('span', { style: { opacity: .65 } },
+            t('update.current', { v: info.current })),
+          busy && h('span', { style: { opacity: .6 } }, t('update.working'))
+        ),
+        !info && !err && !busy && h('div', { style: { fontSize: 12, opacity: .6 } }, t('update.checking')),
+        info && !info.hasUpdate && h('div', { style: { ...row } },
+          h('span', { style: { opacity: .75 } }, info.error
+            ? t('update.checkFailed', { e: info.error })
+            : t('update.upToDate')),
+          h('button', { style: btn(false), disabled: busy, onClick: check }, t('update.recheck'))
+        ),
+        info && info.hasUpdate && h('div', { style: { ...row } },
+          h('span', { style: { fontWeight: 600, color: '#2a9d3f' } },
+            t('update.available', { v: info.latest })),
+          info.releaseUrl && h('a', {
+            href: info.releaseUrl, target: '_blank', rel: 'noreferrer',
+            style: { fontSize: 11, opacity: .7 },
+          }, t('update.changelog')),
+          confirming
+            ? h('span', { style: { ...row } },
+                h('span', { style: { opacity: .85 } }, t('update.confirm')),
+                h('button', { style: btn(true), disabled: busy, onClick: apply }, t('update.yes')),
+                h('button', { style: btn(false), disabled: busy, onClick: () => setConfirming(false) }, t('update.no'))
+              )
+            : h('button', { style: btn(true), disabled: busy, onClick: () => setConfirming(true) }, t('update.doUpdate'))
+        ),
+        // 内嵌窗口下替换 exe 会打断当前会话，提前说明
+        info && info.hasUpdate && info.runningInMultiver && h('div', {
+          style: { marginTop: 6, fontSize: 11.5, opacity: .7, lineHeight: '18px' },
+        }, t('update.embeddedHint')),
+        msg && h('div', { style: { marginTop: 6, fontSize: 12, color: '#2a9d3f' } }, msg),
+        err && h('div', {
+          style: { marginTop: 6, padding: '6px 10px', borderRadius: 6, background: 'rgba(220,50,50,.12)', fontSize: 12 },
+        }, errText(err))
+      )
+    }
+
     function VersionsPage(props) {
       const t = React.useContext(LocaleCtx) ?? ((k) => k)
       const [state, setState] = React.useState({ kind: 'loading' })
@@ -481,6 +578,8 @@ window.__ModuleLoader__.load({
             onFocus: (e) => e.target.select(),
           })
         ),
+        // 阶段 3：multiver 自身更新管理。委托 multiver 自带 updater，插件不重复实现替换。
+        h(UpdateBlock, { value: v }),
         // 页脚
         h('div', { style: { marginTop: 16, paddingTop: 12, borderTop: '1px solid rgba(128,128,128,.18)', fontSize: 12, opacity: 0.65 } },
           h('div', { style: { marginBottom: 4 } }, t('exePath', { exe: v.exe }) + ' · ' + t('detectedBy', { by: v.detectedBy })),
@@ -650,6 +749,22 @@ window.__ModuleLoader__.load({
             'err.insecure-url': '仅支持 HTTPS 下载',
             'err.invalid-step': '未知的部署步骤',
             'err.write-failed': '写入文件失败',
+            'update.title': 'multiver 更新',
+            'update.current': '当前 {v}',
+            'update.checking': '正在检查更新…',
+            'update.working': '处理中…',
+            'update.upToDate': '已是最新版本',
+            'update.checkFailed': '检查失败：{e}',
+            'update.recheck': '重新检查',
+            'update.available': '有新版本 {v}',
+            'update.changelog': '查看 Release',
+            'update.doUpdate': '更新',
+            'update.confirm': '更新会重启管理器，确认？',
+            'update.yes': '确认',
+            'update.no': '取消',
+            'update.handedOff': '更新已就绪，管理器将退出以完成替换',
+            'update.embeddedHint': '当前在内嵌窗口中。更新会中断本会话——建议在 multiver 主界面完成更新，或关闭该窗口后重试。',
+            'err.embedded-blocked': '内嵌窗口下不能执行更新',
           },
           en: {
             section: 'Versions',
@@ -745,6 +860,22 @@ window.__ModuleLoader__.load({
             'err.insecure-url': 'Only HTTPS downloads are allowed',
             'err.invalid-step': 'Unknown provisioning step',
             'err.write-failed': 'Failed to write file',
+            'update.title': 'multiver update',
+            'update.current': 'current {v}',
+            'update.checking': 'Checking for updates…',
+            'update.working': 'Working…',
+            'update.upToDate': 'Already up to date',
+            'update.checkFailed': 'Check failed: {e}',
+            'update.recheck': 'Check again',
+            'update.available': 'Version {v} available',
+            'update.changelog': 'Release notes',
+            'update.doUpdate': 'Update',
+            'update.confirm': 'Updating restarts the manager. Continue?',
+            'update.yes': 'Confirm',
+            'update.no': 'Cancel',
+            'update.handedOff': 'Update ready — the manager will exit to finish replacing itself',
+            'update.embeddedHint': 'Running inside the embedded window. Updating interrupts this session — do it from the multiver main window, or close this window first.',
+            'err.embedded-blocked': 'Update is not allowed from the embedded window',
           },
         }), 'multiver-bridge: dictionaries')
 

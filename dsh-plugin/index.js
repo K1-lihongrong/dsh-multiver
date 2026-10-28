@@ -138,6 +138,7 @@ export function apply(ctx, config) {
           else if (endpoint === 'probe') result = await handleProbe(cfg)
           else if (endpoint === 'open') result = await handleOpen(cfg, payload)
           else if (endpoint === 'provision') result = await handleProvision(cfg, payload)
+          else if (endpoint === 'update') result = await handleUpdate(cfg, payload)
           else result = fail('unknown-endpoint', endpoint)
         } catch (e) {
           result = fail('internal', String(e?.message ?? e))
@@ -421,6 +422,85 @@ export function apply(ctx, config) {
   }
 
   // ---------- exe 探测（§5.6 顺序）----------
+
+  // ---------- multiver 更新管理（阶段 3）----------
+
+  /// 更新管理统一入口。委托 multiver 自带 updater，插件不重复实现替换逻辑。
+  ///   step=check   只查（等价 update --dry-run --json），不下载
+  ///   step=apply   真正更新（等价 update --json）：下载 + 校验 + 替换 + 重启
+  /// 运行中实例检测：mode=embedded 时插件跑在 multiver 拉起的窗口里，
+  /// 替换 exe 会让当前进程崩溃，故 apply 前要求用户在独立环境操作。
+  async function handleUpdate(cfg, payload) {
+    const step = payload?.step
+    if (step !== 'check' && step !== 'apply') {
+      return fail('invalid-step', 'step must be check or apply')
+    }
+    const exeInfo = resolveExe(cfg.exe)
+    if (!exeInfo.path) {
+      return fail('exe-not-found', 'dsh-multiver.exe not found', { tried: exeInfo.tried })
+    }
+
+    const mode = process.env.DSH_MULTIVER_MODE ?? null
+    const running = detectRunningVersion()
+
+    if (step === 'check') {
+      const args = ['update', '--dry-run', '--json']
+      const r = await runJson(exeInfo.path, args, cfg.commandTimeoutMs + 30000)
+      if (!r.ok) return r
+      const v = r.value || {}
+      return {
+        ok: true,
+        value: {
+          current: v.current ?? null,
+          latest: v.latest ?? null,
+          hasUpdate: !!v.has_update,
+          downloadUrl: v.download_url ?? null,
+          releaseUrl: RELEASE_REPO ? `https://github.com/${RELEASE_REPO}/releases` : null,
+          error: v.error ?? null,
+          // 运行中实例：embedded 模式下替换 exe 会打断当前会话
+          runningInMultiver: mode === 'embedded',
+          mode,
+          runningVersion: running.version,
+        },
+      }
+    }
+
+    // step === 'apply'
+    // 安全护栏：内嵌窗口里替换 exe 会让当前 multiver 进程的文件被占用/替换，
+    // 导致正在服务的页面崩溃。要求用户在独立环境（或先关内嵌窗口）操作。
+    if (mode === 'embedded') {
+      return fail(
+        'embedded-blocked',
+        '当前运行在内嵌窗口中，更新会中断本会话。请先在 multiver 主界面完成更新，或关闭该窗口后重试。',
+      )
+    }
+
+    const r = await runJson(exeInfo.path, ['update', '--json'], 600000)
+    if (!r.ok) return r
+
+    const v = r.value || {}
+    // CLI 在「已是最新」时同样 exit 0，返回 {has_update:false}。
+    // 若 update 成功触发替换，CLI 输出的是 ok/message 结构（无 has_update 字段）。
+    if (Object.prototype.hasOwnProperty.call(v, 'has_update') && v.has_update === false) {
+      return {
+        ok: true,
+        value: {
+          handedOff: false,
+          upToDate: true,
+          current: v.current ?? null,
+          latest: v.latest ?? null,
+        },
+      }
+    }
+    return {
+      ok: true,
+      value: {
+        handedOff: true,
+        upToDate: false,
+        message: v.message ?? '更新已就绪，管理器将退出以完成替换',
+      },
+    }
+  }
 
   // ---------- 部署引导（阶段 2）----------
 
