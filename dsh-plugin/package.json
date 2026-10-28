@@ -1,9 +1,18 @@
 {
   "name": "dsh-multiver-bridge",
   "version": "0.1.0",
-  "private": true,
   "type": "module",
   "description": "dsh-multiver 双向桥：在 dsh 内查看/切换版本",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/K1-lihongrong/dsh-multiver.git",
+    "directory": "dsh-plugin"
+  },
+  "homepage": "https://github.com/K1-lihongrong/dsh-multiver/tree/main/dsh-plugin",
+  "bugs": {
+    "url": "https://github.com/K1-lihongrong/dsh-multiver/issues"
+  },
   "engines": {
     "dsh": "0.2.1-rc.2"
   },
