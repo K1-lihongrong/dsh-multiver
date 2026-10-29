@@ -1,6 +1,6 @@
 {
   "name": "dsh-multiver-bridge",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "type": "module",
   "description": "dsh-multiver 双向桥：在 dsh 内查看/切换版本",
   "license": "MIT",
@@ -13,8 +13,14 @@
   "bugs": {
     "url": "https://github.com/K1-lihongrong/dsh-multiver/issues"
   },
-  "engines": {
-    "dsh": "0.2.1-rc.2"
+  "dshMultiver": {
+    "verifiedDshVersions": [
+      "0.1.5-rc.3",
+      "0.2.0-rc.1",
+      "0.2.0-rc.2",
+      "0.2.1-rc.2",
+      "0.2.1-rc.3"
+    ]
   },
   "exports": {
     ".": "./index.js",

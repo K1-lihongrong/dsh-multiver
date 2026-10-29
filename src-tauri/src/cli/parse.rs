@@ -88,6 +88,9 @@ pub fn parse(args: &[String]) -> Result<Option<CliCommand>, String> {
         "set-default" => CliCommand::SetDefault {
             version: take_value(rest, "set-default")?,
         },
+        "set-root" => CliCommand::SetRoot {
+            dir: take_value(rest, "set-root")?,
+        },
         "info" => CliCommand::Info {
             version: take_value(rest, "info")?,
         },
@@ -405,5 +408,20 @@ mod tests {
         assert!(has_json(&args(&["list", "--json"])));
         assert!(!has_json(&args(&["list"])));
         assert!(has_dry_run(&args(&["install", "0.1.7", "--dry-run"])));
+    }
+
+    #[test]
+    fn set_root_command() {
+        match parse(&args(&["set-root", "D:/dsh-data"])) {
+            Ok(Some(CliCommand::SetRoot { dir })) => assert_eq!(dir, "D:/dsh-data"),
+            other => panic!("unexpected: {:?}", other),
+        }
+        // 缺少目录参数 → 报错
+        assert!(parse(&args(&["set-root"])).is_err());
+        // 修饰符在前也认得
+        match parse(&args(&["--json", "set-root", "E:/x"])) {
+            Ok(Some(CliCommand::SetRoot { dir })) => assert_eq!(dir, "E:/x"),
+            other => panic!("unexpected: {:?}", other),
+        }
     }
 }

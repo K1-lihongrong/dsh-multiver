@@ -7,11 +7,48 @@
 
 ---
 
+## [0.3.1] - 未发布
+
+### 插件（dsh-multiver-bridge）
+
+- **安装层零版本约束**：删除 `engines.dsh`，dsh 不再拦截任何版本的安装。此前精确锁 `0.2.1-rc.2`，rc.3 用户安装被直接拒绝（`installation rejected`），只能逐版本手动 `dsh plugin allow-version`。
+- **已验证版本登记**：新增 `package.json` 字段 `dshMultiver.verifiedDshVersions`（`0.1.5-rc.3`、`0.2.0-rc.1`、`0.2.0-rc.2`、`0.2.1-rc.2`、`0.2.1-rc.3`）。该字段不被 dsh 读取，仅作信息记录。完整测试矩阵见 [插件兼容矩阵](docs/插件兼容矩阵.md)。
+- **兼容性提示**：Host 的 `state` 端点新增 `compatibility` 字段（`runningVersion` / `verifiedVersions` / `verified`）；Client 在运行版本不在已验证列表时显示黄色提示条，**不阻断功能**。
+- **设置页导航图标**：dsh shell 按 id 白名单硬编码图标，第三方 section 一律拿到齿轮（与「通用设置」重复）。改为按 label 文本定位自身按钮并替换 svg 内容（三条横杠 + 右下圆点）。定位失败时静默降级为原生齿轮，不影响功能。
+- **插件面板搜索框**：位置从顶部工具栏移到插件列表上方独立成行，加放大镜图标，文案改为「筛选已安装的插件…」，避免与「添加插件」按钮混淆。
+- **部署引导**：未配置数据根时，插件不再直接显示版本表，而是一个三步向导——选工作目录 → 获取 exe（自动下载 / 使用已有）→ `set-root` 并启动。`state` 新增 `provisioned` 字段（读 multiver 自身 `config.json` 探测，插件不另存状态）。新增 `provision` 端点：下载固定本仓库 latest Release、强制 SHA256 校验、失败清理临时文件不留半成品、仅允许 https、120s 超时。
+- **更新管理**：插件底部新增「multiver 更新」区块，可检查并更新 multiver 自身。全部委托 multiver 自带 updater（`update --dry-run --json` 查、`update --json` 执行），插件不重复实现替换逻辑。
+- **暂存更新（内嵌窗口也能更新）**：内嵌模式下 `apply` 自动降级为暂存——新 exe 下载到 `<数据根>/.update/` 并校验，写 `pending.json`；multiver **下次启动时**在 `run()` 早期完成替换并退出，用户重开即新版。替换永远发生在 multiver 未运行时，不打断任何会话。`state` 新增 `pendingUpdate` 字段，UI 显示「待安装：vX.Y.Z」。
+- **部署下载前检查磁盘空间**：剩余空间不足 100 MB 时直接返回 `disk-full`，不开始下载。
+- **空版本态文案**：明确 multiver 只管理自己装在数据根 `versions/` 下的 dsh，npm / pnpm / Python wheel / 桌面版安装的 dsh 是独立的一份、不受影响。
+
+### CLI
+
+- **新增 `set-root <目录>`**：设置数据根目录。复用 GUI `set_root` 逻辑——校验绝对路径、拒绝 `..`、创建子目录、验证可写、保存配置、重生成终端转发脚本。
+  - Unix 上切换前对**旧**数据根执行一次残留进程清理（GAP-011）：否则旧 root 下的登记不会被新 root 的启动清理触及，其中的 dsh 可能永久残留。
+  - Windows 不需要该清理：`procreg` 模块本身由 `cfg(unix)` 门控，子进程由 Job Object 做 OS 级保障。
+  - 支持 `--dry-run` 预览与 `--json` 机读输出。
+
+### 文档
+- **新增 [插件兼容矩阵](docs/插件兼容矩阵.md)**：8 个 dsh 版本的实测结果，最低支持 `0.1.5-rc.3`。含失败原因、复现步骤与测试纪律。
+- 使用手册补「与其它方式装的 dsh 共存」一节：npm / pnpm / Python wheel / 桌面版四种形态的冲突情况、判断当前 `dsh` 归属的方法、DSH_HOME 共用风险。
+
+### 验证
+- **兼容矩阵**：5 个版本完全支持（0.1.5-rc.3 / 0.2.0-rc.1 / 0.2.0-rc.2 / 0.2.1-rc.2 / 0.2.1-rc.3）；2 个因 dsh 自身缺陷无法判定（0.1.5-rc.1 / 0.1.2-rc.1，报 `requires the Cordis HMR service`，无插件对照同样失败）；1 个装不上（0.1.3-alpha.2，`fs-ext` 原生模块编译失败）。
+- **四端点实测**：`state` / `probe` / `open` / `setDefault`、鉴权（401/403）、405、错误码映射、argv 版本探测、设置页 UI 渲染全部正常。
+- **零约束安装**：rc.3 上删除豁免后直接安装成功，`compatibility.json` 保持空对象。
+- **部署引导**：路径校验 4 例、dry-run 无副作用、真实切换、`env`/`doctor`/`list` 反映新根、幂等、真实数据根 config SHA 未变；下载 7 秒 / SHA256 校验 / 临时文件零残留；7 类失败路径均返回可读错误码；UI 门控双向翻转实测。
+- **更新管理**：已最新 / 有更新 / 确认取消 / 成功 / 失败 / 内嵌降级为暂存 / 旧版 CLI 错误，全部实测通过。
+- **暂存更新**：`staged` 模块 7 条单测覆盖标记读写、损坏标记、校验失败、缺失 exe 等路径；端到端验证内嵌暂存 → 重启自动安装。
+- **E2E 35 项通过**（新增「无插件时不显示筛选框」「筛选框位于列表上方」两条）。
+- **单元测试 156 passed / 1 ignored**（新增 5 条 `set-root` 测试）。
+- `cargo fmt` / `cargo clippy -D warnings` 全绿。
+
 ## [0.3.0] - 未发布
 
 > **破坏性变更**：CLI 从 `--flag` 风格改为子命令风格。旧语法已移除，迁移见 [CLI 迁移指南](docs/CLI迁移指南-v0.3.0.md)。
 >
-> **验收范围**：Windows 侧已完成本机验收（自动 9 项 + 手动 5 项；验收记录已归档，不随仓库发布）；Linux 侧已实现但未做完整验收，相关项后置到 v0.3.x（见 [开发缺口 · Linux 适配后置](docs/开发缺口.md#linux-适配后置v03x)）。
+> **验收范围**：Windows 侧已完成本机验收；Linux 侧已实现但未做完整验收，相关项后置到 v0.3.x（见 [开发缺口 · Linux 适配后置](docs/开发缺口.md#linux-适配后置v03x)）。
 
 ### 破坏性变更
 - **CLI 子命令风格**：`--list` → `list`，`--install X` → `install X` 等（全部 21 个命令）。
@@ -71,20 +108,20 @@
   - 失败诊断本地化：识别官方 CLI 的 `allow-version` / `pnpm was not found` / `diagnostics: <logPath>`。
   - 卸载二次确认、内置 bundle 禁卸、包名校验（防 pnpm 选项/特殊字符透传）。
   - 进度输出面板 + 300s 超时（**取消按官方边界挂起**，见 `docs/插件面板-取消设计.md`）。
-- **官方信息查询与桥接（B1-11/B1-12）**：
+- **官方信息查询与桥接**：
   - profile 信息：运行时版本、版本豁免（`compatibility.json`）、待决定构建脚本、诊断日志目录。
   - 版本豁免可查看/撤销（官方 CLI `revoke-version`）。
   - 待决定构建脚本一键「允许并重试」（写 `pnpm-workspace.yaml` 的 `allowBuilds: true`）。
   - 打开 `.plugin-manager/logs` 诊断日志目录。
   - 新增命令 `ds_profile_info` / `ds_exemption_action` / `ds_approve_builds` / `ds_open_plugin_logs`。
-- **安装交互对齐官方（B1-15）**：
+- **安装交互对齐官方**：
   - 「添加插件」弹窗：包名 / GitHub 地址 / 本地目录三类 spec、可折叠安装引导（含「填入示例」）、安装源选择（默认 pnpm / npm 官方 / 中国大陆镜像 / 自定义 URL）、信任提示。
   - 多阶段状态：表单 → 确认安装（显示 spec 与来源）→ 安装中（实时输出）→ 完成（显示已装版本 + 「安装成功不保证激活」提示）/ 失败（重试 / 更换安装源）；记住上次安装源（localStorage）。
   - 后端改为 `node bin.js` 直接执行 dsh CLI（避免 `cmd /C` 二次转义，安全支持 URL/路径 spec）；安装源 URL 校验对齐官方（http(s)、无 userinfo、无 `#`）。
-- **更新检测与豁免允许（B1-13/B1-14）**：
+- **更新检测与豁免允许**：
   - 「检查更新」：`dsh plugin --profile <p> outdated --json`，显示「有新版本」，更新按官方语义先卸载再安装。
   - 版本豁免支持「允许此版本」（官方 `allow-version --accept-risk`，带风险确认）。
-- **安装前检查与安装源探测（B1-16/B1-17/B1-18）**：
+- **安装前检查与安装源探测**：
   - 安装前 `inspect`：npm 包经官方 CLI `pnpm view` 读取名称/版本/描述/`dsh.bundle`；本地目录读 package.json；git 只显示主机。非组合包按官方语义拒绝。
   - 首次使用（未记住安装源）时并发探测 npm 官方源与镜像，选最快（1.5s 超时，缓存 5 分钟）。
   - 安装失败弹窗内可直接「允许 pnpm 拦截的构建脚本并重试」（对齐官方失败界面）。
@@ -109,7 +146,7 @@
   - Node 下限口径统一为 `22.19+ / 24.2+`（24.0/24.1 缺 `import.meta.main`）。
   - L-11：文档声明支持多开（共享数据根注意事项）。
 
-### 新增（双向桥 B2–B4，dsh 插件）
+### 新增（dsh 插件）
 - **新包 `dsh-plugin/`（`dsh-multiver-bridge`）**：在 dsh 设置页提供「版本管理」，Host 半走 `ctx.webServer.register` 路由 + `ctx.connection.requestRejection` 鉴权，Client 半在 `settings.section` 渲染。
   - 状态条：默认版本 / 运行版本（含 `high` / `low` / `conflict` / `unknown` 置信度徽标）/ 待重启提示 / 一致性校对详情。
   - 版本表：与 `dsh-multiver list --json` 逐字段一致；「设为默认」带内联确认条。
@@ -125,8 +162,7 @@
 
 ### 文档
 - 新增 [CLI 迁移指南](docs/CLI迁移指南-v0.3.0.md)（旧→新对照 + 脚本迁移示例）。
-- 新增 dsh 双向桥交接文档（已归档，不随仓库发布；B2-B4 交 dsh）。
-- 使用手册、README、CUCKOO.md 同步更新。
+- 使用手册与 README 同步更新。
 
 ### 新增
 - **启动加载页**：快捷方式启动 / 运行按钮时立即显示加载页。

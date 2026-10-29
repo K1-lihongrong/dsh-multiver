@@ -134,3 +134,22 @@ grep -rl 'dsh-multiver --' . | xargs -r sed -i.bak -E 's/dsh-multiver --([a-z][a
 
 - 用 `dsh-multiver help` 查看最新用法。
 - 旧语法会**明确报错**（`未知参数：--list`），不会静默失败。
+
+---
+
+## 七、v0.3.1 新增命令（无需迁移）
+
+以下命令是 v0.3.1 引入的，v0.2.x 里没有对应旧语法：
+
+| 命令 | 说明 |
+| :--- | :--- |
+| `set-root <目录>` | 设置数据根目录。绝对路径，会创建子目录并重生成终端转发脚本。 |
+
+支持 `--dry-run`（只预览）与 `--json`（机读输出，含 `root` / `previous` / `changed` / `created`）。
+
+```bash
+dsh-multiver set-root D:/DSH-data --json
+# {"ok":true,"root":"D:/DSH-data","previous":"...","changed":true,"created":true}
+```
+
+> 该命令与图形界面「路径设置」里的「根目录」完全等价——两者写同一份 `config.json`。

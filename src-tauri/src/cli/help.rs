@@ -20,6 +20,7 @@ pub fn print_help() {
   install <版本> [--registry <url>]  安装指定版本（--registry 可指定 npm 源）
   uninstall <版本>                 卸载指定版本
   set-default <版本>               设为默认版本，并重生成终端 dsh 命令
+  set-root <目录>                  设置数据根目录（绝对路径；含旧 root 残留进程清理）
   isolate <版本> [--off]           开启某版本的数据隔离（加 --off 则关闭）
   shortcut <版本>                  为某版本创建桌面快捷方式
   copy-shared <版本>               把共享 home 数据复制到某隔离版本的独立 home（需先开隔离）
@@ -37,9 +38,9 @@ pub fn print_help() {
 
 修饰符：
   --json       结构化输出（机读）；只影响格式，不改行为
-  --dry-run    只预览不执行（可搭配 install / uninstall / set-default / isolate /
-               clean / maintenance / import / shortcut / copy-shared / clear-isolated /
-               setup-runtime / update）
+  --dry-run    只预览不执行（可搭配 install / uninstall / set-default / set-root /
+               isolate / clean / maintenance / import / shortcut / copy-shared /
+               clear-isolated / setup-runtime / update）
   --force      覆盖非本管理器生成的 dsh 命令（用于 set-default）
   --registry <url>  指定 npm 源（用于 install）
   --off        关闭隔离（用于 isolate）
@@ -48,6 +49,7 @@ pub fn print_help() {
   dsh-multiver list
   dsh-multiver install 0.1.7
   dsh-multiver set-default 0.1.7
+  dsh-multiver set-root D:/DSH-data
   dsh-multiver list --json
   DSH=\"$(dsh-multiver which)\"
 

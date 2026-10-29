@@ -4,11 +4,11 @@ dsh-multiver 的双向桥插件：在 dsh 设置页查看已安装版本、切�
 
 ## 状态
 
-**v0.3.0 已完成 B2–B4**：设置页「版本管理」提供状态条（默认版本 / 运行版本 + 置信度 / 待重启提示 / 一致性校对详情）、版本表、「设为默认」、三个送回动作（打开 multiver 目录 / 打开版本目录 / 复制诊断），以及「打开 multiver」按钮（仅非内嵌模式显示）。
+设置页「版本管理」提供：状态条（默认版本 / 运行版本 + 置信度 / 待重启提示 / 一致性校对详情）、版本表、「设为默认」、三个送回动作（打开 multiver 目录 / 打开版本目录 / 复制诊断），以及「打开 multiver」按钮（仅非内嵌模式显示）。
 
 ## 安装
 
-要求：dsh `0.2.1-rc.2`（`engines.dsh` 精确锁）。**装完必须重启 dsh 才生效。**
+已验证 dsh 版本：`0.1.5-rc.3`、`0.2.0-rc.1`、`0.2.0-rc.2`、`0.2.1-rc.2`、`0.2.1-rc.3`（最低支持 `0.1.5-rc.3`）。安装层**不设版本约束**，其他 dsh 版本也能装，但页面会提示未验证。**装完必须重启 dsh 才生效。**
 
 ### 方式一：npm（推荐）
 
@@ -19,7 +19,7 @@ dsh plugin --profile web add dsh-multiver-bridge
 ### 方式二：GitHub Release tarball
 
 ```powershell
-dsh plugin --profile web add https://github.com/K1-lihongrong/dsh-multiver/releases/download/v0.3.0/dsh-multiver-bridge-0.1.0.tgz
+dsh plugin --profile web add https://github.com/K1-lihongrong/dsh-multiver/releases/download/v0.3.1/dsh-multiver-bridge-0.2.0.tgz
 ```
 
 ### 方式三：本地 tarball
@@ -27,8 +27,8 @@ dsh plugin --profile web add https://github.com/K1-lihongrong/dsh-multiver/relea
 ```powershell
 cd dsh-plugin
 pnpm pack
-# 产物：dsh-multiver-bridge-0.1.0.tgz
-dsh plugin --profile web add .\dsh-multiver-bridge-0.1.0.tgz
+# 产物：dsh-multiver-bridge-0.2.0.tgz
+dsh plugin --profile web add .\dsh-multiver-bridge-0.2.0.tgz
 ```
 
 ### 方式四：目录安装（仅开发用）
@@ -42,7 +42,7 @@ dsh plugin --profile web add .\dsh-multiver-bridge-0.1.0.tgz
 ### 辅助脚本 `install.ps1`（可选，仅 tarball/目录安装需要）
 
 ```powershell
-.\install.ps1 -DshCmd '<dsh.cmd 路径>' -Profile web -PackageDir '.\dsh-multiver-bridge-0.1.0.tgz'
+.\install.ps1 -DshCmd '<dsh.cmd 路径>' -Profile web -PackageDir '.\dsh-multiver-bridge-0.2.0.tgz'
 ```
 
 脚本行为：
@@ -91,7 +91,7 @@ multiver 启动 dsh 时会注入以下环境变量，插件据此判断「谁启
 
 ## 已知限制
 
-- `engines.dsh` 精确锁 `0.2.1-rc.2`，dsh 升级后需复验并重打包。
+- **安装层零版本约束**（不声明 `engines.dsh`），任何 dsh 版本都能装；已验证版本记在 `package.json` 的 `dshMultiver.verifiedDshVersions`（`0.1.5-rc.3` / `0.2.0-rc.1` / `0.2.0-rc.2` / `0.2.1-rc.2` / `0.2.1-rc.3`）。运行版本不在列表时，页面顶部显示黄色提示但不阻断功能。完整矩阵与测试方法见 [插件兼容矩阵](../docs/插件兼容矩阵.md)。
 - 卸载后 `node_modules` 可能残留 link（dsh 的已知行为，不影响加载）。
 - 「运行中」徽标只统计 multiver 打开的内嵌窗口；console 启动与终端 `dsh` 没有进程内记录，不在范围。
 - 切换版本只改默认版本，**对下一次启动生效**；运行中的 dsh 无法热替换自身。
@@ -108,15 +108,15 @@ multiver 启动 dsh 时会注入以下环境变量，插件据此判断「谁启
 | 项 | 值 |
 |:---|:---|
 | 包名 | `dsh-multiver-bridge` |
-| 版本 | `0.1.0` |
+| 版本 | `0.2.0` |
 | npm | https://www.npmjs.com/package/dsh-multiver-bridge |
-| Release | [v0.3.0](https://github.com/K1-lihongrong/dsh-multiver/releases/tag/v0.3.0) |
-| tarball | `dsh-multiver-bridge-0.1.0.tgz`（15995 B） |
-| SHA256 | `89C31151C480E8411420ED2F8D17D2834F50D1AEDD884FCF1360C423B2DC1AE3` |
-| npm shasum | `1c7c456adedd7c6b85f862b4e8bcf269703f06e0` |
+| Release | [v0.3.1](https://github.com/K1-lihongrong/dsh-multiver/releases/tag/v0.3.1) |
 
-两条通道分发同一份 tarball。npm 通道的完整性由 registry 的 `integrity` 字段保证，无需手动核对；Release 通道建议核对 SHA256：
+两条通道分发同一份 tarball。
+
+**完整性校验**：npm 通道由 registry 的 `integrity` 字段保证；Release 通道请对照该 Release 附带的 `SHA256SUMS.txt`（本文件会随内容变化，故不在包内硬编码指纹）：
 
 ```powershell
-(Get-FileHash dsh-multiver-bridge-0.1.0.tgz -Algorithm SHA256).Hash
+Get-FileHash dsh-multiver-bridge-0.2.0.tgz -Algorithm SHA256
+# 与 Release 页面 SHA256SUMS.txt 中同名行比对
 ```

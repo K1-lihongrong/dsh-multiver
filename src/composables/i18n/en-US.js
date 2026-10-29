@@ -352,7 +352,7 @@ export default {
     "dsplugins.initPlaceholder": "Profile name, e.g. web",
     "dsplugins.initializing": "Initializing…",
     "dsplugins.initDone": "Initialized {p}",
-    "dsplugins.searchPlaceholder": "Search plugins…",
+    "dsplugins.searchPlaceholder": "Filter installed plugins…",
     "dsplugins.noMatch": "No matching plugins.",
     "dsplugins.showLog": "Show output",
     "dsplugins.hideLog": "Hide output",

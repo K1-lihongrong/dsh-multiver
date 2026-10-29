@@ -15,6 +15,47 @@ window.__ModuleLoader__.load({
     const NS = 'multiver-bridge'
     const CH = '/multiver-bridge'
 
+    // 设置页导航图标替换（尽力而为，失败静默）
+    // 三条横杠 + 右下圆点：多版本堆叠的隐喻，尺寸 16×16，跟随 currentColor。
+    function installNavIcon(getLabel) {
+      const ICON_HTML =
+        '<path d="M2.5 4.5h11" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>' +
+        '<path d="M2.5 8h11" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>' +
+        '<path d="M2.5 11.5h6.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>' +
+        '<circle cx="12.4" cy="11.5" r="1.5" fill="currentColor"/>'
+
+      const swap = () => {
+        const label = getLabel()
+        if (!label) return
+        let done = 0
+        document.querySelectorAll('nav button').forEach((btn) => {
+          if ((btn.textContent || '').trim() !== label) return
+          const svg = btn.querySelector('svg')
+          if (!svg || svg.dataset.multiverIcon === '1') return
+          try {
+            svg.innerHTML = ICON_HTML
+            svg.dataset.multiverIcon = '1'
+            done++
+          } catch {}
+        })
+        return done
+      }
+
+      swap()
+
+      let timer = null
+      const obs = new MutationObserver(() => {
+        if (timer) return
+        timer = setTimeout(() => { timer = null; swap() }, 120)
+      })
+      obs.observe(document.body, { childList: true, subtree: true })
+
+      return () => {
+        if (timer) clearTimeout(timer)
+        obs.disconnect()
+      }
+    }
+
     function rpc(endpoint, payload) {
       return fetch(CH + '/' + endpoint, {
         method: 'POST',
@@ -28,6 +69,278 @@ window.__ModuleLoader__.load({
         if (!body) throw new Error('bad-response')
         return body
       })
+    }
+
+    // 部署向导（阶段 2）：provisioned=false 时替代全部功能 UI。
+    // 三步：选工作目录 → 获取 exe（下载/已有）→ 完成并启动。
+    function ProvisionWizard(props) {
+      const t = React.useContext(LocaleCtx) ?? ((k) => k)
+      const info = props.provision || {}
+      const [step, setStep] = React.useState(1)
+      const [workdir, setWorkdir] = React.useState(info.defaultWorkdir || '')
+      const [adoptPath, setAdoptPath] = React.useState('')
+      const [mode, setMode] = React.useState('download') // download | adopt
+      const [busy, setBusy] = React.useState(false)
+      const [err, setErr] = React.useState(null)
+      const [result, setResult] = React.useState(null)
+
+      const run = React.useCallback(async (payload, onOk) => {
+        setBusy(true)
+        setErr(null)
+        try {
+          const r = await rpc('provision', payload)
+          if (r.ok) { onOk(r.value) } else { setErr(r.error) }
+        } catch (e) {
+          setErr({ code: 'network', message: String(e?.message ?? e) })
+        } finally {
+          setBusy(false)
+        }
+      }, [])
+
+      const doAcquire = React.useCallback(() => {
+        if (mode === 'adopt') {
+          run({ step: 'adopt', exe: adoptPath }, (v) => {
+            setResult({ exe: v.exe, verified: false, adopted: true })
+            setStep(3)
+          })
+        } else {
+          run({ step: 'download', workdir }, (v) => {
+            setResult(v)
+            setStep(3)
+          })
+        }
+      }, [mode, adoptPath, workdir, run])
+
+      const doFinish = React.useCallback(() => {
+        const exe = result?.exe
+        run({ step: 'setRoot', exe, workdir }, () => {
+          run({ step: 'launch' }, () => { props.onDone && props.onDone() })
+        })
+      }, [result, workdir, run, props])
+
+      const errText = (e) => {
+        if (!e) return null
+        const key = 'err.' + e.code
+        const mapped = t(key)
+        return (mapped && mapped !== key ? mapped : e.code) + (e.message ? '：' + e.message : '')
+      }
+
+      const box = { padding: '16px 20px', maxWidth: 720 }
+      const card = {
+        border: '1px solid rgba(128,128,128,.25)', borderRadius: 8,
+        padding: '14px 16px', marginBottom: 12,
+      }
+      const inputStyle = {
+        width: '100%', padding: '7px 10px', borderRadius: 6, fontSize: 13,
+        border: '1px solid rgba(128,128,128,.35)', background: 'transparent',
+        color: 'inherit', fontFamily: 'ui-monospace, monospace',
+      }
+      const rowGap = { display: 'flex', gap: 8, marginTop: 10, flexWrap: 'wrap' }
+
+      return h('div', { style: box },
+        h('div', { style: { fontSize: 15, fontWeight: 600, marginBottom: 4 } }, t('provision.title')),
+        h('div', { style: { fontSize: 13, opacity: .7, marginBottom: 16 } }, t('provision.subtitle')),
+
+        // 步骤指示
+        h('div', { style: { display: 'flex', gap: 18, fontSize: 12, marginBottom: 16, opacity: .8 } },
+          [1, 2, 3].map((n) => h('span', {
+            key: n,
+            style: { fontWeight: step === n ? 700 : 400, opacity: step >= n ? 1 : .5 },
+          }, `${n}. ${t('provision.step' + n)}`))
+        ),
+
+        // 步骤 1：选工作目录
+        step === 1 && h('div', { style: card },
+          h('div', { style: { fontSize: 13, marginBottom: 8 } }, t('provision.pickDirHint')),
+          h('input', {
+            style: inputStyle,
+            value: workdir,
+            placeholder: info.defaultWorkdir || 'D:/dsh-multiver',
+            onChange: (e) => setWorkdir(e.target.value),
+            disabled: busy,
+          }),
+          h('div', { style: rowGap },
+            h('button', {
+              style: btnStyle,
+              disabled: busy || !workdir.trim(),
+              onClick: () => { setErr(null); setStep(2) },
+            }, t('provision.next'))
+          )
+        ),
+
+        // 步骤 2：获取 exe
+        step === 2 && h('div', { style: card },
+          h('div', { style: { display: 'flex', gap: 14, marginBottom: 10, fontSize: 13 } },
+            h('label', { style: { display: 'flex', gap: 5, alignItems: 'center', cursor: 'pointer' } },
+              h('input', { type: 'radio', checked: mode === 'download', onChange: () => setMode('download'), disabled: busy }),
+              t('provision.modeDownload')),
+            h('label', { style: { display: 'flex', gap: 5, alignItems: 'center', cursor: 'pointer' } },
+              h('input', { type: 'radio', checked: mode === 'adopt', onChange: () => setMode('adopt'), disabled: busy }),
+              t('provision.modeAdopt'))
+          ),
+          mode === 'download'
+            ? h('div', null,
+                h('div', { style: { fontSize: 12, opacity: .7, marginBottom: 6 } },
+                  t('provision.downloadHint', { repo: info.releaseRepo || '' })),
+                h('div', { style: { fontSize: 11, fontFamily: 'ui-monospace, monospace', opacity: .6, wordBreak: 'break-all' } },
+                  workdir + '/' + (info.platform === 'win32' ? 'dsh-multiver.exe' : 'dsh-multiver')))
+            : h('div', null,
+                h('div', { style: { fontSize: 12, opacity: .7, marginBottom: 6 } }, t('provision.adoptHint')),
+                h('input', {
+                  style: inputStyle,
+                  value: adoptPath,
+                  placeholder: 'D:/tools/dsh-multiver.exe',
+                  onChange: (e) => setAdoptPath(e.target.value),
+                  disabled: busy,
+                })),
+          busy && h('div', { style: { marginTop: 10, fontSize: 12, opacity: .75 } }, t('provision.working')),
+          err && h('div', {
+            style: { marginTop: 10, padding: '8px 12px', borderRadius: 6, background: 'rgba(220,50,50,.12)', fontSize: 12 },
+          }, errText(err)),
+          h('div', { style: rowGap },
+            h('button', { style: btnStyle, disabled: busy, onClick: () => { setErr(null); setStep(1) } }, t('provision.back')),
+            h('button', {
+              style: { ...btnStyle, opacity: busy || (mode === 'adopt' ? !adoptPath.trim() : !workdir.trim()) ? .5 : 1 },
+              disabled: busy || (mode === 'adopt' ? !adoptPath.trim() : !workdir.trim()),
+              onClick: doAcquire,
+            }, mode === 'download' ? t('provision.doDownload') : t('provision.doAdopt'))
+          )
+        ),
+
+        // 步骤 3：完成并启动
+        step === 3 && h('div', { style: card },
+          h('div', { style: { fontSize: 13, marginBottom: 8 } }, t('provision.acquired')),
+          h('div', { style: { fontSize: 11.5, fontFamily: 'ui-monospace, monospace', opacity: .75, wordBreak: 'break-all' } }, result?.exe || ''),
+          result?.verified && h('div', { style: { fontSize: 12, color: '#2a9d3f', marginTop: 6 } },
+            t('provision.checksumOk')),
+          result?.adopted && h('div', { style: { fontSize: 12, opacity: .7, marginTop: 6 } },
+            t('provision.adoptNoChecksum')),
+          err && h('div', {
+            style: { marginTop: 10, padding: '8px 12px', borderRadius: 6, background: 'rgba(220,50,50,.12)', fontSize: 12 },
+          }, errText(err)),
+          h('div', { style: rowGap },
+            h('button', { style: btnStyle, disabled: busy, onClick: () => { setErr(null); setResult(null); setStep(2) } }, t('provision.back')),
+            h('button', { style: { ...btnStyle, fontWeight: 600 }, disabled: busy, onClick: doFinish },
+              busy ? t('provision.working') : t('provision.finish'))
+          )
+        ),
+
+        info.reasons && info.reasons.length > 0 && step === 1 && h('div', {
+          style: { marginTop: 8, fontSize: 11.5, opacity: .55 },
+        }, t('provision.reasonPrefix') + ' ' + info.reasons.join(', '))
+      )
+    }
+
+    // 更新管理块（阶段 3）：检查 → 显示 → 用户确认 → 委托 multiver update。
+    function UpdateBlock(props) {
+      const t = React.useContext(LocaleCtx) ?? ((k) => k)
+      const [info, setInfo] = React.useState(null)
+      const [busy, setBusy] = React.useState(false)
+      const [msg, setMsg] = React.useState(null)
+      const [err, setErr] = React.useState(null)
+      const [confirming, setConfirming] = React.useState(false)
+
+      const check = React.useCallback(async () => {
+        setBusy(true); setErr(null); setMsg(null)
+        try {
+          const r = await rpc('update', { step: 'check' })
+          if (r.ok) setInfo(r.value)
+          else setErr(r.error)
+        } catch (e) {
+          setErr({ code: 'network', message: String(e?.message ?? e) })
+        } finally { setBusy(false) }
+      }, [])
+
+      React.useEffect(() => { check() }, [check])
+
+      // 内嵌模式下 apply 会被 Host 自动降级为 stage（暂存，下次启动安装）。
+      // 两种结果都要能正确展示。
+      const apply = React.useCallback(async () => {
+        setConfirming(false); setBusy(true); setErr(null); setMsg(null)
+        try {
+          const r = await rpc('update', { step: 'apply' })
+          if (r.ok) {
+            const v = r.value || {}
+            if (v.deferred) {
+              // 内嵌模式：已暂存
+              setMsg(v.message || t('update.staged'))
+              setInfo((s) => s ? { ...s, hasUpdate: false, pendingUpdate: { version: v.version } } : s)
+            } else if (v.upToDate) {
+              setMsg(t('update.upToDate'))
+            } else {
+              setMsg(v.message || t('update.handedOff'))
+            }
+            setInfo((s) => s ? { ...s, hasUpdate: false } : s)
+          } else {
+            setErr(r.error)
+          }
+        } catch (e) {
+          setErr({ code: 'network', message: String(e?.message ?? e) })
+        } finally { setBusy(false) }
+      }, [t])
+
+      const errText = (e) => {
+        if (!e) return null
+        const key = 'err.' + e.code
+        const mapped = t(key)
+        return (mapped && mapped !== key ? mapped : e.code) + (e.message ? '：' + e.message : '')
+      }
+
+      const row = { display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', fontSize: 12 }
+      const btn = (primary) => ({
+        fontSize: 11, padding: '3px 10px', borderRadius: 6, cursor: busy ? 'not-allowed' : 'pointer',
+        border: '1px solid ' + (primary ? 'transparent' : 'rgba(128,128,128,.35)'),
+        background: primary ? '#247bbf' : 'transparent',
+        color: primary ? '#fff' : 'inherit',
+        opacity: busy ? 0.5 : 1,
+      })
+
+      return h('div', {
+        style: {
+          marginTop: 16, paddingTop: 12, borderTop: '1px solid rgba(128,128,128,.18)',
+        },
+      },
+        h('div', { style: { ...row, marginBottom: 6 } },
+          h('span', { style: { fontWeight: 600 } }, t('update.title')),
+          info && info.current && h('span', { style: { opacity: .65 } },
+            t('update.current', { v: info.current })),
+          busy && h('span', { style: { opacity: .6 } }, t('update.working'))
+        ),
+        !info && !err && !busy && h('div', { style: { fontSize: 12, opacity: .6 } }, t('update.checking')),
+        info && !info.hasUpdate && h('div', { style: { ...row } },
+          h('span', { style: { opacity: .75 } }, info.error
+            ? t('update.checkFailed', { e: info.error })
+            : t('update.upToDate')),
+          h('button', { style: btn(false), disabled: busy, onClick: check }, t('update.recheck'))
+        ),
+        info && info.hasUpdate && h('div', { style: { ...row } },
+          h('span', { style: { fontWeight: 600, color: '#2a9d3f' } },
+            t('update.available', { v: info.latest })),
+          info.releaseUrl && h('a', {
+            href: info.releaseUrl, target: '_blank', rel: 'noreferrer',
+            style: { fontSize: 11, opacity: .7 },
+          }, t('update.changelog')),
+          confirming
+            ? h('span', { style: { ...row } },
+                h('span', { style: { opacity: .85 } }, t('update.confirm')),
+                h('button', { style: btn(true), disabled: busy, onClick: apply }, t('update.yes')),
+                h('button', { style: btn(false), disabled: busy, onClick: () => setConfirming(false) }, t('update.no'))
+              )
+            : h('button', { style: btn(true), disabled: busy, onClick: () => setConfirming(true) }, t('update.doUpdate'))
+        ),
+        // 内嵌窗口下点更新走「暂存」，multiver 下次启动时自动安装，不打断当前会话
+        info && info.hasUpdate && info.runningInMultiver && h('div', {
+          style: { marginTop: 6, fontSize: 11.5, opacity: .7, lineHeight: '18px' },
+        }, t('update.embeddedHint')),
+        // 已暂存待安装的更新
+        info && info.pendingUpdate && h('div', {
+          style: { marginTop: 8, padding: '6px 10px', borderRadius: 6, background: 'rgba(36,123,191,.10)', fontSize: 12 },
+        }, t('update.pendingInstall', { v: info.pendingUpdate.version })),
+        msg && h('div', { style: { marginTop: 6, fontSize: 12, color: '#2a9d3f' } }, msg),
+        err && h('div', {
+          style: { marginTop: 6, padding: '6px 10px', borderRadius: 6, background: 'rgba(220,50,50,.12)', fontSize: 12 },
+        }, errText(err))
+      )
     }
 
     function VersionsPage(props) {
@@ -125,6 +438,14 @@ window.__ModuleLoader__.load({
         )
       }
 
+      // 阶段 2 门控：未配置数据根时只显示部署向导，不渲染版本表与任何功能按钮
+      if (!state.value.provisioned) {
+        return h(ProvisionWizard, {
+          provision: state.value.provision,
+          onDone: load,
+        })
+      }
+
       const v = state.value
 
       // M3a：校对详情。只列 mismatch / unknown 的项，ok 不占篇幅。
@@ -162,6 +483,15 @@ window.__ModuleLoader__.load({
             h('div', { style: { fontWeight: 600 } }, t('conflictTitle')),
             h('div', { style: { opacity: 0.85, marginTop: 2 } }, t('conflictHint'))
           ),
+          // 兼容性提示：仅在「运行版本已知且不在已验证列表」时显示，不阻断功能
+          v.compatibility
+            && v.compatibility.verified === false
+            && h('div', {
+              style: { marginTop: 8, padding: '8px 12px', borderRadius: 6, background: 'rgba(255,170,0,.10)', fontSize: 13, opacity: 0.9 },
+            }, t('compatUnverified', {
+              running: v.compatibility.runningVersion,
+              list: (v.compatibility.verifiedVersions || []).join(' / ') || '—',
+            })),
           // M3a：一致性校对详情（有 mismatch 才展开）
           hasConsistencyMismatch(v.consistency) && h('div', {
             style: { marginTop: 8, padding: '8px 12px', borderRadius: 6, background: 'rgba(220,50,50,.12)', fontSize: 13 },
@@ -177,7 +507,8 @@ window.__ModuleLoader__.load({
           style: { padding: '24px 16px', textAlign: 'center', opacity: 0.75, fontSize: 14, lineHeight: '22px' },
         },
           h('div', { style: { fontWeight: 600, marginBottom: 6 } }, t('emptyTitle')),
-          h('div', null, t('emptyHint'))
+          h('div', null, t('emptyHint')),
+          h('div', { style: { marginTop: 8, fontSize: 12, opacity: 0.7, lineHeight: '19px' } }, t('emptyNote'))
         ),
         // 版本表
         v.versions.length > 0 && h('table', { style: { width: '100%', borderCollapse: 'collapse', fontSize: 14 } },
@@ -262,6 +593,8 @@ window.__ModuleLoader__.load({
             onFocus: (e) => e.target.select(),
           })
         ),
+        // 阶段 3：multiver 自身更新管理。委托 multiver 自带 updater，插件不重复实现替换。
+        h(UpdateBlock, { value: v }),
         // 页脚
         h('div', { style: { marginTop: 16, paddingTop: 12, borderTop: '1px solid rgba(128,128,128,.18)', fontSize: 12, opacity: 0.65 } },
           h('div', { style: { marginBottom: 4 } }, t('exePath', { exe: v.exe }) + ' · ' + t('detectedBy', { by: v.detectedBy })),
@@ -375,8 +708,9 @@ window.__ModuleLoader__.load({
             'err.invalid-version': '版本号格式不正确',
             'err.unknown-endpoint': '未知的接口',
             'err.internal': '内部错误',
-            emptyTitle: '还没有已安装的版本',
-            emptyHint: '请先在 dsh-multiver 里安装一个版本，再回到这里管理。',
+            emptyTitle: 'multiver 还没有安装任何 dsh 版本',
+            emptyHint: '请在 dsh-multiver 里安装一个版本，再回到这里管理。',
+            emptyNote: 'multiver 只管它自己装的那份 dsh（位于数据根的 versions/ 目录）。你通过 npm、pnpm、Python wheel 或 DeepSeek Harness 桌面版装的 dsh 是独立的一份，不受本插件影响，也不会出现在这个列表里。',
             'err.network': '网络或鉴权失败',
             'err.invalid-target': '目标不受支持',
             'err.outside-root': '路径超出数据根',
@@ -396,6 +730,60 @@ window.__ModuleLoader__.load({
             consistencySep: '：',
             consistencyBad: '不一致',
             consistencyUnknown: '无法确定',
+            compatUnverified: '当前 dsh {running} 未经验证。插件按 {list} 验证，功能可能在后续版本失效；如遇问题请在 multiver 侧反馈。',
+            'provision.title': '首次使用：部署 dsh-multiver',
+            'provision.subtitle': '需要先准备好 dsh-multiver.exe 并选择工作目录，之后即可在这里管理 dsh 版本。',
+            'provision.step1': '选择工作目录',
+            'provision.step2': '获取 dsh-multiver.exe',
+            'provision.step3': '完成并启动',
+            'provision.pickDirHint': '选择存放版本与配置的目录（不存在会自动创建，不会使用系统目录）：',
+            'provision.next': '下一步',
+            'provision.back': '上一步',
+            'provision.modeDownload': '自动下载最新版',
+            'provision.modeAdopt': '使用已有的 exe',
+            'provision.downloadHint': '将从 GitHub Release（{repo}）下载，并校验 SHA256。',
+            'provision.adoptHint': '填写本机已有的 dsh-multiver.exe 绝对路径：',
+            'provision.doDownload': '下载并校验',
+            'provision.doAdopt': '使用此文件',
+            'provision.working': '处理中…',
+            'provision.acquired': '已就绪的 dsh-multiver.exe：',
+            'provision.checksumOk': 'SHA256 校验通过',
+            'provision.adoptNoChecksum': '已有文件不做校验，请自行确认来源可信',
+            'provision.finish': '设置工作目录并启动',
+            'provision.reasonPrefix': '检测到：',
+            'err.invalid-dir': '目录路径无效',
+            'err.invalid-exe': 'exe 路径无效',
+            'err.exe-missing': '找不到 dsh-multiver.exe',
+            'err.dir-create-failed': '无法创建目录',
+            'err.dir-readonly': '目录不可写',
+            'err.download-failed': '下载失败',
+            'err.http-error': '服务器返回错误',
+            'err.checksum-mismatch': 'SHA256 校验失败，已拒绝该文件',
+            'err.checksum-missing': '校验文件中没有该文件的记录',
+            'err.rename-failed': '无法写入目标位置（文件可能正被占用）',
+            'err.insecure-url': '仅支持 HTTPS 下载',
+            'err.invalid-step': '未知的部署步骤',
+            'err.write-failed': '写入文件失败',
+            'update.title': 'multiver 更新',
+            'update.current': '当前 {v}',
+            'update.checking': '正在检查更新…',
+            'update.working': '处理中…',
+            'update.upToDate': '已是最新版本',
+            'update.checkFailed': '检查失败：{e}',
+            'update.recheck': '重新检查',
+            'update.available': '有新版本 {v}',
+            'update.changelog': '查看 Release',
+            'update.doUpdate': '更新',
+            'update.confirm': '更新会重启管理器，确认？',
+            'update.yes': '确认',
+            'update.no': '取消',
+            'update.handedOff': '更新已就绪，管理器将退出以完成替换',
+            'update.embeddedHint': '当前在内嵌窗口中。更新会中断本会话——建议在 multiver 主界面完成更新，或关闭该窗口后重试。',
+            'err.embedded-blocked': '内嵌窗口下不能执行更新',
+            'update.staged': '已暂存，multiver 下次启动时自动安装',
+            'update.pendingInstall': '待安装：v{v}（multiver 下次启动时生效）',
+            'err.download-url-missing': 'Release 资产缺失，无法下载新版本',
+            'err.disk-full': '磁盘剩余空间不足',
           },
           en: {
             section: 'Versions',
@@ -435,8 +823,9 @@ window.__ModuleLoader__.load({
             'err.invalid-version': 'Invalid version string',
             'err.unknown-endpoint': 'Unknown endpoint',
             'err.internal': 'Internal error',
-            emptyTitle: 'No versions installed yet',
-            emptyHint: 'Install a version in dsh-multiver first, then come back here.',
+            emptyTitle: 'multiver has no dsh versions yet',
+            emptyHint: 'Install a version in dsh-multiver, then come back here.',
+            emptyNote: 'multiver only manages the dsh copies it installed itself (under versions/ in the data root). A dsh installed via npm, pnpm, a Python wheel, or DeepSeek Harness Desktop is a separate installation — unaffected by this plugin and never listed here.',
             'err.network': 'Network or auth failure',
             'err.invalid-target': 'Unsupported target',
             'err.outside-root': 'Path is outside the data root',
@@ -456,10 +845,69 @@ window.__ModuleLoader__.load({
             consistencySep: ': ',
             consistencyBad: 'mismatch',
             consistencyUnknown: 'unknown',
+            compatUnverified: 'This dsh ({running}) is not a verified version. The plugin was verified against {list}; later releases may break it. Please report issues on the multiver side.',
+            'provision.title': 'First run: set up dsh-multiver',
+            'provision.subtitle': 'Prepare dsh-multiver.exe and pick a working directory, then you can manage dsh versions here.',
+            'provision.step1': 'Choose directory',
+            'provision.step2': 'Get dsh-multiver.exe',
+            'provision.step3': 'Finish and launch',
+            'provision.pickDirHint': 'Where versions and config will live (created if missing; system directories are never used by default):',
+            'provision.next': 'Next',
+            'provision.back': 'Back',
+            'provision.modeDownload': 'Download the latest',
+            'provision.modeAdopt': 'Use an existing exe',
+            'provision.downloadHint': 'Downloads from the GitHub Release ({repo}) and verifies SHA256.',
+            'provision.adoptHint': 'Absolute path to an existing dsh-multiver.exe:',
+            'provision.doDownload': 'Download and verify',
+            'provision.doAdopt': 'Use this file',
+            'provision.working': 'Working…',
+            'provision.acquired': 'Ready:',
+            'provision.checksumOk': 'SHA256 verified',
+            'provision.adoptNoChecksum': 'Existing file is not verified — make sure the source is trustworthy',
+            'provision.finish': 'Set directory and launch',
+            'provision.reasonPrefix': 'Detected:',
+            'err.invalid-dir': 'Invalid directory path',
+            'err.invalid-exe': 'Invalid exe path',
+            'err.exe-missing': 'dsh-multiver.exe not found',
+            'err.dir-create-failed': 'Failed to create directory',
+            'err.dir-readonly': 'Directory is not writable',
+            'err.download-failed': 'Download failed',
+            'err.http-error': 'Server returned an error',
+            'err.checksum-mismatch': 'SHA256 mismatch — file rejected',
+            'err.checksum-missing': 'Checksum file has no entry for this file',
+            'err.rename-failed': 'Cannot write target (file may be in use)',
+            'err.insecure-url': 'Only HTTPS downloads are allowed',
+            'err.invalid-step': 'Unknown provisioning step',
+            'err.write-failed': 'Failed to write file',
+            'update.title': 'multiver update',
+            'update.current': 'current {v}',
+            'update.checking': 'Checking for updates…',
+            'update.working': 'Working…',
+            'update.upToDate': 'Already up to date',
+            'update.checkFailed': 'Check failed: {e}',
+            'update.recheck': 'Check again',
+            'update.available': 'Version {v} available',
+            'update.changelog': 'Release notes',
+            'update.doUpdate': 'Update',
+            'update.confirm': 'Updating restarts the manager. Continue?',
+            'update.yes': 'Confirm',
+            'update.no': 'Cancel',
+            'update.handedOff': 'Update ready — the manager will exit to finish replacing itself',
+            'update.embeddedHint': 'Running inside the embedded window. Updating interrupts this session — do it from the multiver main window, or close this window first.',
+            'err.embedded-blocked': 'Update is not allowed from the embedded window',
+            'update.staged': 'Staged — installs automatically on next multiver launch',
+            'update.pendingInstall': 'Pending install: v{v} (applies on next multiver launch)',
+            'err.download-url-missing': 'Release asset missing, cannot download',
+            'err.disk-full': 'Not enough free disk space',
           },
         }), 'multiver-bridge: dictionaries')
 
         const Wrapped = (props) => h(LocaleCtx.Provider, { value: t }, h(VersionsPage, props))
+
+        // 设置页导航图标：dsh 的 shell 按 id 白名单硬编码图标，第三方 section 一律拿到齿轮
+        // （与「通用设置」重复）。slot 契约不提供 icon 字段，故按 label 文本定位我们的按钮，
+        // 替换其内部 svg 内容。定位失败时静默放弃，仍显示原生齿轮，不影响功能。
+        installNavIcon(() => t('section'))
 
         ctx.slots.inject('settings.section', () => {
           let dispose

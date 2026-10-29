@@ -15,6 +15,7 @@ mod paths;
 mod procreg;
 mod runtime;
 mod sizecache;
+mod staged;
 mod updater;
 mod versions;
 mod window;
@@ -154,6 +155,20 @@ pub fn run() {
             eprintln!("用 --help 查看用法");
             std::process::exit(1);
         }
+    }
+
+    // 暂存更新（staged update）：内嵌窗口里更新的 exe 已下载并校验。
+    // 在此刻（GUI 尚未初始化）完成替换最安全——重命名 + 放入，无需等待进程退出。
+    // 替换后**继续正常启动**（当前进程仍以已加载的旧代码运行），下次启动即新版。
+    {
+        let mdir = manager_dir_plain();
+        let root = Config::load(&mdir).resolve_root(&mdir);
+        if let Some(v) = staged::take_over_pending(&root) {
+            // 有控制台时可见；GUI 无控制台则只留日志
+            eprintln!("暂存更新 {} 已就位，下次启动生效", v);
+        }
+        // 清理上一轮留下的备份（当时被占用删不掉，现在已空闲）
+        staged::cleanup_backup();
     }
 
     // v0.2.9 批 2：WebView2 早期检测（必须在 Tauri 初始化前——GUI 本体依赖它）。

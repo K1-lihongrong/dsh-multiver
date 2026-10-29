@@ -17,13 +17,53 @@
  */
 
 import { execFile, spawn } from 'node:child_process'
-import { existsSync, realpathSync } from 'node:fs'
+import {
+  existsSync, realpathSync, readFileSync, writeFileSync,
+  mkdirSync, createWriteStream, unlinkSync, renameSync, statSync,
+  statfsSync,
+} from 'node:fs'
 import { join, dirname, delimiter, sep } from 'node:path'
+import { createHash } from 'node:crypto'
+import https from 'node:https'
 
 const MAX_BODY = 16 * 1024
+/// 部署下载前要求的最小可用空间（100 MB，exe 本身约 10 MB，留足余量）
+const MIN_FREE_BYTES = 100 * 1024 * 1024
 const CHANNEL = '/multiver-bridge'
 const VERSION_RE = /^[A-Za-z0-9][A-Za-z0-9._+-]*$/
 const OPEN_TARGETS = new Set(['version-dir', 'multiver-dir', 'launch-multiver'])
+
+// 部署引导（阶段 2）。下载源固定为本仓库的 latest Release，不接受任意 URL。
+const RELEASE_REPO = 'K1-lihongrong/dsh-multiver'
+const EXE_ASSET = 'dsh-multiver.exe'
+const SUMS_ASSET = 'SHA256SUMS.txt'
+const EXE_NAME = process.platform === 'win32' ? 'dsh-multiver.exe' : 'dsh-multiver'
+const DOWNLOAD_TIMEOUT_MS = 120000
+// 默认工作目录：%LOCALAPPDATA%\dsh-multiver（Win）/ ~/.local/share/dsh-multiver（Unix）
+const DEFAULT_WORKDIR = (() => {
+  try {
+    if (process.platform === 'win32') {
+      const base = process.env.LOCALAPPDATA || process.env.APPDATA
+      if (base) return join(base, 'dsh-multiver')
+    } else {
+      const home = process.env.HOME
+      if (home) return join(home, '.local', 'share', 'dsh-multiver')
+    }
+  } catch {}
+  return null
+})()
+
+// 已验证的 dsh 版本（来自本包 package.json 的 dshMultiver.verifiedDshVersions）。
+// 仅用于 UI 提示，不做安装拦截——engines 字段刻意省略，安装层零约束。
+const VERIFIED_DSH_VERSIONS = (() => {
+  try {
+    const pkg = JSON.parse(readFileSync(new URL('./package.json', import.meta.url), 'utf8'))
+    const list = pkg?.dshMultiver?.verifiedDshVersions
+    return Array.isArray(list) ? list.filter((v) => typeof v === 'string' && v) : []
+  } catch {
+    return []
+  }
+})()
 
 export const inject = ['connection', 'webServer']
 
@@ -100,6 +140,8 @@ export function apply(ctx, config) {
           else if (endpoint === 'setDefault') result = await handleSetDefault(cfg, payload)
           else if (endpoint === 'probe') result = await handleProbe(cfg)
           else if (endpoint === 'open') result = await handleOpen(cfg, payload)
+          else if (endpoint === 'provision') result = await handleProvision(cfg, payload)
+          else if (endpoint === 'update') result = await handleUpdate(cfg, payload)
           else result = fail('unknown-endpoint', endpoint)
         } catch (e) {
           result = fail('internal', String(e?.message ?? e))
@@ -120,8 +162,22 @@ export function apply(ctx, config) {
 
   async function handleState(cfg) {
     const exeInfo = resolveExe(cfg.exe)
-    if (!exeInfo.path) {
-      return fail('exe-not-found', 'dsh-multiver.exe not found', { tried: exeInfo.tried })
+
+    // 部署态探测（阶段 2）：exe 缺失或 root 未设置时，返回 provisioned=false +
+    // 向导所需信息，而不是直接报错——否则 Client 无法进入部署引导。
+    // 真相源是 multiver 自身的 config.json，插件不另存。
+    const provision = probeProvision(exeInfo)
+    if (!provision.provisioned) {
+      return {
+        ok: true,
+        value: {
+          provisioned: false,
+          provision,
+          mode: process.env.DSH_MULTIVER_MODE ?? null,
+          compatibility: compatOf(detectRunningVersion().version),
+          fetchedAt: new Date().toISOString(),
+        },
+      }
     }
 
     const list = await runJson(exeInfo.path, ['list', '--json'], cfg.commandTimeoutMs)
@@ -152,6 +208,8 @@ export function apply(ctx, config) {
     return {
       ok: true,
       value: {
+        provisioned: true,
+        provision,
         exe: exeInfo.path,
         detectedBy: exeInfo.detectedBy,
         mode: process.env.DSH_MULTIVER_MODE ?? null,
@@ -163,6 +221,11 @@ export function apply(ctx, config) {
         confidence: running.confidence,
         consistency,
         pendingRestart,
+        // 兼容性提示（不阻断功能）：包内声明的已验证 dsh 版本 vs 当前运行版本。
+        // 未知运行版本时 verified 为 null，UI 不显示提示。
+        compatibility: compatOf(running.version),
+        // 已暂存待安装的更新（multiver 下次启动时由 Rust 侧完成替换）
+        pendingUpdate: readPendingUpdate(exeInfo.path),
         versions: versions.map((v) => ({
           version: v.version,
           path: v.path,
@@ -364,6 +427,482 @@ export function apply(ctx, config) {
   }
 
   // ---------- exe 探测（§5.6 顺序）----------
+
+  // ---------- multiver 更新管理（阶段 3）----------
+
+  /// 更新管理统一入口。委托 multiver 自带 updater，插件不重复实现替换逻辑。
+  ///   step=check   只查（等价 update --dry-run --json），不下载
+  ///   step=stage   暂存：下载到 <root>/.update/，校验后写 pending.json，
+  ///                由 multiver 下次启动时安装（不打断任何会话）
+  ///   step=apply   立即更新（等价 update --json）：下载 + 校验 + 替换 + 重启
+  ///
+  /// embedded 模式下 apply 自动降级为 stage——内嵌窗口的 multiver 正在运行，
+  /// 替换它的 exe 会打断当前会话，且 Windows 上无法覆盖运行中的文件。
+  async function handleUpdate(cfg, payload) {
+    const step = payload?.step
+    if (step !== 'check' && step !== 'stage' && step !== 'apply') {
+      return fail('invalid-step', 'step must be check, stage or apply')
+    }
+    const exeInfo = resolveExe(cfg.exe)
+    if (!exeInfo.path) {
+      return fail('exe-not-found', 'dsh-multiver.exe not found', { tried: exeInfo.tried })
+    }
+
+    const mode = process.env.DSH_MULTIVER_MODE ?? null
+    const running = detectRunningVersion()
+
+    if (step === 'check') {
+      const args = ['update', '--dry-run', '--json']
+      const r = await runJson(exeInfo.path, args, cfg.commandTimeoutMs + 30000)
+      if (!r.ok) return r
+      const v = r.value || {}
+      return {
+        ok: true,
+        value: {
+          current: v.current ?? null,
+          latest: v.latest ?? null,
+          hasUpdate: !!v.has_update,
+          downloadUrl: v.download_url ?? null,
+          releaseUrl: RELEASE_REPO ? `https://github.com/${RELEASE_REPO}/releases` : null,
+          error: v.error ?? null,
+          // 运行中实例：embedded 模式下替换 exe 会打断当前会话，
+          // 故 apply 会自动降级为 stage（暂存，下次启动安装）
+          runningInMultiver: mode === 'embedded',
+          mode,
+          runningVersion: running.version,
+          // 已暂存待安装的更新（下次 multiver 启动时生效）
+          pendingUpdate: readPendingUpdate(exeInfo.path),
+        },
+      }
+    }
+
+    // embedded 模式下不能立即替换，降级为暂存
+    if (step === 'apply' && mode === 'embedded') {
+      const staged = await stageUpdate(cfg, exeInfo)
+      if (!staged.ok) return staged
+      return {
+        ok: true,
+        value: {
+          ...staged.value,
+          deferred: true,
+          message: staged.value.staged
+            ? `已暂存 ${staged.value.version}，multiver 下次启动时自动安装`
+            : '已是最新版本',
+        },
+      }
+    }
+
+    if (step === 'stage') {
+      return await stageUpdate(cfg, exeInfo)
+    }
+
+    // step === 'apply'（非 embedded）
+
+    const r = await runJson(exeInfo.path, ['update', '--json'], 600000)
+    if (!r.ok) return r
+
+    const v = r.value || {}
+    // CLI 在「已是最新」时同样 exit 0，返回 {has_update:false}。
+    // 若 update 成功触发替换，CLI 输出的是 ok/message 结构（无 has_update 字段）。
+    if (Object.prototype.hasOwnProperty.call(v, 'has_update') && v.has_update === false) {
+      return {
+        ok: true,
+        value: {
+          handedOff: false,
+          upToDate: true,
+          current: v.current ?? null,
+          latest: v.latest ?? null,
+        },
+      }
+    }
+    return {
+      ok: true,
+      value: {
+        handedOff: true,
+        upToDate: false,
+        message: v.message ?? '更新已就绪，管理器将退出以完成替换',
+      },
+    }
+  }
+
+  // ---------- 暂存更新（staged update）----------
+
+  /// 读取已暂存的更新标记（<root>/.update/pending.json）。
+  /// 返回 {version, stagedAt} 或 null。失败静默——这只是展示信息。
+  function readPendingUpdate(exePath) {
+    try {
+      const p = join(dirname(exePath), '.update', 'pending.json')
+      if (!existsSync(p)) return null
+      const j = JSON.parse(readFileSync(p, 'utf8'))
+      if (!j || typeof j.version !== 'string') return null
+      return { version: j.version, stagedAt: j.staged_at ?? null }
+    } catch {
+      return null
+    }
+  }
+
+  /// 暂存更新：查最新版 → 下载 → 校验 → 写到 <exe 同目录>/.update/ → 写 pending.json。
+  /// multiver 下次启动时由 Rust 侧 staged 模块完成替换（见 src-tauri/src/staged.rs）。
+  async function stageUpdate(cfg, exeInfo) {
+    const check = await runJson(exeInfo.path, ['update', '--dry-run', '--json'], cfg.commandTimeoutMs + 30000)
+    if (!check.ok) return check
+    const v = check.value || {}
+    if (!v.has_update) {
+      return { ok: true, value: { staged: false, current: v.current ?? null, latest: v.latest ?? null } }
+    }
+    if (!v.download_url) {
+      return fail('download-url-missing', 'Release 资产缺失，无法下载新版本')
+    }
+
+    const root = dirname(exeInfo.path)
+    const stageDir = join(root, '.update')
+    const stagedExe = join(stageDir, 'dsh-multiver.exe.new')
+    const tmpExe = join(stageDir, '.download.tmp')
+
+    try {
+      mkdirSync(stageDir, { recursive: true })
+    } catch (e) {
+      return fail('dir-create-failed', String(e?.message ?? e))
+    }
+
+    const dl = await downloadFile(v.download_url, tmpExe)
+    if (!dl.ok) {
+      cleanup([tmpExe])
+      return dl
+    }
+
+    // 校验：优先用 CLI 给的 sha256，缺失则只做大小检查
+    const expected = (v.sha256 || '').toLowerCase()
+    if (expected) {
+      const actual = sha256File(tmpExe)
+      if (actual !== expected) {
+        cleanup([tmpExe])
+        return fail('checksum-mismatch', 'SHA256 校验失败', { expected, actual })
+      }
+    }
+
+    try {
+      renameSync(tmpExe, stagedExe)
+    } catch (e) {
+      cleanup([tmpExe])
+      return fail('rename-failed', String(e?.message ?? e))
+    }
+
+    const pending = {
+      version: String(v.latest ?? ''),
+      sha256: expected,
+      staged_at: Math.floor(Date.now() / 1000),
+      size: statSync(stagedExe).size,
+    }
+    try {
+      writeFileSync(join(stageDir, 'pending.json'), JSON.stringify(pending, null, 2))
+    } catch (e) {
+      cleanup([stagedExe])
+      return fail('write-failed', String(e?.message ?? e))
+    }
+
+    return {
+      ok: true,
+      value: {
+        staged: true,
+        version: pending.version,
+        size: pending.size,
+        verified: !!expected,
+        stageDir,
+      },
+    }
+  }
+
+  // ---------- 部署引导（阶段 2）----------
+
+  /// 统一入口：按 payload.step 分发。
+  ///   step=prepare  选目录 + 可选下载/校验（返回后续步骤所需信息，不落盘业务状态）
+  ///   step=download 下载 exe + 校验 SHA256 + 落到工作目录
+  ///   step=adopt    采用已有 exe 路径
+  ///   step=setRoot  调用 multiver CLI set-root
+  ///   step=launch   启动 multiver 主界面
+  async function handleProvision(cfg, payload) {
+    const step = payload?.step
+    if (step === 'download') return provisionDownload(payload)
+    if (step === 'adopt') return provisionAdopt(payload)
+    if (step === 'setRoot') return provisionSetRoot(cfg, payload)
+    if (step === 'launch') return provisionLaunch(cfg)
+    return fail('invalid-step', 'step must be one of: download, adopt, setRoot, launch')
+  }
+
+  /// 校验工作目录：必须是绝对路径，且父目录可创建。
+  function validateWorkdir(dir) {
+    if (typeof dir !== 'string' || !dir.trim()) {
+      return fail('invalid-dir', '工作目录不能为空')
+    }
+    const d = dir.trim()
+    // 绝对路径：Windows 盘符或 Unix 前导 /
+    const isAbs = /^[A-Za-z]:[\\/]/.test(d) || d.startsWith('/') || d.startsWith('\\\\')
+    if (!isAbs) {
+      return fail('invalid-dir', '请提供绝对路径')
+    }
+    if (d.split(/[\\/]/).includes('..')) {
+      return fail('invalid-dir', '路径不能包含 ..')
+    }
+    return null
+  }
+
+  /// 下载 exe 与 SHA256SUMS.txt，校验后落到 <workdir>/dsh-multiver.exe。
+  /// 失败时清理临时文件，不留半成品。
+  async function provisionDownload(payload) {
+    const bad = validateWorkdir(payload?.workdir)
+    if (bad) return bad
+    const workdir = payload.workdir.trim()
+    const tag = payload?.tag ? String(payload.tag) : null
+
+    try {
+      mkdirSync(workdir, { recursive: true })
+    } catch (e) {
+      return fail('dir-create-failed', String(e?.message ?? e))
+    }
+    // 可写性探测
+    const probe = join(workdir, '.multiver-bridge-write-test')
+    try {
+      writeFileSync(probe, 'ok')
+      unlinkSync(probe)
+    } catch (e) {
+      return fail('dir-readonly', String(e?.message ?? e))
+    }
+
+    // 磁盘空间检查：exe 约 10 MB，留 100 MB 余量避免写满。
+    // statfs 在部分平台不可用 → 拿不到就跳过检查（不阻断）。
+    const need = MIN_FREE_BYTES
+    try {
+      const st = statfsSync(workdir)
+      const freeBytes = Number(st.bavail) * Number(st.bsize)
+      if (Number.isFinite(freeBytes) && freeBytes < need) {
+        return fail('disk-full', `磁盘剩余空间不足：需要至少 ${Math.round(need / 1048576)} MB，当前 ${Math.round(freeBytes / 1048576)} MB`, {
+          needBytes: need,
+          freeBytes,
+        })
+      }
+    } catch {
+      // 平台不支持 statfs / 路径不可读 → 跳过，交给后续写入失败兜底
+    }
+
+    const base = tag
+      ? `https://github.com/${RELEASE_REPO}/releases/download/${tag}`
+      : `https://github.com/${RELEASE_REPO}/releases/latest/download`
+
+    const tmpExe = join(workdir, '.dsh-multiver.exe.download')
+    const tmpSum = join(workdir, '.SHA256SUMS.download')
+
+    try {
+      const dlExe = await downloadFile(`${base}/${EXE_ASSET}`, tmpExe)
+      if (!dlExe.ok) return dlExe
+
+      // SHA256SUMS.txt 可能不存在（旧 Release）；存在则强制校验，不存在只警告
+      const dlSum = await downloadFile(`${base}/${SUMS_ASSET}`, tmpSum)
+      let checksum = null
+      if (dlSum.ok) {
+        const text = readFileSync(tmpSum, 'utf8')
+        const line = text.split(/\r?\n/).find((l) => l.trim().endsWith(EXE_ASSET))
+        if (!line) {
+          cleanup([tmpExe, tmpSum])
+          return fail('checksum-missing', `${SUMS_ASSET} 中未找到 ${EXE_ASSET}`)
+        }
+        checksum = line.trim().split(/\s+/)[0].toLowerCase()
+        const actual = sha256File(tmpExe)
+        if (actual !== checksum) {
+          cleanup([tmpExe, tmpSum])
+          return fail('checksum-mismatch', 'SHA256 校验失败', { expected: checksum, actual })
+        }
+      }
+
+      const finalExe = join(workdir, EXE_NAME)
+      try {
+        renameSync(tmpExe, finalExe)
+      } catch (e) {
+        // Windows 上目标若被占用会失败
+        cleanup([tmpExe, tmpSum])
+        return fail('rename-failed', String(e?.message ?? e))
+      }
+      cleanup([tmpSum])
+
+      return {
+        ok: true,
+        value: {
+          exe: finalExe,
+          verified: !!checksum,
+          checksum: checksum,
+          size: statSync(finalExe).size,
+          workdir,
+          tag,
+        },
+      }
+    } catch (e) {
+      cleanup([tmpExe, tmpSum])
+      return fail('download-failed', String(e?.message ?? e))
+    }
+  }
+
+  /// 采用用户已有的 exe：校验存在且可执行，不复制。
+  function provisionAdopt(payload) {
+    const p = payload?.exe
+    if (typeof p !== 'string' || !p.trim()) {
+      return fail('invalid-exe', 'exe 路径不能为空')
+    }
+    const exe = p.trim()
+    if (!existsSync(exe)) {
+      return fail('exe-missing', `文件不存在：${exe}`)
+    }
+    try {
+      const st = statSync(exe)
+      if (!st.isFile()) return fail('exe-missing', '不是文件')
+    } catch (e) {
+      return fail('exe-missing', String(e?.message ?? e))
+    }
+    return { ok: true, value: { exe, adopted: true } }
+  }
+
+  /// 调用 multiver CLI set-root（唯一写配置的通道，插件不直接改 config.json）。
+  async function provisionSetRoot(cfg, payload) {
+    const bad = validateWorkdir(payload?.workdir)
+    if (bad) return bad
+    const exe = payload?.exe
+    if (typeof exe !== 'string' || !exe.trim() || !existsSync(exe.trim())) {
+      return fail('exe-missing', '请先获取 dsh-multiver.exe')
+    }
+    const r = await runJson(exe.trim(), ['set-root', payload.workdir.trim(), '--json'], cfg.commandTimeoutMs)
+    if (!r.ok) return r
+    return {
+      ok: true,
+      value: {
+        root: r.value?.root ?? payload.workdir.trim(),
+        previous: r.value?.previous ?? null,
+      },
+    }
+  }
+
+  /// 启动 multiver 主界面（部署完成后引导用户进入）。
+  async function provisionLaunch(cfg) {
+    const exeInfo = resolveExe(cfg.exe)
+    if (!exeInfo.path) return fail('exe-not-found', 'dsh-multiver.exe not found')
+    return launchMultiver(exeInfo.path)
+  }
+
+  function cleanup(paths) {
+    for (const p of paths) {
+      try { if (existsSync(p)) unlinkSync(p) } catch {}
+    }
+  }
+
+  function sha256File(p) {
+    return createHash('sha256').update(readFileSync(p)).digest('hex')
+  }
+
+  /// HTTPS GET → 临时文件。仅允许 https，跟随重定向，有超时。
+  function downloadFile(url, dest) {
+    return new Promise((resolve) => {
+      let u
+      try { u = new URL(url) } catch { return resolve(fail('bad-url', url)) }
+      if (u.protocol !== 'https:') {
+        return resolve(fail('insecure-url', '仅允许 https'))
+      }
+      const req = https.get(url, { timeout: DOWNLOAD_TIMEOUT_MS }, (res) => {
+        if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+          res.resume()
+          return resolve(downloadFile(res.headers.location, dest))
+        }
+        if (res.statusCode !== 200) {
+          res.resume()
+          return resolve(fail('http-error', `HTTP ${res.statusCode}`, { url }))
+        }
+        const ws = createWriteStream(dest)
+        res.pipe(ws)
+        ws.on('finish', () => ws.close(() => resolve({ ok: true, value: { bytes: statSync(dest).size } })))
+        ws.on('error', (e) => {
+          cleanup([dest])
+          resolve(fail('write-failed', String(e?.message ?? e)))
+        })
+      })
+      req.on('timeout', () => {
+        req.destroy()
+        cleanup([dest])
+        resolve(fail('timeout', `下载超时（${DOWNLOAD_TIMEOUT_MS}ms）`))
+      })
+      req.on('error', (e) => {
+        cleanup([dest])
+        resolve(fail('network', String(e?.message ?? e)))
+      })
+    })
+  }
+
+  // ---------- 部署态探测（阶段 2）----------
+
+  /// 读 multiver 自身的 config.json，判断「exe 可用 + root_dir 已设置 + 目录可写」。
+  /// 插件不另存部署状态，避免与 multiver 配置分叉。
+  function probeProvision(exeInfo) {
+    const out = {
+      provisioned: false,
+      exe: exeInfo.path,
+      detectedBy: exeInfo.detectedBy,
+      root: null,
+      rootSource: null,
+      exeWritable: false,
+      defaultWorkdir: DEFAULT_WORKDIR,
+      releaseRepo: RELEASE_REPO,
+      platform: process.platform,
+      reasons: [],
+    }
+    if (!exeInfo.path) {
+      out.reasons.push('exe-missing')
+      return out
+    }
+    // root_dir 从 exe 同目录的 config.json 读（multiver 便携版把配置放在 exe 旁）
+    const cfgPath = join(dirname(exeInfo.path), 'config.json')
+    if (!existsSync(cfgPath)) {
+      out.reasons.push('config-missing')
+      return out
+    }
+    let root = null
+    try {
+      const raw = JSON.parse(readFileSync(cfgPath, 'utf8'))
+      const v = raw?.root_dir
+      if (typeof v === 'string' && v.trim()) root = v.trim()
+    } catch {
+      out.reasons.push('config-invalid')
+      return out
+    }
+    if (!root) {
+      // root_dir 为 null 是合法状态：multiver 的 resolve_root 会回退到 exe 所在目录。
+      // 只有在 config.json 完全缺失时才算「未配置数据根」。
+      root = dirname(exeInfo.path)
+    }
+    out.root = root
+    out.rootSource = 'config'
+    if (!existsSync(root)) {
+      out.reasons.push('root-missing')
+      return out
+    }
+    // 可写性：写一个探针文件再删掉
+    const probe = join(root, '.multiver-bridge-write-test')
+    try {
+      writeFileSync(probe, 'ok')
+      unlinkSync(probe)
+      out.rootWritable = true
+    } catch {
+      out.rootWritable = false
+      out.reasons.push('root-readonly')
+      return out
+    }
+    out.rootWritable = true
+    out.provisioned = true
+    return out
+  }
+
+  function compatOf(runningVersion) {
+    return {
+      runningVersion: runningVersion ?? null,
+      verifiedVersions: VERIFIED_DSH_VERSIONS,
+      verified: runningVersion == null ? null : VERIFIED_DSH_VERSIONS.includes(runningVersion),
+    }
+  }
 
   function resolveExe(configured) {
     const tried = []

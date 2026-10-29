@@ -352,7 +352,7 @@ export default {
     "dsplugins.initPlaceholder": "profile 名稱，如 web",
     "dsplugins.initializing": "初始化中…",
     "dsplugins.initDone": "已初始化 {p}",
-    "dsplugins.searchPlaceholder": "搜尋外掛…",
+    "dsplugins.searchPlaceholder": "篩選已安裝的外掛…",
     "dsplugins.noMatch": "沒有符合的外掛。",
     "dsplugins.showLog": "顯示輸出",
     "dsplugins.hideLog": "隱藏輸出",

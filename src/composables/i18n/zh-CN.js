@@ -352,7 +352,7 @@ export default {
     "dsplugins.initPlaceholder": "profile 名，如 web",
     "dsplugins.initializing": "初始化中…",
     "dsplugins.initDone": "已初始化 {p}",
-    "dsplugins.searchPlaceholder": "搜索插件…",
+    "dsplugins.searchPlaceholder": "筛选已安装的插件…",
     "dsplugins.noMatch": "没有匹配的插件。",
     "dsplugins.showLog": "显示输出",
     "dsplugins.hideLog": "隐藏输出",

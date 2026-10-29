@@ -117,6 +117,21 @@ jobs:
       - name: List artifacts
         run: find artifacts -type f
 
+      # 生成 SHA256SUMS.txt：插件部署引导用它校验下载的 exe
+      - name: Generate SHA256SUMS
+        working-directory: artifacts
+        run: |
+          set -euo pipefail
+          {
+            if [ -f dsh-multiver-windows/dsh-multiver.exe ]; then
+              (cd dsh-multiver-windows && sha256sum dsh-multiver.exe)
+            fi
+            while IFS= read -r -d '' f; do
+              (cd "$(dirname "$f")" && sha256sum "$(basename "$f")")
+            done < <(find dsh-multiver-linux -type f \( -name '*.AppImage' -o -name '*.deb' \) -print0)
+          } > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
@@ -126,6 +141,7 @@ jobs:
             artifacts/dsh-multiver-windows/dsh-multiver.exe
             artifacts/dsh-multiver-linux/**/*.AppImage
             artifacts/dsh-multiver-linux/**/*.deb
+            artifacts/SHA256SUMS.txt
           body_path: RELEASE_NOTES.md
           draft: false
         env:
