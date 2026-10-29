@@ -48,7 +48,7 @@
 
 > **破坏性变更**：CLI 从 `--flag` 风格改为子命令风格。旧语法已移除，迁移见 [CLI 迁移指南](docs/CLI迁移指南-v0.3.0.md)。
 >
-> **验收范围**：Windows 侧已完成本机验收（自动 9 项 + 手动 5 项；验收记录已归档，不随仓库发布）；Linux 侧已实现但未做完整验收，相关项后置到 v0.3.x（见 [开发缺口 · Linux 适配后置](docs/开发缺口.md#linux-适配后置v03x)）。
+> **验收范围**：Windows 侧已完成本机验收；Linux 侧已实现但未做完整验收，相关项后置到 v0.3.x（见 [开发缺口 · Linux 适配后置](docs/开发缺口.md#linux-适配后置v03x)）。
 
 ### 破坏性变更
 - **CLI 子命令风格**：`--list` → `list`，`--install X` → `install X` 等（全部 21 个命令）。
@@ -108,20 +108,20 @@
   - 失败诊断本地化：识别官方 CLI 的 `allow-version` / `pnpm was not found` / `diagnostics: <logPath>`。
   - 卸载二次确认、内置 bundle 禁卸、包名校验（防 pnpm 选项/特殊字符透传）。
   - 进度输出面板 + 300s 超时（**取消按官方边界挂起**，见 `docs/插件面板-取消设计.md`）。
-- **官方信息查询与桥接（B1-11/B1-12）**：
+- **官方信息查询与桥接**：
   - profile 信息：运行时版本、版本豁免（`compatibility.json`）、待决定构建脚本、诊断日志目录。
   - 版本豁免可查看/撤销（官方 CLI `revoke-version`）。
   - 待决定构建脚本一键「允许并重试」（写 `pnpm-workspace.yaml` 的 `allowBuilds: true`）。
   - 打开 `.plugin-manager/logs` 诊断日志目录。
   - 新增命令 `ds_profile_info` / `ds_exemption_action` / `ds_approve_builds` / `ds_open_plugin_logs`。
-- **安装交互对齐官方（B1-15）**：
+- **安装交互对齐官方**：
   - 「添加插件」弹窗：包名 / GitHub 地址 / 本地目录三类 spec、可折叠安装引导（含「填入示例」）、安装源选择（默认 pnpm / npm 官方 / 中国大陆镜像 / 自定义 URL）、信任提示。
   - 多阶段状态：表单 → 确认安装（显示 spec 与来源）→ 安装中（实时输出）→ 完成（显示已装版本 + 「安装成功不保证激活」提示）/ 失败（重试 / 更换安装源）；记住上次安装源（localStorage）。
   - 后端改为 `node bin.js` 直接执行 dsh CLI（避免 `cmd /C` 二次转义，安全支持 URL/路径 spec）；安装源 URL 校验对齐官方（http(s)、无 userinfo、无 `#`）。
-- **更新检测与豁免允许（B1-13/B1-14）**：
+- **更新检测与豁免允许**：
   - 「检查更新」：`dsh plugin --profile <p> outdated --json`，显示「有新版本」，更新按官方语义先卸载再安装。
   - 版本豁免支持「允许此版本」（官方 `allow-version --accept-risk`，带风险确认）。
-- **安装前检查与安装源探测（B1-16/B1-17/B1-18）**：
+- **安装前检查与安装源探测**：
   - 安装前 `inspect`：npm 包经官方 CLI `pnpm view` 读取名称/版本/描述/`dsh.bundle`；本地目录读 package.json；git 只显示主机。非组合包按官方语义拒绝。
   - 首次使用（未记住安装源）时并发探测 npm 官方源与镜像，选最快（1.5s 超时，缓存 5 分钟）。
   - 安装失败弹窗内可直接「允许 pnpm 拦截的构建脚本并重试」（对齐官方失败界面）。
@@ -146,7 +146,7 @@
   - Node 下限口径统一为 `22.19+ / 24.2+`（24.0/24.1 缺 `import.meta.main`）。
   - L-11：文档声明支持多开（共享数据根注意事项）。
 
-### 新增（双向桥 B2–B4，dsh 插件）
+### 新增（dsh 插件）
 - **新包 `dsh-plugin/`（`dsh-multiver-bridge`）**：在 dsh 设置页提供「版本管理」，Host 半走 `ctx.webServer.register` 路由 + `ctx.connection.requestRejection` 鉴权，Client 半在 `settings.section` 渲染。
   - 状态条：默认版本 / 运行版本（含 `high` / `low` / `conflict` / `unknown` 置信度徽标）/ 待重启提示 / 一致性校对详情。
   - 版本表：与 `dsh-multiver list --json` 逐字段一致；「设为默认」带内联确认条。
@@ -162,8 +162,7 @@
 
 ### 文档
 - 新增 [CLI 迁移指南](docs/CLI迁移指南-v0.3.0.md)（旧→新对照 + 脚本迁移示例）。
-- 新增 dsh 双向桥交接文档（已归档，不随仓库发布；B2-B4 交 dsh）。
-- 使用手册、README、CUCKOO.md 同步更新。
+- 使用手册与 README 同步更新。
 
 ### 新增
 - **启动加载页**：快捷方式启动 / 运行按钮时立即显示加载页。

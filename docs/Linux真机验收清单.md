@@ -139,7 +139,7 @@ WEBKIT_DISABLE_COMPOSITING_MODE=1 ./dsh-multiver_*.AppImage
 
 ## 附 D：WSL 实测结论（2026-10-22）
 
-完整记录见验收记录（已归档，不随仓库发布）（WSL2 + WSLg，**非真机**，仅供预检参考）。
+实测环境：WSL2 + WSLg（**非真机**，仅供预检参考）。
 
 - 12 项通过（L-01~L-05、L-07、L-15、L-23、L-25~L-28），GUI/桌面/代理项受 WSLg 限制未测。
 - 发现并已修复：
@@ -151,7 +151,7 @@ WEBKIT_DISABLE_COMPOSITING_MODE=1 ./dsh-multiver_*.AppImage
 
 ## 附 E：Ubuntu 容器实测与第二轮修复（2026-10-22）
 
-完整记录见验收记录（已归档，不随仓库发布）（Ubuntu 24.04 + Xvfb/Openbox + Sway headless，仍非真实桌面）。
+实测环境：Ubuntu 24.04 + Xvfb/Openbox + Sway headless（仍非真实桌面）。
 
 - 20 项通过/部分通过；不通过 **L-31**（镜像滞后）、**L-32**（离线误报 + ~71s）；7 项 N/A。
 - 已修复并回归通过（2026-10-22 第二轮，基线 `7f56df5`，见验收记录 §6）：L-32（8s HTTP ping，离线 ≤10s 明确失败）、L-29（错误可见）、L-09（字体提示）、L-31（换源重试）、Node 24.2 口径、L-11 多开文档；回归项 L-23（7 项）、setup-runtime、`--help`/`--version` 均通过。
@@ -165,6 +165,4 @@ WEBKIT_DISABLE_COMPOSITING_MODE=1 ./dsh-multiver_*.AppImage
 - [开发缺口](开发缺口.md) —— 已知问题（GAP-008 等）
 - [使用手册 · Linux 支持](使用手册.md#十三linux-支持)
 - [问题日志查看指南](问题日志查看指南.md)
-- 验收记录（已归档，不随仓库发布）—— 本次 WSL 实测原始记录
-- 验收记录（已归档，不随仓库发布）—— Ubuntu 容器 + Xvfb/Sway 实测原始记录
-- 验收记录（已归档，不随仓库发布）—— Ubuntu 24.04 容器 + Xvfb/Sway 补充实测（覆盖 L-06、L-08~L-22、L-29~L-37）
+
