@@ -18,7 +18,10 @@
 - **插件面板搜索框**：位置从顶部工具栏移到插件列表上方独立成行，加放大镜图标，文案改为「筛选已安装的插件…」，避免与「添加插件」按钮混淆。
 - **部署引导**：未配置数据根时，插件不再直接显示版本表，而是一个三步向导——选工作目录 → 获取 exe（自动下载 / 使用已有）→ `set-root` 并启动。`state` 新增 `provisioned` 字段（读 multiver 自身 `config.json` 探测，插件不另存状态）。新增 `provision` 端点：下载固定本仓库 latest Release、强制 SHA256 校验、失败清理临时文件不留半成品、仅允许 https、120s 超时。
 - **更新管理**：插件底部新增「multiver 更新」区块，可检查并更新 multiver 自身。全部委托 multiver 自带 updater（`update --dry-run --json` 查、`update --json` 执行），插件不重复实现替换逻辑。
-- **暂存更新（内嵌窗口也能更新）**：内嵌模式下 `apply` 自动降级为暂存——新 exe 下载到 `<数据根>/.update/` 并校验，写 `pending.json`；multiver **下次启动时**在 `run()` 早期完成替换并退出，用户重开即新版。替换永远发生在 multiver 未运行时，不打断任何会话。`state` 新增 `pendingUpdate` 字段，UI 显示「待安装：vX.Y.Z」。
+- **暂存更新（内嵌窗口也能更新）**：内嵌模式下 `apply` 自动降级为暂存——新 exe 下载到 `<数据根>/.update/` 并校验，写 `pending.json`；multiver **下次启动时**在 `run()` 早期完成替换（重命名旧 exe → 放入新的），用户重开即新版。替换不打断任何会话。`state` 新增 `pendingUpdate` 字段，UI 显示「待安装：vX.Y.Z」。
+  - **安全加固**：缺少 SHA256 时拒绝安装（不凭文件大小放行任意二进制）；当前 exe 缺失时中止并保留 `.old`；重命名或放入失败时保留暂存供下次重试；只在替换全部成功后才删标记。
+  - **路径一致性**：插件与 multiver 统一用 `resolve_root` 语义解析数据根——设过 `root_dir` 的用户，暂存与安装位置一致。
+  - 下载增加重定向次数上限与主机名白名单。
 - **部署下载前检查磁盘空间**：剩余空间不足 100 MB 时直接返回 `disk-full`，不开始下载。
 - **空版本态文案**：明确 multiver 只管理自己装在数据根 `versions/` 下的 dsh，npm / pnpm / Python wheel / 桌面版安装的 dsh 是独立的一份、不受影响。
 

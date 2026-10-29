@@ -29,6 +29,14 @@ import https from 'node:https'
 const MAX_BODY = 16 * 1024
 /// 部署下载前要求的最小可用空间（100 MB，exe 本身约 10 MB，留足余量）
 const MIN_FREE_BYTES = 100 * 1024 * 1024
+/// 下载重定向的最大跟随次数
+const MAX_REDIRECTS = 5
+/// 允许下载的主机名（GitHub 发布资产会 302 到 objects.githubusercontent.com）
+const ALLOWED_DOWNLOAD_HOSTS = new Set([
+  'github.com',
+  'objects.githubusercontent.com',
+  'github-releases.githubusercontent.com',
+])
 const CHANNEL = '/multiver-bridge'
 const VERSION_RE = /^[A-Za-z0-9][A-Za-z0-9._+-]*$/
 const OPEN_TARGETS = new Set(['version-dir', 'multiver-dir', 'launch-multiver'])
@@ -531,7 +539,10 @@ export function apply(ctx, config) {
   /// 返回 {version, stagedAt} 或 null。失败静默——这只是展示信息。
   function readPendingUpdate(exePath) {
     try {
-      const p = join(dirname(exePath), '.update', 'pending.json')
+      // 顺手清理下载中断留下的临时文件（这里正好是每次刷新的必经路径）
+      const r = resolveDataRoot(exePath)
+      cleanupDownloadTemp(r.root)
+      const p = join(r.root, '.update', 'pending.json')
       if (!existsSync(p)) return null
       const j = JSON.parse(readFileSync(p, 'utf8'))
       if (!j || typeof j.version !== 'string') return null
@@ -541,8 +552,9 @@ export function apply(ctx, config) {
     }
   }
 
-  /// 暂存更新：查最新版 → 下载 → 校验 → 写到 <exe 同目录>/.update/ → 写 pending.json。
+  /// 暂存更新：查最新版 → 下载 → 校验 → 写到 <数据根>/.update/ → 写 pending.json。
   /// multiver 下次启动时由 Rust 侧 staged 模块完成替换（见 src-tauri/src/staged.rs）。
+  /// 数据根用 resolveDataRoot 解析，保证与 multiver 的读取位置一致。
   async function stageUpdate(cfg, exeInfo) {
     const check = await runJson(exeInfo.path, ['update', '--dry-run', '--json'], cfg.commandTimeoutMs + 30000)
     if (!check.ok) return check
@@ -554,7 +566,8 @@ export function apply(ctx, config) {
       return fail('download-url-missing', 'Release 资产缺失，无法下载新版本')
     }
 
-    const root = dirname(exeInfo.path)
+    // 用与 multiver 一致的数据根解析——否则用户设过 root_dir 后暂存位置与安装位置不符
+    const root = resolveDataRoot(exeInfo.path).root
     const stageDir = join(root, '.update')
     const stagedExe = join(stageDir, 'dsh-multiver.exe.new')
     const tmpExe = join(stageDir, '.download.tmp')
@@ -563,6 +576,20 @@ export function apply(ctx, config) {
       mkdirSync(stageDir, { recursive: true })
     } catch (e) {
       return fail('dir-create-failed', String(e?.message ?? e))
+    }
+
+    // 磁盘空间检查：与部署下载保持一致（exe 约 10 MB，留 100 MB 余量）
+    try {
+      const st = statfsSync(stageDir)
+      const freeBytes = Number(st.bavail) * Number(st.bsize)
+      if (Number.isFinite(freeBytes) && freeBytes < MIN_FREE_BYTES) {
+        return fail('disk-full', `磁盘剩余空间不足：需要至少 ${Math.round(MIN_FREE_BYTES / 1048576)} MB，当前 ${Math.round(freeBytes / 1048576)} MB`, {
+          needBytes: MIN_FREE_BYTES,
+          freeBytes,
+        })
+      }
+    } catch {
+      // statfs 不可用 → 跳过，交给写入失败兜底
     }
 
     const dl = await downloadFile(v.download_url, tmpExe)
@@ -792,22 +819,42 @@ export function apply(ctx, config) {
     }
   }
 
+  /// 清理暂存目录里的下载临时文件。
+  /// 下载中途进程被杀会留下 .download.tmp，启动检查时顺手清掉。
+  function cleanupDownloadTemp(root) {
+    try {
+      const p = join(root, '.update', '.download.tmp')
+      if (existsSync(p)) unlinkSync(p)
+    } catch {}
+  }
+
   function sha256File(p) {
     return createHash('sha256').update(readFileSync(p)).digest('hex')
   }
 
   /// HTTPS GET → 临时文件。仅允许 https，跟随重定向，有超时。
-  function downloadFile(url, dest) {
+  function downloadFile(url, dest, redirectsLeft = MAX_REDIRECTS) {
     return new Promise((resolve) => {
       let u
       try { u = new URL(url) } catch { return resolve(fail('bad-url', url)) }
       if (u.protocol !== 'https:') {
         return resolve(fail('insecure-url', '仅允许 https'))
       }
+      // host 白名单：下载源只可能是 GitHub 的发布域名。
+      // 用户可控的 download_url 若被篡改成别的地址，这里直接拒绝。
+      if (!ALLOWED_DOWNLOAD_HOSTS.has(u.hostname.toLowerCase())) {
+        return resolve(fail('host-not-allowed', `不允许的下载域名：${u.hostname}`, { url }))
+      }
+      if (redirectsLeft <= 0) {
+        return resolve(fail('too-many-redirects', '重定向次数过多'))
+      }
       const req = https.get(url, { timeout: DOWNLOAD_TIMEOUT_MS }, (res) => {
         if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
           res.resume()
-          return resolve(downloadFile(res.headers.location, dest))
+          // 相对跳转需要基于当前 URL 解析
+          let next
+          try { next = new URL(res.headers.location, url).toString() } catch { next = res.headers.location }
+          return resolve(downloadFile(next, dest, redirectsLeft - 1))
         }
         if (res.statusCode !== 200) {
           res.resume()
@@ -837,6 +884,33 @@ export function apply(ctx, config) {
 
   /// 读 multiver 自身的 config.json，判断「exe 可用 + root_dir 已设置 + 目录可写」。
   /// 插件不另存部署状态，避免与 multiver 配置分叉。
+  /// 解析 multiver 的数据根，语义与 Rust 侧 `Config::resolve_root` 一致：
+  ///   config.json 的 root_dir 非空 → 用它；否则 → exe 所在目录。
+  ///
+  /// 返回 { root, source, configStatus }
+  ///   configStatus: 'ok' | 'missing' | 'invalid'
+  ///   source: 'config' | 'exe-dir'
+  ///
+  /// 为什么必须统一：插件写暂存文件、multiver 读暂存文件的路径必须一致，
+  /// 否则用户设过 root_dir 后更新会静默失效。
+  function resolveDataRoot(exePath) {
+    const exeDir = dirname(exePath)
+    const cfgPath = join(exeDir, 'config.json')
+    if (!existsSync(cfgPath)) {
+      return { root: exeDir, source: 'exe-dir', configStatus: 'missing' }
+    }
+    try {
+      const raw = JSON.parse(readFileSync(cfgPath, 'utf8'))
+      const v = raw?.root_dir
+      if (typeof v === 'string' && v.trim()) {
+        return { root: v.trim(), source: 'config', configStatus: 'ok' }
+      }
+      return { root: exeDir, source: 'exe-dir', configStatus: 'ok' }
+    } catch {
+      return { root: exeDir, source: 'exe-dir', configStatus: 'invalid' }
+    }
+  }
+
   function probeProvision(exeInfo) {
     const out = {
       provisioned: false,
@@ -854,28 +928,19 @@ export function apply(ctx, config) {
       out.reasons.push('exe-missing')
       return out
     }
-    // root_dir 从 exe 同目录的 config.json 读（multiver 便携版把配置放在 exe 旁）
-    const cfgPath = join(dirname(exeInfo.path), 'config.json')
-    if (!existsSync(cfgPath)) {
+    // 数据根解析：与 multiver 的 resolve_root 语义一致（见 resolveDataRoot）
+    const resolved = resolveDataRoot(exeInfo.path)
+    if (resolved.configStatus === 'missing') {
       out.reasons.push('config-missing')
       return out
     }
-    let root = null
-    try {
-      const raw = JSON.parse(readFileSync(cfgPath, 'utf8'))
-      const v = raw?.root_dir
-      if (typeof v === 'string' && v.trim()) root = v.trim()
-    } catch {
+    if (resolved.configStatus === 'invalid') {
       out.reasons.push('config-invalid')
       return out
     }
-    if (!root) {
-      // root_dir 为 null 是合法状态：multiver 的 resolve_root 会回退到 exe 所在目录。
-      // 只有在 config.json 完全缺失时才算「未配置数据根」。
-      root = dirname(exeInfo.path)
-    }
+    const root = resolved.root
     out.root = root
-    out.rootSource = 'config'
+    out.rootSource = resolved.source
     if (!existsSync(root)) {
       out.reasons.push('root-missing')
       return out
