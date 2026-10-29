@@ -1,7 +1,0 @@
-$ tauri "build" "--no-bundle"
-        Info Looking up installed tauri packages to check mismatched versions...
-     Running beforeBuildCommand `pnpm build`
-$ vite build
-   Compiling dsh-multiver v0.3.1 (E:\.Vibe_Coding\deepseek-Desktop\dsh-multiver\src-tauri)
-    Finished `release` profile [optimized] target(s) in 3m 39s
-       Built application at: E:\.Vibe_Coding\deepseek-Desktop\dsh-multiver\src-tauri\target\release\dsh-multiver.exe

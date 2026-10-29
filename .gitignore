@@ -53,3 +53,7 @@ dsh-plugin/*.tgz
 
 # 打包产物：exe 复制到仓库根供实机测试，不进仓库
 /dsh-multiver.exe
+
+# 构建日志（后台构建时重定向输出用）
+.build-*.log
+.build-*.log.err
