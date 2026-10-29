@@ -253,12 +253,23 @@ window.__ModuleLoader__.load({
 
       React.useEffect(() => { check() }, [check])
 
+      // 内嵌模式下 apply 会被 Host 自动降级为 stage（暂存，下次启动安装）。
+      // 两种结果都要能正确展示。
       const apply = React.useCallback(async () => {
         setConfirming(false); setBusy(true); setErr(null); setMsg(null)
         try {
           const r = await rpc('update', { step: 'apply' })
           if (r.ok) {
-            setMsg(r.value.upToDate ? t('update.upToDate') : (r.value.message || t('update.handedOff')))
+            const v = r.value || {}
+            if (v.deferred) {
+              // 内嵌模式：已暂存
+              setMsg(v.message || t('update.staged'))
+              setInfo((s) => s ? { ...s, hasUpdate: false, pendingUpdate: { version: v.version } } : s)
+            } else if (v.upToDate) {
+              setMsg(t('update.upToDate'))
+            } else {
+              setMsg(v.message || t('update.handedOff'))
+            }
             setInfo((s) => s ? { ...s, hasUpdate: false } : s)
           } else {
             setErr(r.error)
@@ -317,10 +328,14 @@ window.__ModuleLoader__.load({
               )
             : h('button', { style: btn(true), disabled: busy, onClick: () => setConfirming(true) }, t('update.doUpdate'))
         ),
-        // 内嵌窗口下替换 exe 会打断当前会话，提前说明
+        // 内嵌窗口下点更新走「暂存」，multiver 下次启动时自动安装，不打断当前会话
         info && info.hasUpdate && info.runningInMultiver && h('div', {
           style: { marginTop: 6, fontSize: 11.5, opacity: .7, lineHeight: '18px' },
         }, t('update.embeddedHint')),
+        // 已暂存待安装的更新
+        info && info.pendingUpdate && h('div', {
+          style: { marginTop: 8, padding: '6px 10px', borderRadius: 6, background: 'rgba(36,123,191,.10)', fontSize: 12 },
+        }, t('update.pendingInstall', { v: info.pendingUpdate.version })),
         msg && h('div', { style: { marginTop: 6, fontSize: 12, color: '#2a9d3f' } }, msg),
         err && h('div', {
           style: { marginTop: 6, padding: '6px 10px', borderRadius: 6, background: 'rgba(220,50,50,.12)', fontSize: 12 },
@@ -765,6 +780,10 @@ window.__ModuleLoader__.load({
             'update.handedOff': '更新已就绪，管理器将退出以完成替换',
             'update.embeddedHint': '当前在内嵌窗口中。更新会中断本会话——建议在 multiver 主界面完成更新，或关闭该窗口后重试。',
             'err.embedded-blocked': '内嵌窗口下不能执行更新',
+            'update.staged': '已暂存，multiver 下次启动时自动安装',
+            'update.pendingInstall': '待安装：v{v}（multiver 下次启动时生效）',
+            'err.download-url-missing': 'Release 资产缺失，无法下载新版本',
+            'err.disk-full': '磁盘剩余空间不足',
           },
           en: {
             section: 'Versions',
@@ -876,6 +895,10 @@ window.__ModuleLoader__.load({
             'update.handedOff': 'Update ready — the manager will exit to finish replacing itself',
             'update.embeddedHint': 'Running inside the embedded window. Updating interrupts this session — do it from the multiver main window, or close this window first.',
             'err.embedded-blocked': 'Update is not allowed from the embedded window',
+            'update.staged': 'Staged — installs automatically on next multiver launch',
+            'update.pendingInstall': 'Pending install: v{v} (applies on next multiver launch)',
+            'err.download-url-missing': 'Release asset missing, cannot download',
+            'err.disk-full': 'Not enough free disk space',
           },
         }), 'multiver-bridge: dictionaries')
 

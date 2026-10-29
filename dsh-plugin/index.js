@@ -20,12 +20,15 @@ import { execFile, spawn } from 'node:child_process'
 import {
   existsSync, realpathSync, readFileSync, writeFileSync,
   mkdirSync, createWriteStream, unlinkSync, renameSync, statSync,
+  statfsSync,
 } from 'node:fs'
 import { join, dirname, delimiter, sep } from 'node:path'
 import { createHash } from 'node:crypto'
 import https from 'node:https'
 
 const MAX_BODY = 16 * 1024
+/// 部署下载前要求的最小可用空间（100 MB，exe 本身约 10 MB，留足余量）
+const MIN_FREE_BYTES = 100 * 1024 * 1024
 const CHANNEL = '/multiver-bridge'
 const VERSION_RE = /^[A-Za-z0-9][A-Za-z0-9._+-]*$/
 const OPEN_TARGETS = new Set(['version-dir', 'multiver-dir', 'launch-multiver'])
@@ -221,6 +224,8 @@ export function apply(ctx, config) {
         // 兼容性提示（不阻断功能）：包内声明的已验证 dsh 版本 vs 当前运行版本。
         // 未知运行版本时 verified 为 null，UI 不显示提示。
         compatibility: compatOf(running.version),
+        // 已暂存待安装的更新（multiver 下次启动时由 Rust 侧完成替换）
+        pendingUpdate: readPendingUpdate(exeInfo.path),
         versions: versions.map((v) => ({
           version: v.version,
           path: v.path,
@@ -427,13 +432,16 @@ export function apply(ctx, config) {
 
   /// 更新管理统一入口。委托 multiver 自带 updater，插件不重复实现替换逻辑。
   ///   step=check   只查（等价 update --dry-run --json），不下载
-  ///   step=apply   真正更新（等价 update --json）：下载 + 校验 + 替换 + 重启
-  /// 运行中实例检测：mode=embedded 时插件跑在 multiver 拉起的窗口里，
-  /// 替换 exe 会让当前进程崩溃，故 apply 前要求用户在独立环境操作。
+  ///   step=stage   暂存：下载到 <root>/.update/，校验后写 pending.json，
+  ///                由 multiver 下次启动时安装（不打断任何会话）
+  ///   step=apply   立即更新（等价 update --json）：下载 + 校验 + 替换 + 重启
+  ///
+  /// embedded 模式下 apply 自动降级为 stage——内嵌窗口的 multiver 正在运行，
+  /// 替换它的 exe 会打断当前会话，且 Windows 上无法覆盖运行中的文件。
   async function handleUpdate(cfg, payload) {
     const step = payload?.step
-    if (step !== 'check' && step !== 'apply') {
-      return fail('invalid-step', 'step must be check or apply')
+    if (step !== 'check' && step !== 'stage' && step !== 'apply') {
+      return fail('invalid-step', 'step must be check, stage or apply')
     }
     const exeInfo = resolveExe(cfg.exe)
     if (!exeInfo.path) {
@@ -457,23 +465,38 @@ export function apply(ctx, config) {
           downloadUrl: v.download_url ?? null,
           releaseUrl: RELEASE_REPO ? `https://github.com/${RELEASE_REPO}/releases` : null,
           error: v.error ?? null,
-          // 运行中实例：embedded 模式下替换 exe 会打断当前会话
+          // 运行中实例：embedded 模式下替换 exe 会打断当前会话，
+          // 故 apply 会自动降级为 stage（暂存，下次启动安装）
           runningInMultiver: mode === 'embedded',
           mode,
           runningVersion: running.version,
+          // 已暂存待安装的更新（下次 multiver 启动时生效）
+          pendingUpdate: readPendingUpdate(exeInfo.path),
         },
       }
     }
 
-    // step === 'apply'
-    // 安全护栏：内嵌窗口里替换 exe 会让当前 multiver 进程的文件被占用/替换，
-    // 导致正在服务的页面崩溃。要求用户在独立环境（或先关内嵌窗口）操作。
-    if (mode === 'embedded') {
-      return fail(
-        'embedded-blocked',
-        '当前运行在内嵌窗口中，更新会中断本会话。请先在 multiver 主界面完成更新，或关闭该窗口后重试。',
-      )
+    // embedded 模式下不能立即替换，降级为暂存
+    if (step === 'apply' && mode === 'embedded') {
+      const staged = await stageUpdate(cfg, exeInfo)
+      if (!staged.ok) return staged
+      return {
+        ok: true,
+        value: {
+          ...staged.value,
+          deferred: true,
+          message: staged.value.staged
+            ? `已暂存 ${staged.value.version}，multiver 下次启动时自动安装`
+            : '已是最新版本',
+        },
+      }
     }
+
+    if (step === 'stage') {
+      return await stageUpdate(cfg, exeInfo)
+    }
+
+    // step === 'apply'（非 embedded）
 
     const r = await runJson(exeInfo.path, ['update', '--json'], 600000)
     if (!r.ok) return r
@@ -498,6 +521,94 @@ export function apply(ctx, config) {
         handedOff: true,
         upToDate: false,
         message: v.message ?? '更新已就绪，管理器将退出以完成替换',
+      },
+    }
+  }
+
+  // ---------- 暂存更新（staged update）----------
+
+  /// 读取已暂存的更新标记（<root>/.update/pending.json）。
+  /// 返回 {version, stagedAt} 或 null。失败静默——这只是展示信息。
+  function readPendingUpdate(exePath) {
+    try {
+      const p = join(dirname(exePath), '.update', 'pending.json')
+      if (!existsSync(p)) return null
+      const j = JSON.parse(readFileSync(p, 'utf8'))
+      if (!j || typeof j.version !== 'string') return null
+      return { version: j.version, stagedAt: j.staged_at ?? null }
+    } catch {
+      return null
+    }
+  }
+
+  /// 暂存更新：查最新版 → 下载 → 校验 → 写到 <exe 同目录>/.update/ → 写 pending.json。
+  /// multiver 下次启动时由 Rust 侧 staged 模块完成替换（见 src-tauri/src/staged.rs）。
+  async function stageUpdate(cfg, exeInfo) {
+    const check = await runJson(exeInfo.path, ['update', '--dry-run', '--json'], cfg.commandTimeoutMs + 30000)
+    if (!check.ok) return check
+    const v = check.value || {}
+    if (!v.has_update) {
+      return { ok: true, value: { staged: false, current: v.current ?? null, latest: v.latest ?? null } }
+    }
+    if (!v.download_url) {
+      return fail('download-url-missing', 'Release 资产缺失，无法下载新版本')
+    }
+
+    const root = dirname(exeInfo.path)
+    const stageDir = join(root, '.update')
+    const stagedExe = join(stageDir, 'dsh-multiver.exe.new')
+    const tmpExe = join(stageDir, '.download.tmp')
+
+    try {
+      mkdirSync(stageDir, { recursive: true })
+    } catch (e) {
+      return fail('dir-create-failed', String(e?.message ?? e))
+    }
+
+    const dl = await downloadFile(v.download_url, tmpExe)
+    if (!dl.ok) {
+      cleanup([tmpExe])
+      return dl
+    }
+
+    // 校验：优先用 CLI 给的 sha256，缺失则只做大小检查
+    const expected = (v.sha256 || '').toLowerCase()
+    if (expected) {
+      const actual = sha256File(tmpExe)
+      if (actual !== expected) {
+        cleanup([tmpExe])
+        return fail('checksum-mismatch', 'SHA256 校验失败', { expected, actual })
+      }
+    }
+
+    try {
+      renameSync(tmpExe, stagedExe)
+    } catch (e) {
+      cleanup([tmpExe])
+      return fail('rename-failed', String(e?.message ?? e))
+    }
+
+    const pending = {
+      version: String(v.latest ?? ''),
+      sha256: expected,
+      staged_at: Math.floor(Date.now() / 1000),
+      size: statSync(stagedExe).size,
+    }
+    try {
+      writeFileSync(join(stageDir, 'pending.json'), JSON.stringify(pending, null, 2))
+    } catch (e) {
+      cleanup([stagedExe])
+      return fail('write-failed', String(e?.message ?? e))
+    }
+
+    return {
+      ok: true,
+      value: {
+        staged: true,
+        version: pending.version,
+        size: pending.size,
+        verified: !!expected,
+        stageDir,
       },
     }
   }
@@ -556,6 +667,22 @@ export function apply(ctx, config) {
       unlinkSync(probe)
     } catch (e) {
       return fail('dir-readonly', String(e?.message ?? e))
+    }
+
+    // 磁盘空间检查：exe 约 10 MB，留 100 MB 余量避免写满。
+    // statfs 在部分平台不可用 → 拿不到就跳过检查（不阻断）。
+    const need = MIN_FREE_BYTES
+    try {
+      const st = statfsSync(workdir)
+      const freeBytes = Number(st.bavail) * Number(st.bsize)
+      if (Number.isFinite(freeBytes) && freeBytes < need) {
+        return fail('disk-full', `磁盘剩余空间不足：需要至少 ${Math.round(need / 1048576)} MB，当前 ${Math.round(freeBytes / 1048576)} MB`, {
+          needBytes: need,
+          freeBytes,
+        })
+      }
+    } catch {
+      // 平台不支持 statfs / 路径不可读 → 跳过，交给后续写入失败兜底
     }
 
     const base = tag

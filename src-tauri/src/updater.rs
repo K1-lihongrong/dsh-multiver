@@ -164,6 +164,11 @@ pub fn download_and_verify(
 }
 
 /// 计算文件的 SHA256（小写十六进制）。
+/// 公开包装：供 staged 模块校验暂存 exe 时复用（内部实现保持私有）。
+pub fn sha256_file_pub(path: &std::path::Path) -> Result<String, String> {
+    sha256_file(path)
+}
+
 fn sha256_file(path: &std::path::Path) -> Result<String, String> {
     use sha2::{Digest, Sha256};
     let mut file = std::fs::File::open(path).map_err(|e| e.to_string())?;
@@ -198,7 +203,7 @@ pub fn spawn_replacer(
     //  - 删除自身
     //  - 重启新 exe（start "" "路径"）
     let script = format!(
-        "@echo off\r\n         setlocal\r\n         :wait\r\n         tasklist /FI \"PID eq {pid}\" 2>NUL | find \"{pid}\" >NUL\r\n         if not errorlevel 1 (\r\n         \x20 timeout /t 1 /nobreak >NUL\r\n         \x20 goto wait\r\n         )\r\n         copy /Y \"{new_s}\" \"{tgt_s}\" >NUL\r\n         del \"%~f0\"\r\n         start \"\" \"{tgt_s}\"\r\n",
+        "@echo off\r\n         setlocal enabledelayedexpansion\r\n         set /a tries=0\r\n         :wait\r\n         set /a tries+=1\r\n         if !tries! GTR 60 goto replace\r\n         tasklist /FI \"PID eq {pid}\" /NH 2>NUL | findstr /R /C:\"^dsh-multiver\" >NUL\r\n         if not errorlevel 1 (\r\n         \x20 ping -n 2 127.0.0.1 >NUL\r\n         \x20 goto wait\r\n         )\r\n         :replace\r\n         copy /Y \"{new_s}\" \"{tgt_s}\" >NUL\r\n         del \"{new_s}\" >NUL 2>&1\r\n         del \"%~f0\"\r\n         start \"\" \"{tgt_s}\"\r\n",
         pid = pid,
         new_s = new_s,
         tgt_s = tgt_s,

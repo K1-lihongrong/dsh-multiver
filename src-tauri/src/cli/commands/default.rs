@@ -119,7 +119,8 @@ pub fn cmd_set_root(dir: &str, dry_run: bool, json: bool) -> i32 {
         return 0;
     }
 
-    // 创建目录并验证可写
+    // 创建目录并验证可写。先记下根目录是否原本不存在——供 --json 的 created 字段。
+    let dir_created = !path.exists();
     let dirs = Dirs::new(path.to_path_buf());
     if let Err(e) = dirs.ensure() {
         out_result(
@@ -155,7 +156,7 @@ pub fn cmd_set_root(dir: &str, dry_run: bool, json: bool) -> i32 {
         }
     }
 
-    let created = old_root != dirs.root;
+    let changed = old_root != dirs.root;
     ctx.cfg.root_dir = Some(dirs.root.to_string_lossy().to_string());
     if let Err(e) = ctx.cfg.save(&ctx.mdir) {
         out_result(json, false, &format!("保存配置失败：{}", e));
@@ -170,12 +171,16 @@ pub fn cmd_set_root(dir: &str, dry_run: bool, json: bool) -> i32 {
                 "ok": true,
                 "root": dirs.root.to_string_lossy(),
                 "previous": old_root.to_string_lossy(),
-                "changed": created,
+                "changed": changed,
+                "created": dir_created,
             }))
         );
     } else {
         println!("数据根已设为 {}", dirs.root.display());
-        if created {
+        if dir_created {
+            println!("（该目录为新建）");
+        }
+        if changed {
             println!("原数据根 {}", old_root.display());
         }
         println!("终端转发脚本 dsh 已重生成");
