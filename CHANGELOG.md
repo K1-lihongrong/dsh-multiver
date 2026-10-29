@@ -16,6 +16,9 @@
 - **兼容性提示**：Host 的 `state` 端点新增 `compatibility` 字段（`runningVersion` / `verifiedVersions` / `verified`）；Client 在运行版本不在已验证列表时显示黄色提示条，**不阻断功能**。
 - **设置页导航图标**：dsh shell 按 id 白名单硬编码图标，第三方 section 一律拿到齿轮（与「通用设置」重复）。改为按 label 文本定位自身按钮并替换 svg 内容（三条横杠 + 右下圆点）。定位失败时静默降级为原生齿轮，不影响功能。
 - **插件面板搜索框**：位置从顶部工具栏移到插件列表上方独立成行，加放大镜图标，文案改为「筛选已安装的插件…」，避免与「添加插件」按钮混淆。
+- **部署引导**：未配置数据根时，插件不再直接显示版本表，而是一个三步向导——选工作目录 → 获取 exe（自动下载 / 使用已有）→ `set-root` 并启动。`state` 新增 `provisioned` 字段（读 multiver 自身 `config.json` 探测，插件不另存状态）。新增 `provision` 端点：下载固定本仓库 latest Release、强制 SHA256 校验、失败清理临时文件不留半成品、仅允许 https、120s 超时。
+- **更新管理**：插件底部新增「multiver 更新」区块，可检查并更新 multiver 自身。全部委托 multiver 自带 updater（`update --dry-run --json` 查、`update --json` 执行），插件不重复实现替换逻辑。内嵌窗口中 `apply` 被拦截（`embedded-blocked`），避免替换正在运行的 exe 打断当前会话。
+- **空版本态文案**：明确 multiver 只管理自己装在数据根 `versions/` 下的 dsh，npm / pnpm / Python wheel / 桌面版安装的 dsh 是独立的一份、不受影响。
 
 ### CLI
 
@@ -24,10 +27,19 @@
   - Windows 不需要该清理：`procreg` 模块本身由 `cfg(unix)` 门控，子进程由 Job Object 做 OS 级保障。
   - 支持 `--dry-run` 预览与 `--json` 机读输出。
 
+### 文档
+- **新增 [插件兼容矩阵](docs/插件兼容矩阵.md)**：8 个 dsh 版本的实测结果，最低支持 `0.1.5-rc.3`。含失败原因、复现步骤与测试纪律。
+- 使用手册补「与其它方式装的 dsh 共存」一节：npm / pnpm / Python wheel / 桌面版四种形态的冲突情况、判断当前 `dsh` 归属的方法、DSH_HOME 共用风险。
+
 ### 验证
-- dsh `0.2.1-rc.3` 实测：`state` / `probe` / `open` / `setDefault` 四端点、鉴权（401/403）、405、错误码映射、argv 版本探测、设置页 UI 渲染全部正常。
-- 零约束安装实测：rc.3 上删除豁免后直接安装成功，`compatibility.json` 保持空对象。
-- E2E 35 项通过（新增「无插件时不显示筛选框」「筛选框位于列表上方」两条）。
+- **兼容矩阵**：5 个版本完全支持（0.1.5-rc.3 / 0.2.0-rc.1 / 0.2.0-rc.2 / 0.2.1-rc.2 / 0.2.1-rc.3）；2 个因 dsh 自身缺陷无法判定（0.1.5-rc.1 / 0.1.2-rc.1，报 `requires the Cordis HMR service`，无插件对照同样失败）；1 个装不上（0.1.3-alpha.2，`fs-ext` 原生模块编译失败）。
+- **四端点实测**：`state` / `probe` / `open` / `setDefault`、鉴权（401/403）、405、错误码映射、argv 版本探测、设置页 UI 渲染全部正常。
+- **零约束安装**：rc.3 上删除豁免后直接安装成功，`compatibility.json` 保持空对象。
+- **部署引导**：路径校验 4 例、dry-run 无副作用、真实切换、`env`/`doctor`/`list` 反映新根、幂等、真实数据根 config SHA 未变；下载 7 秒 / SHA256 校验 / 临时文件零残留；7 类失败路径均返回可读错误码；UI 门控双向翻转实测。
+- **更新管理**：已最新 / 有更新 / 确认取消 / 成功 / 失败 / 内嵌拦截 / 旧版 CLI 错误，全部实测通过。
+- **E2E 35 项通过**（新增「无插件时不显示筛选框」「筛选框位于列表上方」两条）。
+- **单元测试 156 passed / 1 ignored**（新增 5 条 `set-root` 测试）。
+- `cargo fmt` / `cargo clippy -D warnings` 全绿。
 
 ## [0.3.0] - 未发布
 
