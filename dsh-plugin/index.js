@@ -25,6 +25,15 @@ import {
 import { join, dirname, delimiter, sep } from 'node:path'
 import { createHash } from 'node:crypto'
 import https from 'node:https'
+import {
+  resolveDataRoot,
+  validateWorkdir as validateWorkdirPure,
+  parseVersionFromPath,
+  parseIsolatedHome,
+  normalizePath,
+  compatOf as compatOfPure,
+  checkDownloadUrl,
+} from './lib/pure.js'
 
 const MAX_BODY = 16 * 1024
 /// 部署下载前要求的最小可用空间（100 MB，exe 本身约 10 MB，留足余量）
@@ -658,21 +667,8 @@ export function apply(ctx, config) {
   }
 
   /// 校验工作目录：必须是绝对路径，且父目录可创建。
-  function validateWorkdir(dir) {
-    if (typeof dir !== 'string' || !dir.trim()) {
-      return fail('invalid-dir', '工作目录不能为空')
-    }
-    const d = dir.trim()
-    // 绝对路径：Windows 盘符或 Unix 前导 /
-    const isAbs = /^[A-Za-z]:[\\/]/.test(d) || d.startsWith('/') || d.startsWith('\\\\')
-    if (!isAbs) {
-      return fail('invalid-dir', '请提供绝对路径')
-    }
-    if (d.split(/[\\/]/).includes('..')) {
-      return fail('invalid-dir', '路径不能包含 ..')
-    }
-    return null
-  }
+  // validateWorkdir 实现在 lib/pure.js，这里仅作别名保持调用点可读
+  const validateWorkdir = validateWorkdirPure
 
   /// 下载 exe 与 SHA256SUMS.txt，校验后落到 <workdir>/dsh-multiver.exe。
   /// 失败时清理临时文件，不留半成品。
@@ -832,18 +828,13 @@ export function apply(ctx, config) {
     return createHash('sha256').update(readFileSync(p)).digest('hex')
   }
 
-  /// HTTPS GET → 临时文件。仅允许 https，跟随重定向，有超时。
+  /// HTTPS GET → 临时文件。仅允许 https + 白名单域名，跟随重定向，有超时。
   function downloadFile(url, dest, redirectsLeft = MAX_REDIRECTS) {
     return new Promise((resolve) => {
-      let u
-      try { u = new URL(url) } catch { return resolve(fail('bad-url', url)) }
-      if (u.protocol !== 'https:') {
-        return resolve(fail('insecure-url', '仅允许 https'))
-      }
-      // host 白名单：下载源只可能是 GitHub 的发布域名。
-      // 用户可控的 download_url 若被篡改成别的地址，这里直接拒绝。
-      if (!ALLOWED_DOWNLOAD_HOSTS.has(u.hostname.toLowerCase())) {
-        return resolve(fail('host-not-allowed', `不允许的下载域名：${u.hostname}`, { url }))
+      // 协议与域名校验统一由 lib/pure.js 的 checkDownloadUrl 负责
+      const v = checkDownloadUrl(url, ALLOWED_DOWNLOAD_HOSTS)
+      if (!v.ok) {
+        return resolve(fail(v.code, v.message, { url }))
       }
       if (redirectsLeft <= 0) {
         return resolve(fail('too-many-redirects', '重定向次数过多'))
@@ -884,33 +875,6 @@ export function apply(ctx, config) {
 
   /// 读 multiver 自身的 config.json，判断「exe 可用 + root_dir 已设置 + 目录可写」。
   /// 插件不另存部署状态，避免与 multiver 配置分叉。
-  /// 解析 multiver 的数据根，语义与 Rust 侧 `Config::resolve_root` 一致：
-  ///   config.json 的 root_dir 非空 → 用它；否则 → exe 所在目录。
-  ///
-  /// 返回 { root, source, configStatus }
-  ///   configStatus: 'ok' | 'missing' | 'invalid'
-  ///   source: 'config' | 'exe-dir'
-  ///
-  /// 为什么必须统一：插件写暂存文件、multiver 读暂存文件的路径必须一致，
-  /// 否则用户设过 root_dir 后更新会静默失效。
-  function resolveDataRoot(exePath) {
-    const exeDir = dirname(exePath)
-    const cfgPath = join(exeDir, 'config.json')
-    if (!existsSync(cfgPath)) {
-      return { root: exeDir, source: 'exe-dir', configStatus: 'missing' }
-    }
-    try {
-      const raw = JSON.parse(readFileSync(cfgPath, 'utf8'))
-      const v = raw?.root_dir
-      if (typeof v === 'string' && v.trim()) {
-        return { root: v.trim(), source: 'config', configStatus: 'ok' }
-      }
-      return { root: exeDir, source: 'exe-dir', configStatus: 'ok' }
-    } catch {
-      return { root: exeDir, source: 'exe-dir', configStatus: 'invalid' }
-    }
-  }
-
   function probeProvision(exeInfo) {
     const out = {
       provisioned: false,
@@ -961,13 +925,8 @@ export function apply(ctx, config) {
     return out
   }
 
-  function compatOf(runningVersion) {
-    return {
-      runningVersion: runningVersion ?? null,
-      verifiedVersions: VERIFIED_DSH_VERSIONS,
-      verified: runningVersion == null ? null : VERIFIED_DSH_VERSIONS.includes(runningVersion),
-    }
-  }
+  // compatOf 实现在 lib/pure.js，这里绑定已验证版本列表
+  const compatOf = (runningVersion) => compatOfPure(VERIFIED_DSH_VERSIONS, runningVersion)
 
   function resolveExe(configured) {
     const tried = []
@@ -1036,21 +995,9 @@ export function apply(ctx, config) {
     return { version: null, detectedBy: 'unknown', confidence: 'unknown', sources }
   }
 
-  function parseVersionFromPath(p) {
-    const m = /[\\/]versions[\\/]([^\\/]+)[\\/]/.exec(p)
-    return m ? m[1] : null
-  }
-
-  function parseIsolatedHome(home) {
-    const m = /[\\/]versions[\\/]([^\\/]+)[\\/]home[\\/]?$/.exec(home)
-    return m ? m[1] : null
-  }
+  // parseVersionFromPath / parseIsolatedHome / normalizePath 实现在 lib/pure.js
 
   // ---------- 一致性校对（H1–H3）----------
-
-  function normalizePath(p) {
-    return String(p).replace(/[\\/]+/g, sep).toLowerCase()
-  }
 
   function computeConsistency({ exeInfo, versions, defaultVersion, whichOk, whichVersion }) {
     // defaultEntry：三值
