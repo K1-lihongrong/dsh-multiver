@@ -57,3 +57,6 @@ dsh-plugin/*.tgz
 # 构建日志（后台构建时重定向输出用）
 .build-*.log
 .build-*.log.err
+
+# 临时提交信息文件
+.msg.txt
