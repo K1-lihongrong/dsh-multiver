@@ -17,7 +17,11 @@ window.__BOOT_T0 = performance.now();
 // 查询约 60ms，期间显示 index.html 的静态骨架（见 index.html）。
 const launchMode = await invoke("get_launch_mode").catch(() => null);
 
+// 单实例转发路径下，launch_window 可能在前端挂载前就失败（同步检查），
+// launch-progress:error 事件会丢失。故首帧再查一次错误状态兜底。
+const launchError = launchMode ? await invoke("get_launch_error").catch(() => null) : null;
+
 // 移除静态骨架（Vue 即将挂载）
 document.getElementById("boot-skeleton")?.remove();
 
-createApp(App, { launchMode }).mount("#app");
+createApp(App, { launchMode, launchError }).mount("#app");
