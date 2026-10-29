@@ -167,6 +167,8 @@ pub(crate) fn ensure_main_window(app: &tauri::AppHandle) -> Result<&'static str,
     // 会读到 V 而进入「启动态」，但 `launch-mode-start` / `launch-progress` 事件
     // 只在首次启动流程发出，重建窗口收不到 → 永远卡在「正在启动」。
     *crate::lock_launch_mode() = None;
+    // 同理清掉上一轮的启动错误，避免重建窗口后仍显示旧错误
+    *crate::lock_launch_error() = None;
 
     let config = app
         .config()

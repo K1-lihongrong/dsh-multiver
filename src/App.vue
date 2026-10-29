@@ -14,6 +14,7 @@ import LaunchScreen from "./components/LaunchScreen.vue";
 // v0.2.14：main.js 挂载前已查启动模式，作为初始 prop 传入 → 第一帧即启动态（不闪主界面）
 const props = defineProps({
   launchMode: { type: String, default: "" },
+  launchError: { type: String, default: "" },
 });
 
 const state = ref(null);
@@ -36,8 +37,9 @@ function goToRootSettings() {
 // launching：是否显示启动态；launchVersion：启动的版本号；launchStage：preparing/waiting/error
 const launching = ref(!!props.launchMode);
 const launchVersion = ref(props.launchMode || "");
-const launchStage = ref("preparing");
-const launchError = ref("");
+// 首帧就带错误 → 直接进错误态，不依赖事件（单实例路径的事件可能早于监听）
+const launchStage = ref(props.launchError ? "error" : "preparing");
+const launchError = ref(props.launchError || "");
 let unlistenProgress = null;
 let unlistenModeStart = null;
 

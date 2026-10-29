@@ -59,9 +59,22 @@ pub(crate) static WIN_READY_MS: std::sync::OnceLock<u128> = std::sync::OnceLock:
 /// 新窗口前端仍会读到旧值 → 卡在「正在启动」。重建前需要能**清除**它。
 pub(crate) static LAUNCH_MODE: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
 
+/// 启动失败原因（供前端首帧查询）。
+///
+/// 为什么需要它：单实例转发路径里，`launch_window` 可能在主窗口前端挂载**之前**
+/// 就返回错误（例如「版本未安装」是同步检查）。此时 `launch-progress:error` 事件
+/// 发出时前端还没 `listen`，事件丢失 → 加载页永远停在「正在启动」。
+/// 故额外用一个可查询的状态兜底，与 `LAUNCH_MODE` 同一套路。
+pub(crate) static LAUNCH_ERROR: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+
 /// 锁定 `LAUNCH_MODE`；中毒时继续用内部数据（同 `lock_procs` 的理由）。
 pub(crate) fn lock_launch_mode() -> std::sync::MutexGuard<'static, Option<String>> {
     LAUNCH_MODE.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// 锁定 `LAUNCH_ERROR`；中毒时继续用内部数据。
+pub(crate) fn lock_launch_error() -> std::sync::MutexGuard<'static, Option<String>> {
+    LAUNCH_ERROR.lock().unwrap_or_else(|e| e.into_inner())
 }
 
 /// M2m（B5）：判断第二实例与当前实例是否为同一份可执行文件。
@@ -184,6 +197,8 @@ pub fn run() {
     // 故在此（run 开头）就 set，确保前端 get_launch_mode 一定查得到。
     if let Some(version) = window::parse_launch_version(&std::env::args().collect::<Vec<_>>()) {
         *lock_launch_mode() = Some(version);
+        // 新一次启动，清掉上一轮可能残留的错误
+        *lock_launch_error() = None;
     }
 
     // 进程级 AUMID 必须在任何窗口创建之前设置（Tauri 在 setup 回调前就建了主窗口）。
@@ -253,9 +268,45 @@ pub fn run() {
                 }
 
                 if let Some(version) = window::parse_launch_version(&args) {
+                    // 与 setup（冷启动）路径对齐：先让主窗口承载加载页，再建 dsh 窗口。
+                    //
+                    // 为什么必须补这一段：冷启动成功后主窗口会被 close（只剩 dsh 窗口）。
+                    // 此时第二次从快捷方式启动走单实例转发，若直接 launch_window，
+                    // 进程里没有任何 UI 载体 → 用户看到的是「无加载页、黑屏数秒、dsh 窗口突然出现」。
+                    //
+                    // 顺序要紧：ensure_main_window 在重建分支里会清空 LAUNCH_MODE（B1 修复，
+                    // 防止重建窗口卡在「正在启动」），所以必须先 ensure、后设值。
                     let app_handle = app.clone();
                     let procs_for_launch = procs_for_si.clone();
                     let version_for_launch = version.clone();
+
+                    match window::ensure_main_window(app) {
+                        Ok(path) => {
+                            eprintln!(
+                                "[dsh-multiver] 单实例 launch：主窗口 {}（版本 {}）",
+                                path, version_for_launch
+                            );
+                        }
+                        Err(e) => {
+                            // 重建失败不阻断启动：dsh 窗口照建，只是没有加载页。
+                            log_app(
+                                "single-instance",
+                                &format!("launch 前重建主窗口失败（降级为无加载页）: {}", e),
+                            );
+                        }
+                    }
+
+                    // 设启动态 + 通知前端进加载页（前端 main.js 首帧读 prop，事件作兜底）
+                    *lock_launch_mode() = Some(version_for_launch.clone());
+                    *lock_launch_error() = None;
+                    {
+                        use tauri::Emitter;
+                        let _ = app.emit(
+                            "launch-mode-start",
+                            serde_json::json!({ "version": version_for_launch.clone() }),
+                        );
+                    }
+
                     tauri::async_runtime::spawn(async move {
                         match commands::launch_window(
                             app_handle.clone(),
@@ -269,6 +320,11 @@ pub fn run() {
                                     "[dsh-multiver] 单实例转发 launch-version {}: {}",
                                     version_for_launch, msg
                                 );
+                                // 与 setup 路径一致：dsh 窗口建好后再关主窗口
+                                use tauri::Manager;
+                                if let Some(main) = app_handle.get_webview_window("main") {
+                                    let _ = main.close();
+                                }
                             }
                             Err(e) => {
                                 // B2：转发失败不能只写日志——屏幕上什么都不发生，用户以为没响应。
@@ -294,6 +350,24 @@ pub fn run() {
                                     "[dsh-multiver] 单实例转发启动失败（已回退主窗口）: {}",
                                     e
                                 );
+                                // R-13：与 setup 路径一致——通知前端进错误态。
+                                // 同时写入 LAUNCH_ERROR：本路径下 launch_window 可能在前端挂载
+                                // 之前就失败（「版本未安装」是同步检查），事件会丢失，
+                                // 前端首帧靠 get_launch_error() 兜底。
+                                *lock_launch_error() = Some(e.to_string());
+                                {
+                                    use tauri::Emitter;
+                                    let _ = app_handle.emit(
+                                        "launch-progress",
+                                        serde_json::json!({
+                                            "version": version_for_launch,
+                                            "stage": "error",
+                                            "error": e.to_string(),
+                                        }),
+                                    );
+                                }
+                                // 主窗口此时应该已经在（上面 ensure 过）；失败态留在主窗口显示。
+                                // 若刚才 ensure 失败过，这里再试一次兜底。
                                 let _ = window::ensure_main_window(&app_handle);
                             }
                         }
@@ -351,6 +425,7 @@ pub fn run() {
             commands::preview_import,
             commands::apply_import,
             commands::get_launch_mode,
+            commands::get_launch_error,
             commands::show_main_window,
             commands::is_version_open,
             commands::list_running_versions,

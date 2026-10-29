@@ -463,6 +463,16 @@ pub(crate) fn get_launch_mode() -> Option<String> {
     crate::lock_launch_mode().clone()
 }
 
+/// 查询启动失败原因（若上一步启动已失败）。
+///
+/// 与 `get_launch_mode` 配套：前端首帧先查版本、再查错误；
+/// 有错误则直接进错误态，不依赖 `launch-progress` 事件（那条在单实例转发路径里
+/// 可能早于前端监听而丢失）。
+#[tauri::command]
+pub(crate) fn get_launch_error() -> Option<String> {
+    crate::lock_launch_error().clone()
+}
+
 /// v0.2.14：前端渲染出"启动态"后调用，显示主窗口。
 /// （启动模式下 setup 里先 hide 主窗口，避免闪现主界面；前端就绪后由此命令 show。）
 #[tauri::command]
