@@ -1,0 +1,14 @@
+fix(plugins): root_dir 为 null 是合法状态，不应判为未部署
+
+multiver 的 resolve_root 在 root_dir 为 null 时回退到 exe 所在目录，
+这是默认且合法的状态。插件此前只检查 root_dir 字段是否有值，
+把该状态误判为未配置，导致已正常管理 5 个版本的环境也显示部署向导。
+
+改为：config.json 存在即视为已配置，root_dir 为 null 时取 exe 所在目录。
+真正未配置的判定仍由 config.json 缺失（config-missing）触发。
+
+验证：真实数据根（root_dir=null，5 个版本）下版本表、设为默认、4 个动作
+按钮、更新管理区块全部正常；指向无 config.json 的全新 exe 目录时正确显示
+三步向导与 config-missing。
+
+用户可见变化：使用默认数据根（exe 同目录）的用户不再被误判为未部署。

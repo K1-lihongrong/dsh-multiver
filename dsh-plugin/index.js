@@ -743,9 +743,9 @@ export function apply(ctx, config) {
       return out
     }
     if (!root) {
-      // root_dir 为空 = 用户尚未选择工作目录
-      out.reasons.push('root-unset')
-      return out
+      // root_dir 为 null 是合法状态：multiver 的 resolve_root 会回退到 exe 所在目录。
+      // 只有在 config.json 完全缺失时才算「未配置数据根」。
+      root = dirname(exeInfo.path)
     }
     out.root = root
     out.rootSource = 'config'
