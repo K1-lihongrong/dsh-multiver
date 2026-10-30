@@ -154,7 +154,7 @@ jobs:
           name: DSH 版本管理器 ${{ github.event.inputs.tag || github.ref_name }}
           files: |
             artifacts/dsh-multiver-windows/dsh-multiver.exe
-            artifacts/dsh-multiver-windows/*.tgz
+            artifacts/dsh-multiver-windows/**/*.tgz
             artifacts/dsh-multiver-linux/**/*.AppImage
             artifacts/dsh-multiver-linux/**/*.deb
             artifacts/SHA256SUMS.txt
