@@ -658,3 +658,15 @@ pub(crate) async fn ds_check_updates(
         Err(res.output)
     }
 }
+
+/// 推荐插件列表（阶段 4）。拉取失败时回退内置副本（返回体里 stale=true）。
+///
+/// force=true 时忽略进程内缓存，用于用户手动刷新。
+#[tauri::command]
+pub(crate) async fn ds_plugin_catalog(
+    force: Option<bool>,
+) -> Result<crate::catalog::Catalog, String> {
+    tauri::async_runtime::spawn_blocking(move || crate::catalog::load(force.unwrap_or(false)))
+        .await
+        .map_err(|e| format!("读取推荐列表失败：{e}"))?
+}

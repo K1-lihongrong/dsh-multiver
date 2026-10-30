@@ -38,6 +38,12 @@ const initName = ref("web");
 const initializing = ref(false);
 let unlistenProgress = null;
 
+// 阶段 4：已安装 / 推荐 两个标签页
+const tab = ref("installed"); // installed | catalog
+const catalog = ref(null); // { plugins, source, stale, failure }
+const catalogLoading = ref(false);
+const catalogError = ref("");
+
 const homeKindLabel = computed(() => {
   const m = { isolated: "dsplugins.homeIsolated", official: "dsplugins.homeOfficial", shared: "dsplugins.homeShared" };
   return t(m[homeKind.value] || "dsplugins.homeShared");
@@ -111,6 +117,68 @@ async function load() {
 }
 
 const currentProfile = () => profiles.value.find((p) => p.name === activeProfile.value);
+
+// ---------- 推荐列表（阶段 4）----------
+
+async function loadCatalog(force) {
+  if (catalogLoading.value) return;
+  catalogLoading.value = true;
+  catalogError.value = "";
+  try {
+    catalog.value = await invoke("ds_plugin_catalog", { force: !!force });
+  } catch (e) {
+    catalogError.value = "" + e;
+  } finally {
+    catalogLoading.value = false;
+  }
+}
+
+function switchTab(next) {
+  tab.value = next;
+  if (next === "catalog" && !catalog.value && !catalogLoading.value) loadCatalog(false);
+}
+
+/// 已安装的插件名集合，用于在推荐列表上标「已安装」。
+const installedNames = computed(() => {
+  const set = new Set();
+  for (const pl of currentProfile()?.plugins || []) set.add(pl.name);
+  return set;
+});
+
+/// 推荐列表按分类分组。
+/// 同作者（tags 含 same-author）的条目提到最前面，单独成组。
+const catalogGroups = computed(() => {
+  const list = catalog.value?.plugins || [];
+  const pinned = [];
+  const byCategory = new Map();
+  for (const p of list) {
+    if ((p.tags || []).includes("same-author")) {
+      pinned.push(p);
+    } else {
+      const c = p.category || "";
+      if (!byCategory.has(c)) byCategory.set(c, []);
+      byCategory.get(c).push(p);
+    }
+  }
+  const groups = [];
+  if (pinned.length) groups.push({ title: t("dsplugins.catalogSameAuthor"), items: pinned });
+  for (const [title, items] of byCategory) groups.push({ title, items });
+  return groups;
+});
+
+/// 推荐项的安装 spec：有 spec 用 spec，否则用包名。
+const catalogSpec = (p) => p.spec || p.name;
+
+/// 推荐项的 npmjs 链接。noNpm 为 true 时不生成（包不在 npm 上，链接会 404）。
+const npmUrl = (p) =>
+  p.noNpm ? "" : "https://www.npmjs.com/package/" + encodeURIComponent(p.name).replace(/%2F/g, "/");
+
+/// 从推荐页发起安装：复用现有安装对话框，预填 spec。
+function installFromCatalog(p) {
+  openInstall().then(() => {
+    installSpec.value = catalogSpec(p);
+  });
+}
 
 // B1-10：按包名/版本过滤
 const filteredPlugins = computed(() => {
@@ -567,22 +635,114 @@ onUnmounted(() => {
       </div>
     </div>
     <template v-else>
-      <!-- profile 切换（多个时） -->
+      <!-- profile 切换（多个时） + 标签切换 + 操作 -->
       <div class="dp-toolbar">
         <select v-if="profiles.length > 1" class="dp-select" :value="activeProfile" @change="activeProfile = $event.target.value">
           <option v-for="p in profiles" :key="p.name" :value="p.name">{{ p.name }}</option>
         </select>
         <span v-else class="dp-profile-tag">{{ activeProfile }}</span>
 
+        <!-- 视图切换：与右侧操作按钮在视觉上分开（连体分段控件 vs 独立按钮） -->
+        <div class="dp-segmented" role="tablist">
+          <button
+            class="dp-seg-btn"
+            :class="{ active: tab === 'installed' }"
+            role="tab"
+            :aria-selected="tab === 'installed'"
+            @click="switchTab('installed')"
+          >{{ t("dsplugins.tabInstalled") }}</button>
+          <button
+            class="dp-seg-btn"
+            :class="{ active: tab === 'catalog' }"
+            role="tab"
+            :aria-selected="tab === 'catalog'"
+            @click="switchTab('catalog')"
+          >{{ t("dsplugins.tabCatalog") }}</button>
+        </div>
+
         <button class="dp-btn dp-btn-primary" @click="openInstall" :disabled="busy">
           ＋ {{ t("dsplugins.addPlugin") }}
         </button>
-        <button class="dp-btn" @click="checkUpdates" :disabled="busy">
+        <button v-if="tab === 'installed'" class="dp-btn" @click="checkUpdates" :disabled="busy">
           {{ t("dsplugins.checkUpdates") }}
         </button>
       </div>
 
-      <!-- 插件列表 -->
+      <!-- ===== 推荐标签页 ===== -->
+      <template v-if="tab === 'catalog'">
+        <div v-if="catalog?.stale" class="dp-catalog-stale">
+          {{ t("dsplugins.catalogStale") }}
+          <button class="dp-link-btn" @click="loadCatalog(true)" :disabled="catalogLoading">
+            {{ t("dsplugins.catalogRetry") }}
+          </button>
+        </div>
+        <div v-if="catalogLoading" class="dp-state">
+          <span class="dp-spinner"></span>
+          <span>{{ t("dsplugins.loading") }}</span>
+        </div>
+        <div v-else-if="catalogError" class="dp-state dp-state-empty">
+          <span>{{ catalogError }}</span>
+          <button class="dp-link-btn" @click="loadCatalog(true)">{{ t("dsplugins.catalogRetry") }}</button>
+        </div>
+        <div v-else-if="!catalogGroups.length" class="dp-state dp-state-empty">
+          <span class="dp-state-icon">🧩</span>
+          <span>{{ t("dsplugins.catalogEmpty") }}</span>
+        </div>
+        <template v-else>
+          <div v-for="g in catalogGroups" :key="g.title" class="dp-catalog-group">
+            <div class="dp-catalog-title">{{ g.title }}</div>
+            <ul class="dp-list">
+              <li v-for="p in g.items" :key="p.name" class="dp-item dp-catalog-item">
+                <div class="dp-item-main">
+                  <span class="dp-item-icon">🧩</span>
+                  <div class="dp-item-info">
+                    <div class="dp-catalog-name-row">
+                      <code class="dp-item-name" :title="p.name">{{ p.name }}</code>
+                      <span
+                        v-if="(p.tags || []).includes('same-author')"
+                        class="dp-badge dp-badge-author"
+                      >{{ t("dsplugins.catalogSameAuthorBadge") }}</span>
+                      <span v-if="installedNames.has(p.name)" class="dp-badge dp-badge-bundle">
+                        {{ t("dsplugins.catalogInstalled") }}
+                      </span>
+                    </div>
+                    <span class="dp-catalog-desc">{{ p.description }}</span>
+                    <span v-if="p.minDshVersion" class="dp-catalog-req">
+                      {{ t("dsplugins.catalogMinDsh", { v: p.minDshVersion }) }}
+                    </span>
+                  </div>
+                </div>
+                <div class="dp-catalog-actions">
+                  <a
+                    v-if="p.repo"
+                    class="dp-icon-btn dp-catalog-link"
+                    :href="p.repo"
+                    target="_blank"
+                    rel="noreferrer"
+                    :title="t('dsplugins.catalogRepo')"
+                  >GitHub ↗</a>
+                  <a
+                    v-if="npmUrl(p)"
+                    class="dp-icon-btn dp-catalog-link"
+                    :href="npmUrl(p)"
+                    target="_blank"
+                    rel="noreferrer"
+                    :title="t('dsplugins.catalogNpm')"
+                  >npmjs ↗</a>
+                  <button
+                    class="dp-btn dp-btn-primary dp-btn-sm"
+                    :disabled="busy || installing || installedNames.has(p.name)"
+                    @click="installFromCatalog(p)"
+                  >{{ t("dsplugins.catalogInstall") }}</button>
+                </div>
+              </li>
+            </ul>
+          </div>
+        </template>
+      </template>
+
+      <!-- ===== 已安装标签页 ===== -->
+      <template v-else>
       <div v-if="!currentProfile() || !currentProfile().plugins.length" class="dp-state dp-state-empty">
         <span class="dp-state-icon">🧩</span>
         <span>{{ t("dsplugins.empty") }}</span>
@@ -635,6 +795,7 @@ onUnmounted(() => {
           </li>
         </ul>
         <div v-else class="dp-state dp-state-empty">{{ t("dsplugins.noMatch") }}</div>
+      </template>
       </template>
 
       <!-- B1-08：操作输出（实时进度行） -->
@@ -917,6 +1078,87 @@ onUnmounted(() => {
 .dp-btn-danger { color: var(--danger, #e5484d); border-color: var(--danger, #e5484d); }
 .dp-btn-danger:hover:not(:disabled) { background: rgba(229,72,77,0.08); }
 .dp-btn-sm { font-size: 11px; padding: 3px 10px; }
+
+/* 视图切换：连体分段控件，与右侧独立操作按钮视觉区分 */
+.dp-segmented {
+  display: inline-flex;
+  border: 1px solid var(--panel-border, #363b42);
+  border-radius: 6px;
+  overflow: hidden;
+  margin-right: auto;
+}
+.dp-seg-btn {
+  font-size: 11.5px;
+  padding: 4px 12px;
+  border: 0;
+  background: transparent;
+  color: var(--text-muted, #7a828c);
+  cursor: pointer;
+}
+.dp-seg-btn + .dp-seg-btn { border-left: 1px solid var(--panel-border, #363b42); }
+.dp-seg-btn.active {
+  background: var(--accent-weak, #2a3350);
+  color: var(--text, #e6e8eb);
+  font-weight: 600;
+}
+
+/* 推荐列表 */
+.dp-catalog-stale {
+  margin: 8px 0;
+  padding: 6px 10px;
+  border-radius: 6px;
+  background: rgba(255, 170, 0, .12);
+  font-size: 11.5px;
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.dp-catalog-group { margin-top: 14px; }
+.dp-catalog-title {
+  font-size: 11.5px;
+  font-weight: 600;
+  opacity: .65;
+  margin-bottom: 6px;
+  letter-spacing: .02em;
+}
+.dp-catalog-item { align-items: flex-start; }
+.dp-catalog-name-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.dp-catalog-desc {
+  display: block;
+  font-size: 11.5px;
+  opacity: .72;
+  line-height: 16px;
+  margin-top: 2px;
+}
+.dp-catalog-req {
+  display: block;
+  font-size: 11px;
+  opacity: .55;
+  margin-top: 3px;
+}
+.dp-catalog-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+.dp-catalog-link {
+  font-size: 11px;
+  text-decoration: none;
+  color: inherit;
+  opacity: .65;
+  padding: 2px 4px;
+}
+.dp-catalog-link:hover { opacity: 1; }
+.dp-badge-author {
+  background: rgba(107, 134, 255, .18);
+  color: var(--accent, #6b86ff);
+}
 
 /* 插件列表：自适应列数（宽屏多列，窄屏单列） */
 .dp-list {

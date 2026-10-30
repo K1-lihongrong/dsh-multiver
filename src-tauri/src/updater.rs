@@ -141,17 +141,11 @@ pub fn download_and_verify(
             .map(|d| d.as_nanos())
             .unwrap_or(0)
     ));
-    let client = crate::runtime::blocking_client_ua(
-        std::time::Duration::from_secs(300),
-        Some("dsh-multiver"),
-    )?;
-    let mut resp = client.get(url).send().map_err(|e| e.to_string())?;
-    if !resp.status().is_success() {
-        return Err(format!("下载失败：HTTP {}", resp.status()));
-    }
-    let mut file = std::fs::File::create(&tmp).map_err(|e| e.to_string())?;
-    std::io::copy(&mut resp, &mut file).map_err(|e| e.to_string())?;
-    drop(file);
+    // 镜像回退：直连失败时切镜像（设计见 docs/交互设计约定.md §2.8）。
+    // 无代理的用户直连 GitHub 常常失败，此前这里只有单源，导致更新不可用。
+    let got = crate::net::fetch(url, &crate::net::exe_chain(), crate::net::Shape::Binary)
+        .map_err(|e| format!("下载失败：{}", e))?;
+    std::fs::write(&tmp, &got.bytes).map_err(|e| e.to_string())?;
 
     if let Some(expected) = expected_sha256 {
         let actual = sha256_file(&tmp)?;

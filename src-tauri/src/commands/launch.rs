@@ -473,6 +473,15 @@ pub(crate) fn get_launch_error() -> Option<String> {
     crate::lock_launch_error().clone()
 }
 
+/// v0.3.2：取走待处理的「打开设置区块」请求（取后即清）。
+///
+/// 与 `get_launch_mode` 同样在首帧查询——setup 阶段 emit 的事件可能早于前端监听。
+/// 用「取走」而非「读取」：同一次启动只应滚动一次，重复挂载不应重复跳转。
+#[tauri::command]
+pub(crate) fn take_open_settings() -> Option<String> {
+    crate::lock_open_settings().take()
+}
+
 /// v0.2.14：前端渲染出"启动态"后调用，显示主窗口。
 /// （启动模式下 setup 里先 hide 主窗口，避免闪现主界面；前端就绪后由此命令 show。）
 #[tauri::command]

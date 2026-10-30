@@ -120,3 +120,64 @@ export function checkDownloadUrl(url, allowedHosts) {
   }
   return { ok: true }
 }
+
+/**
+ * 从镜像链里选出本次要尝试的顺序。
+ *
+ * @param {Array<{name: string, rewrite: (url: string) => string, timeoutMs?: number}>} chain
+ * @param {string|null} preferred 上次成功的源名，优先尝试
+ * @returns {Array<{name: string, rewrite: (url: string) => string, timeoutMs?: number}>}
+ */
+export function orderSources(chain, preferred) {
+  if (!preferred) return chain.slice()
+  const idx = chain.findIndex((s) => s.name === preferred)
+  if (idx <= 0) return chain.slice()
+  const out = chain.slice()
+  const [hit] = out.splice(idx, 1)
+  out.unshift(hit)
+  return out
+}
+
+/**
+ * 判断下载内容是否符合预期形状。公共反代最常见的问题是「返回 200 但内容是 HTML 错误页」，
+ * 只看状态码不够。
+ *
+ * @param {Buffer} head 文件前若干字节（建议 >= 4）
+ * @param {'exe'|'json'|'text'} kind
+ * @returns {{ ok: true } | { ok: false, code: string, message: string }}
+ */
+export function checkPayloadShape(head, kind) {
+  if (!head || head.length === 0) {
+    return { ok: false, code: 'empty-body', message: '下载内容为空' }
+  }
+  if (kind === 'exe') {
+    // Windows PE 以 "MZ" 开头；Linux ELF 以 0x7F 'E' 'L' 'F' 开头
+    const isPE = head[0] === 0x4d && head[1] === 0x5a
+    const isELF = head[0] === 0x7f && head[1] === 0x45 && head[2] === 0x4c && head[3] === 0x46
+    if (!isPE && !isELF) {
+      return { ok: false, code: 'bad-binary', message: '下载内容不是可执行文件（可能是反代返回的错误页）' }
+    }
+    return { ok: true }
+  }
+  if (kind === 'json') {
+    const s = head.toString('utf8').trimStart()
+    if (!s.startsWith('{') && !s.startsWith('[')) {
+      return { ok: false, code: 'bad-json', message: '下载内容不是 JSON（可能是反代返回的错误页）' }
+    }
+    return { ok: true }
+  }
+  return { ok: true }
+}
+
+/**
+ * 计算进度百分比（0-100），总大小未知时返回 null。
+ *
+ * @param {number} received
+ * @param {number|null} total
+ */
+export function progressPercent(received, total) {
+  if (!Number.isFinite(total) || total <= 0) return null
+  const p = Math.floor((received / total) * 100)
+  return p < 0 ? 0 : p > 100 ? 100 : p
+}
+

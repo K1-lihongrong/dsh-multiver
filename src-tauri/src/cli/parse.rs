@@ -12,9 +12,13 @@ use super::CliCommand;
 /// - `Err(msg)`：参数有误
 pub fn parse(args: &[String]) -> Result<Option<CliCommand>, String> {
     // GUI 专用参数（内部）：出现即走 GUI 路径，不当作 CLI。
-    const GUI_FLAGS: [&str; 2] = ["--launch-version", "--debug-progress"];
+    // `--open-settings` 允许 `=值` 形式，故用前缀匹配而非全等。
+    const GUI_FLAGS: [&str; 3] = ["--launch-version", "--open-settings", "--debug-progress"];
     if let Some(first) = args.first() {
-        if GUI_FLAGS.contains(&first.as_str()) {
+        if GUI_FLAGS
+            .iter()
+            .any(|f| first == f || first.starts_with(&format!("{}=", f)))
+        {
             return Ok(None);
         }
     }
@@ -193,6 +197,18 @@ mod tests {
             Ok(None)
         ));
         assert!(matches!(parse(&args(&["--debug-progress"])), Ok(None)));
+    }
+
+    /// `--open-settings` 支持独立参数与 `=值` 两种写法，都必须走 GUI。
+    /// 曾因只做全等匹配，`--open-settings=paths` 被当作未知参数报错。
+    #[test]
+    fn open_settings_forms_pass_through() {
+        assert!(matches!(parse(&args(&["--open-settings"])), Ok(None)));
+        assert!(matches!(
+            parse(&args(&["--open-settings", "paths"])),
+            Ok(None)
+        ));
+        assert!(matches!(parse(&args(&["--open-settings=paths"])), Ok(None)));
     }
 
     #[test]
