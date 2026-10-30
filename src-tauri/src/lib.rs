@@ -1,5 +1,6 @@
 mod actions;
 mod backup;
+mod catalog;
 mod cli;
 mod commands;
 mod config;
@@ -10,6 +11,7 @@ mod jobobj;
 mod launcher;
 mod logging;
 mod maintenance;
+mod net;
 mod paths;
 #[cfg(unix)]
 mod procreg;
@@ -66,6 +68,17 @@ pub(crate) static LAUNCH_MODE: std::sync::Mutex<Option<String>> = std::sync::Mut
 /// 发出时前端还没 `listen`，事件丢失 → 加载页永远停在「正在启动」。
 /// 故额外用一个可查询的状态兜底，与 `LAUNCH_MODE` 同一套路。
 pub(crate) static LAUNCH_ERROR: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+
+/// 待滚动到的设置区块（v0.3.2）：命令行带 `--open-settings=<section>` 时记录。
+///
+/// 与 `LAUNCH_MODE` 同一套路——setup 早于前端挂载，事件会丢失，
+/// 故存成可查询的状态，前端首帧主动取。
+pub(crate) static OPEN_SETTINGS: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+
+/// 锁定 `OPEN_SETTINGS`；中毒时继续用内部数据。
+pub(crate) fn lock_open_settings() -> std::sync::MutexGuard<'static, Option<String>> {
+    OPEN_SETTINGS.lock().unwrap_or_else(|e| e.into_inner())
+}
 
 /// 锁定 `LAUNCH_MODE`；中毒时继续用内部数据（同 `lock_procs` 的理由）。
 pub(crate) fn lock_launch_mode() -> std::sync::MutexGuard<'static, Option<String>> {
@@ -199,6 +212,12 @@ pub fn run() {
         *lock_launch_mode() = Some(version);
         // 新一次启动，清掉上一轮可能残留的错误
         *lock_launch_error() = None;
+    }
+
+    // v0.3.2：--open-settings=<section> 同样必须在窗口创建前记录
+    // （前端可能早于 setup 完成 onMounted，事件靠不住）。
+    if let Some(section) = window::parse_open_settings(&std::env::args().collect::<Vec<_>>()) {
+        *lock_open_settings() = Some(section);
     }
 
     // 进程级 AUMID 必须在任何窗口创建之前设置（Tauri 在 setup 回调前就建了主窗口）。
@@ -372,6 +391,25 @@ pub fn run() {
                             }
                         }
                     });
+                } else if let Some(section) = window::parse_open_settings(&args) {
+                    // 插件面板的「打开 multiver 路径设置」走这里（docs/交互设计约定.md §2.8）。
+                    // 与 launch-version 一样要先确保主窗口存在，再发事件让前端滚动。
+                    match window::ensure_main_window(app) {
+                        Ok(path) => {
+                            eprintln!("[dsh-multiver] 单实例 open-settings：主窗口 {}", path);
+                        }
+                        Err(e) => {
+                            log_app("single-instance", &format!("open-settings 前重建主窗口失败: {}", e));
+                        }
+                    }
+                    *lock_open_settings() = Some(section.clone());
+                    {
+                        use tauri::Emitter;
+                        let _ = app.emit(
+                            "open-settings",
+                            serde_json::json!({ "section": section.clone() }),
+                        );
+                    }
                 } else {
                     match window::ensure_main_window(app) {
                         Ok(path) => {
@@ -426,6 +464,7 @@ pub fn run() {
             commands::apply_import,
             commands::get_launch_mode,
             commands::get_launch_error,
+            commands::take_open_settings,
             commands::show_main_window,
             commands::is_version_open,
             commands::list_running_versions,
@@ -440,6 +479,8 @@ pub fn run() {
             commands::ds_check_updates,
             commands::ds_inspect_spec,
             commands::ds_probe_registries,
+            commands::ds_plugin_catalog,
+            commands::ds_plugin_catalog_check,
         ])
         .setup(move |app| {
             use tauri::Manager;

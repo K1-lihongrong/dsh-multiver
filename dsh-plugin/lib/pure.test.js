@@ -18,6 +18,9 @@ import {
   normalizePath,
   compatOf,
   checkDownloadUrl,
+  orderSources,
+  checkPayloadShape,
+  progressPercent,
 } from './pure.js'
 
 /** 建临时目录，测试结束自动删。 */
@@ -206,3 +209,91 @@ test('checkDownloadUrl: 非法 URL 被拒绝', () => {
 test('checkDownloadUrl: 域名大小写不敏感', () => {
   assert.equal(checkDownloadUrl('https://GitHub.COM/x', HOSTS).ok, true)
 })
+
+// ---------- orderSources ----------
+
+test('orderSources: 无 preferred 时返回原序副本', () => {
+  const chain = [{ name: 'a' }, { name: 'b' }]
+  const out = orderSources(chain, null)
+  assert.deepEqual(out.map((x) => x.name), ['a', 'b'])
+  assert.notStrictEqual(out, chain)
+})
+
+test('orderSources: preferred 提到队首', () => {
+  const chain = [{ name: 'a' }, { name: 'b' }, { name: 'c' }]
+  const out = orderSources(chain, 'b')
+  assert.deepEqual(out.map((x) => x.name), ['b', 'a', 'c'])
+})
+
+test('orderSources: preferred 已在队首时不改动', () => {
+  const chain = [{ name: 'a' }, { name: 'b' }]
+  const out = orderSources(chain, 'a')
+  assert.deepEqual(out.map((x) => x.name), ['a', 'b'])
+})
+
+test('orderSources: preferred 不存在时返回原序', () => {
+  const chain = [{ name: 'a' }, { name: 'b' }]
+  const out = orderSources(chain, 'zzz')
+  assert.deepEqual(out.map((x) => x.name), ['a', 'b'])
+})
+
+// ---------- checkPayloadShape ----------
+
+test('checkPayloadShape: PE 头通过', () => {
+  const head = Buffer.from([0x4d, 0x5a, 0x90, 0x00])
+  assert.equal(checkPayloadShape(head, 'exe').ok, true)
+})
+
+test('checkPayloadShape: ELF 头通过', () => {
+  const head = Buffer.from([0x7f, 0x45, 0x4c, 0x46])
+  assert.equal(checkPayloadShape(head, 'exe').ok, true)
+})
+
+test('checkPayloadShape: HTML 错误页被识破', () => {
+  const head = Buffer.from('<!DOCTYPE html><html>', 'utf8')
+  const r = checkPayloadShape(head, 'exe')
+  assert.equal(r.ok, false)
+  assert.equal(r.code, 'bad-binary')
+})
+
+test('checkPayloadShape: 空内容被拒绝', () => {
+  const r = checkPayloadShape(Buffer.alloc(0), 'exe')
+  assert.equal(r.ok, false)
+  assert.equal(r.code, 'empty-body')
+})
+
+test('checkPayloadShape: JSON 以 { 开头通过', () => {
+  assert.equal(checkPayloadShape(Buffer.from('  {"a":1}'), 'json').ok, true)
+})
+
+test('checkPayloadShape: JSON 以 [ 开头通过', () => {
+  assert.equal(checkPayloadShape(Buffer.from('[]'), 'json').ok, true)
+})
+
+test('checkPayloadShape: HTML 冒充 JSON 被识破', () => {
+  const r = checkPayloadShape(Buffer.from('<html>'), 'json')
+  assert.equal(r.ok, false)
+  assert.equal(r.code, 'bad-json')
+})
+
+test('checkPayloadShape: text 类型不校验内容', () => {
+  assert.equal(checkPayloadShape(Buffer.from('anything'), 'text').ok, true)
+})
+
+// ---------- progressPercent ----------
+
+test('progressPercent: 正常计算', () => {
+  assert.equal(progressPercent(512, 1024), 50)
+})
+
+test('progressPercent: total 未知时返回 null', () => {
+  assert.equal(progressPercent(512, null), null)
+  assert.equal(progressPercent(512, 0), null)
+  assert.equal(progressPercent(512, NaN), null)
+})
+
+test('progressPercent: 超出范围被夹紧', () => {
+  assert.equal(progressPercent(2048, 1024), 100)
+  assert.equal(progressPercent(-1, 1024), 0)
+})
+

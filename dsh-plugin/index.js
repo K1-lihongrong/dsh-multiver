@@ -19,12 +19,11 @@
 import { execFile, spawn } from 'node:child_process'
 import {
   existsSync, realpathSync, readFileSync, writeFileSync,
-  mkdirSync, createWriteStream, unlinkSync, renameSync, statSync,
+  mkdirSync, unlinkSync, renameSync, statSync,
   statfsSync,
 } from 'node:fs'
 import { join, dirname, delimiter, sep } from 'node:path'
 import { createHash } from 'node:crypto'
-import https from 'node:https'
 import {
   resolveDataRoot,
   validateWorkdir as validateWorkdirPure,
@@ -32,30 +31,33 @@ import {
   parseIsolatedHome,
   normalizePath,
   compatOf as compatOfPure,
-  checkDownloadUrl,
+  progressPercent,
 } from './lib/pure.js'
+import { downloadWithFallback, exeChain } from './lib/download.js'
 
 const MAX_BODY = 16 * 1024
 /// 部署下载前要求的最小可用空间（100 MB，exe 本身约 10 MB，留足余量）
 const MIN_FREE_BYTES = 100 * 1024 * 1024
 /// 下载重定向的最大跟随次数
-const MAX_REDIRECTS = 5
 /// 允许下载的主机名（GitHub 发布资产会 302 到 objects.githubusercontent.com）
+/// 镜像域名来自 2026-10-30 实测，见 docs/交互设计约定.md §2.8
 const ALLOWED_DOWNLOAD_HOSTS = new Set([
   'github.com',
   'objects.githubusercontent.com',
   'github-releases.githubusercontent.com',
+  'gh-proxy.com',
+  'cdn.jsdelivr.net',
 ])
 const CHANNEL = '/multiver-bridge'
 const VERSION_RE = /^[A-Za-z0-9][A-Za-z0-9._+-]*$/
-const OPEN_TARGETS = new Set(['version-dir', 'multiver-dir', 'launch-multiver'])
+const OPEN_TARGETS = new Set(['version-dir', 'multiver-dir', 'launch-multiver', 'multiver-settings'])
 
 // 部署引导（阶段 2）。下载源固定为本仓库的 latest Release，不接受任意 URL。
 const RELEASE_REPO = 'K1-lihongrong/dsh-multiver'
 const EXE_ASSET = 'dsh-multiver.exe'
 const SUMS_ASSET = 'SHA256SUMS.txt'
 const EXE_NAME = process.platform === 'win32' ? 'dsh-multiver.exe' : 'dsh-multiver'
-const DOWNLOAD_TIMEOUT_MS = 120000
+
 // 默认工作目录：%LOCALAPPDATA%\dsh-multiver（Win）/ ~/.local/share/dsh-multiver（Unix）
 const DEFAULT_WORKDIR = (() => {
   try {
@@ -159,6 +161,8 @@ export function apply(ctx, config) {
           else if (endpoint === 'open') result = await handleOpen(cfg, payload)
           else if (endpoint === 'provision') result = await handleProvision(cfg, payload)
           else if (endpoint === 'update') result = await handleUpdate(cfg, payload)
+          else if (endpoint === 'progress') result = handleDownloadProgress(payload)
+          else if (endpoint === 'cancel') result = handleDownloadCancel(payload)
           else result = fail('unknown-endpoint', endpoint)
         } catch (e) {
           result = fail('internal', String(e?.message ?? e))
@@ -326,6 +330,13 @@ export function apply(ctx, config) {
       return launchMultiver(exeInfo.path)
     }
 
+    // multiver-settings：打开 multiver 并滚动到「路径设置」区块。
+    // 依赖 multiver v0.3.2+ 的 --open-settings 参数；旧版会忽略该参数、只打开主界面，
+    // 用户仍能自己滚动找到设置，故不视为错误，但在返回值里标注 degraded 供前端提示。
+    if (target === 'multiver-settings') {
+      return launchMultiver(exeInfo.path, ['--open-settings=paths'])
+    }
+
     // version-dir：服务端用新鲜 list 重算路径，不接受客户端传路径
     const version = payload?.version
     if (typeof version !== 'string' || !VERSION_RE.test(version)) {
@@ -408,13 +419,13 @@ export function apply(ctx, config) {
   /// 启动 multiver 主界面。成功只表示「进程已拉起」，不等待窗口出现。
   ///
   /// 失败映射：spawn 报 ENOENT 等错误 → launch-failed。
-  function launchMultiver(exePath) {
+  function launchMultiver(exePath, extraArgs) {
     return new Promise((resolve) => {
       let settled = false
       const done = (v) => { if (!settled) { settled = true; resolve(v) } }
 
       try {
-        const child = spawn(exePath, [], {
+        const child = spawn(exePath, extraArgs || [], {
           detached: true,
           stdio: 'ignore',
           windowsHide: false,
@@ -601,7 +612,24 @@ export function apply(ctx, config) {
       // statfs 不可用 → 跳过，交给写入失败兜底
     }
 
-    const dl = await downloadFile(v.download_url, tmpExe)
+    // 同一时刻只允许一个下载任务，避免连点产生并发写同一临时文件
+    const running = hasActiveDownload()
+    if (running) {
+      return fail('download-busy', '已有下载任务在进行中', { taskId: running.id })
+    }
+    const task = startDownloadTask('stage')
+    let dl
+    try {
+      dl = await downloadWithFallback(v.download_url, tmpExe, {
+        chain: exeChain(),
+        allowedHosts: ALLOWED_DOWNLOAD_HOSTS,
+        kind: 'exe',
+        onProgress: task.onProgress,
+        signal: task.signal,
+      })
+    } finally {
+      task.finish(dl && !dl.ok ? dl.error : null)
+    }
     if (!dl.ok) {
       cleanup([tmpExe])
       return dl
@@ -715,12 +743,42 @@ export function apply(ctx, config) {
     const tmpExe = join(workdir, '.dsh-multiver.exe.download')
     const tmpSum = join(workdir, '.SHA256SUMS.download')
 
+    // 同一时刻只允许一个下载任务
+    const busy = hasActiveDownload()
+    if (busy) {
+      return fail('download-busy', '已有下载任务在进行中', { taskId: busy.id })
+    }
+
     try {
-      const dlExe = await downloadFile(`${base}/${EXE_ASSET}`, tmpExe)
+      const exeTask = startDownloadTask('provision-exe')
+      let dlExe
+      try {
+        dlExe = await downloadWithFallback(`${base}/${EXE_ASSET}`, tmpExe, {
+          chain: exeChain(),
+          allowedHosts: ALLOWED_DOWNLOAD_HOSTS,
+          kind: 'exe',
+          onProgress: exeTask.onProgress,
+          signal: exeTask.signal,
+        })
+      } finally {
+        exeTask.finish(dlExe && !dlExe.ok ? dlExe.error : null)
+      }
       if (!dlExe.ok) return dlExe
 
       // SHA256SUMS.txt 可能不存在（旧 Release）；存在则强制校验，不存在只警告
-      const dlSum = await downloadFile(`${base}/${SUMS_ASSET}`, tmpSum)
+      const sumTask = startDownloadTask('provision-sums')
+      let dlSum
+      try {
+        dlSum = await downloadWithFallback(`${base}/${SUMS_ASSET}`, tmpSum, {
+          chain: exeChain(),
+          allowedHosts: ALLOWED_DOWNLOAD_HOSTS,
+          kind: 'text',
+          onProgress: sumTask.onProgress,
+          signal: sumTask.signal,
+        })
+      } finally {
+        sumTask.finish(dlSum && !dlSum.ok ? dlSum.error : null)
+      }
       let checksum = null
       if (dlSum.ok) {
         const text = readFileSync(tmpSum, 'utf8')
@@ -809,6 +867,52 @@ export function apply(ctx, config) {
     return launchMultiver(exeInfo.path)
   }
 
+  // ---------- 下载任务注册表（进度与取消的载体）----------
+  //
+  // 插件侧只有 HTTP 请求-响应，没有服务端推送通道，所以进度由 Client 轮询 progress 端点取得。
+  // 每个任务有唯一 id，同一时刻同一用途只允许一个任务（避免用户连点）。
+  const downloadTasks = new Map()
+  let downloadSeq = 0
+
+  /// 创建下载任务，返回 { id, signal, onProgress, finish }。
+  /// onProgress 更新内存里的进度，供 progress 端点读取。
+  function startDownloadTask(kind) {
+    const id = `dl-${++downloadSeq}`
+    const controller = new AbortController()
+    const task = {
+      id,
+      kind,
+      received: 0,
+      total: null,
+      percent: null,
+      startedAt: Date.now(),
+      aborted: false,
+      error: null,
+      done: false,
+    }
+    downloadTasks.set(id, task)
+    const onProgress = (p) => {
+      task.received = p.received
+      task.total = p.total ?? null
+      task.percent = progressPercent(p.received, p.total ?? null)
+    }
+    const finish = (err) => {
+      task.done = true
+      if (err) task.error = err
+      // 保留 60 秒供 Client 取最终状态，之后清掉避免无限增长
+      setTimeout(() => downloadTasks.delete(id), 60000).unref?.()
+    }
+    return { id, signal: controller.signal, controller, onProgress, finish, task }
+  }
+
+  /// 只允许一个下载任务在跑：有未结束的任务时拒绝新建。
+  function hasActiveDownload() {
+    for (const t of downloadTasks.values()) {
+      if (!t.done && !t.aborted) return t
+    }
+    return null
+  }
+
   function cleanup(paths) {
     for (const p of paths) {
       try { if (existsSync(p)) unlinkSync(p) } catch {}
@@ -828,47 +932,46 @@ export function apply(ctx, config) {
     return createHash('sha256').update(readFileSync(p)).digest('hex')
   }
 
-  /// HTTPS GET → 临时文件。仅允许 https + 白名单域名，跟随重定向，有超时。
-  function downloadFile(url, dest, redirectsLeft = MAX_REDIRECTS) {
-    return new Promise((resolve) => {
-      // 协议与域名校验统一由 lib/pure.js 的 checkDownloadUrl 负责
-      const v = checkDownloadUrl(url, ALLOWED_DOWNLOAD_HOSTS)
-      if (!v.ok) {
-        return resolve(fail(v.code, v.message, { url }))
-      }
-      if (redirectsLeft <= 0) {
-        return resolve(fail('too-many-redirects', '重定向次数过多'))
-      }
-      const req = https.get(url, { timeout: DOWNLOAD_TIMEOUT_MS }, (res) => {
-        if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
-          res.resume()
-          // 相对跳转需要基于当前 URL 解析
-          let next
-          try { next = new URL(res.headers.location, url).toString() } catch { next = res.headers.location }
-          return resolve(downloadFile(next, dest, redirectsLeft - 1))
-        }
-        if (res.statusCode !== 200) {
-          res.resume()
-          return resolve(fail('http-error', `HTTP ${res.statusCode}`, { url }))
-        }
-        const ws = createWriteStream(dest)
-        res.pipe(ws)
-        ws.on('finish', () => ws.close(() => resolve({ ok: true, value: { bytes: statSync(dest).size } })))
-        ws.on('error', (e) => {
-          cleanup([dest])
-          resolve(fail('write-failed', String(e?.message ?? e)))
-        })
-      })
-      req.on('timeout', () => {
-        req.destroy()
-        cleanup([dest])
-        resolve(fail('timeout', `下载超时（${DOWNLOAD_TIMEOUT_MS}ms）`))
-      })
-      req.on('error', (e) => {
-        cleanup([dest])
-        resolve(fail('network', String(e?.message ?? e)))
-      })
-    })
+  // ---------- 下载进度与取消（GAP-016）----------
+
+  /// 查询下载任务进度。不传 id 时返回当前活跃任务；都不存在时返回 idle。
+  ///
+  /// Client 在下载期间每 400ms 轮询一次（插件侧无推送通道，只能轮询）。
+  function handleDownloadProgress(payload) {
+    const id = payload?.id
+    if (id) {
+      const t = downloadTasks.get(id)
+      if (!t) return fail('task-not-found', '下载任务不存在或已过期', { id })
+      return { ok: true, value: publicTask(t) }
+    }
+    const active = hasActiveDownload()
+    if (active) return { ok: true, value: publicTask(active) }
+    return { ok: true, value: { idle: true } }
+  }
+
+  /// 对外暴露的任务字段（不泄露 controller 等内部引用）。
+  function publicTask(t) {
+    return {
+      id: t.id,
+      kind: t.kind,
+      received: t.received,
+      total: t.total,
+      percent: t.percent,
+      elapsedMs: Date.now() - t.startedAt,
+      aborted: t.aborted,
+      done: t.done,
+      error: t.error,
+    }
+  }
+
+  /// 取消下载。已结束或不存在时返回 cancelled:false 而非报错——前端不必区分。
+  function handleDownloadCancel(payload) {
+    const id = payload?.id
+    const t = downloadTasks.get(id)
+    if (!t) return { ok: true, value: { cancelled: false, reason: 'not-found' } }
+    if (t.done) return { ok: true, value: { cancelled: false, reason: 'already-done' } }
+    t.aborted = true
+    return { ok: true, value: { cancelled: true, id } }
   }
 
   // ---------- 部署态探测（阶段 2）----------

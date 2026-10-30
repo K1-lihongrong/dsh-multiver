@@ -36,6 +36,31 @@ pub(crate) fn parse_launch_version(args: &[String]) -> Option<String> {
     None
 }
 
+/// 解析 `--open-settings=<section>`（也可写成独立参数 `--open-settings <section>`）。
+///
+/// 目前只支持 paths：主窗口就绪后滚动到「路径设置」区块。
+/// 由 dsh 插件面板的「打开 multiver 路径设置」按钮触发（见 docs/交互设计约定.md §2.8）。
+pub(crate) fn parse_open_settings(args: &[String]) -> Option<String> {
+    let mut it = args.iter();
+    while let Some(a) = it.next() {
+        if let Some(v) = a.strip_prefix("--open-settings=") {
+            let v = v.trim();
+            return if v.is_empty() {
+                None
+            } else {
+                Some(v.to_string())
+            };
+        }
+        if a == "--open-settings" {
+            return it
+                .next()
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty());
+        }
+    }
+    None
+}
+
 /// 只设**进程级** AUMID——必须在任何窗口创建之前调用。
 ///
 /// 若进程无 AUMID，任务栏会退化为"找指向该 exe 的快捷方式并取其图标"，

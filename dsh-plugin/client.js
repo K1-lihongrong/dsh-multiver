@@ -71,6 +71,76 @@ window.__ModuleLoader__.load({
       })
     }
 
+    /// 下载进度轮询。
+    ///
+    /// 插件侧没有服务端推送通道（只有 HTTP 请求-响应），所以进度靠轮询 progress 端点取得。
+    /// 下载请求本身是阻塞的 fetch，本 hook 与它并发运行：active 为 true 时开轮询，
+    /// 变回 false 时停止。
+    ///
+    /// 返回 { task, cancel, cancelling }：
+    ///   task        最近一次拿到的任务状态（含 percent / received / total / elapsedMs），无任务时为 null
+    ///   cancel()    请求取消当前任务
+    ///   cancelling  已发出取消请求、等待生效
+    function useDownloadProgress(active) {
+      const [task, setTask] = React.useState(null)
+      const [cancelling, setCancelling] = React.useState(false)
+      const taskIdRef = React.useRef(null)
+
+      React.useEffect(() => {
+        if (!active) {
+          setTask(null)
+          setCancelling(false)
+          taskIdRef.current = null
+          return
+        }
+        let stopped = false
+        let timer = null
+        const tick = async () => {
+          if (stopped) return
+          try {
+            const r = await rpc('progress', {})
+            if (stopped) return
+            const v = r?.ok ? r.value : null
+            if (v && !v.idle) {
+              taskIdRef.current = v.id
+              setTask(v)
+            }
+          } catch {}
+          if (!stopped) timer = setTimeout(tick, 400)
+        }
+        tick()
+        return () => {
+          stopped = true
+          if (timer) clearTimeout(timer)
+        }
+      }, [active])
+
+      const cancel = React.useCallback(async () => {
+        const id = taskIdRef.current
+        if (!id) return
+        setCancelling(true)
+        try { await rpc('cancel', { id }) } catch {}
+      }, [])
+
+      return { task, cancel, cancelling }
+    }
+
+    /// 字节数转可读大小。
+    function fmtBytes(n) {
+      if (!Number.isFinite(n) || n <= 0) return '0 B'
+      const units = ['B', 'KB', 'MB', 'GB']
+      let i = 0
+      let v = n
+      while (v >= 1024 && i < units.length - 1) { v /= 1024; i++ }
+      return (i === 0 ? v : v.toFixed(1)) + ' ' + units[i]
+    }
+
+    /// 已用时长（秒）。
+    function fmtElapsed(ms) {
+      const s = Math.max(0, Math.floor((ms || 0) / 1000))
+      return s < 60 ? s + 's' : Math.floor(s / 60) + 'm' + (s % 60) + 's'
+    }
+
     // 部署向导（阶段 2）：provisioned=false 时替代全部功能 UI。
     // 三步：选工作目录 → 获取 exe（下载/已有）→ 完成并启动。
     function ProvisionWizard(props) {
@@ -83,6 +153,8 @@ window.__ModuleLoader__.load({
       const [busy, setBusy] = React.useState(false)
       const [err, setErr] = React.useState(null)
       const [result, setResult] = React.useState(null)
+      // 仅在下载阶段轮询进度，避免无谓请求
+      const dl = useDownloadProgress(busy && mode === 'download' && step === 2)
 
       const run = React.useCallback(async (payload, onOk) => {
         setBusy(true)
@@ -193,12 +265,36 @@ window.__ModuleLoader__.load({
                   onChange: (e) => setAdoptPath(e.target.value),
                   disabled: busy,
                 })),
-          busy && h('div', { style: { marginTop: 10, fontSize: 12, opacity: .75 } }, t('provision.working')),
+          busy && mode === 'download' && h('div', { style: { marginTop: 12 } },
+            h('div', { style: { height: 4, borderRadius: 2, background: 'rgba(128,128,128,.22)', overflow: 'hidden' } },
+              h('div', {
+                style: {
+                  height: '100%',
+                  width: (dl.task?.percent ?? 0) + '%',
+                  background: 'currentColor',
+                  opacity: .55,
+                  transition: 'width .25s linear',
+                },
+              })),
+            h('div', { style: { display: 'flex', justifyContent: 'space-between', fontSize: 11.5, opacity: .7, marginTop: 5 } },
+              h('span', null,
+                dl.task
+                  ? (dl.task.percent == null
+                      ? fmtBytes(dl.task.received) + ' / ?'
+                      : dl.task.percent + '% · ' + fmtBytes(dl.task.received) + ' / ' + fmtBytes(dl.task.total))
+                  : t('download.connecting')),
+              h('span', null, fmtElapsed(dl.task?.elapsedMs ?? 0)))),
+          busy && mode === 'adopt' && h('div', { style: { marginTop: 10, fontSize: 12, opacity: .75 } }, t('provision.working')),
           err && h('div', {
             style: { marginTop: 10, padding: '8px 12px', borderRadius: 6, background: 'rgba(220,50,50,.12)', fontSize: 12 },
           }, errText(err)),
           h('div', { style: rowGap },
             h('button', { style: btnStyle, disabled: busy, onClick: () => { setErr(null); setStep(1) } }, t('provision.back')),
+            busy && mode === 'download' && h('button', {
+              style: btnStyle,
+              disabled: dl.cancelling,
+              onClick: dl.cancel,
+            }, dl.cancelling ? t('download.cancelling') : t('download.cancel')),
             h('button', {
               style: { ...btnStyle, opacity: busy || (mode === 'adopt' ? !adoptPath.trim() : !workdir.trim()) ? .5 : 1 },
               disabled: busy || (mode === 'adopt' ? !adoptPath.trim() : !workdir.trim()),
@@ -239,6 +335,8 @@ window.__ModuleLoader__.load({
       const [msg, setMsg] = React.useState(null)
       const [err, setErr] = React.useState(null)
       const [confirming, setConfirming] = React.useState(false)
+      // 暂存更新会下载约 10 MB：期间轮询进度，让用户看到「还要多久」
+      const dl = useDownloadProgress(busy)
 
       const check = React.useCallback(async () => {
         setBusy(true); setErr(null); setMsg(null)
@@ -304,8 +402,12 @@ window.__ModuleLoader__.load({
           h('span', { style: { fontWeight: 600 } }, t('update.title')),
           info && info.current && h('span', { style: { opacity: .65 } },
             t('update.current', { v: info.current })),
-          busy && h('span', { style: { opacity: .6 } }, t('update.working'))
+          busy && h('span', { style: { opacity: .6 } },
+            dl.task ? t('update.workingWithTime', { s: fmtElapsed(dl.task.elapsedMs) }) : t('update.working'))
         ),
+        // 更新期间不可取消：multiver 的 update 是阻塞子进程，中途终止会留下半替换的 exe
+        busy && info && info.hasUpdate && h('div', { style: { fontSize: 11.5, opacity: .6, marginBottom: 4 } },
+          t('update.noCancelHint')),
         !info && !err && !busy && h('div', { style: { fontSize: 12, opacity: .6 } }, t('update.checking')),
         info && !info.hasUpdate && h('div', { style: { ...row } },
           h('span', { style: { opacity: .75 } }, info.error
@@ -576,6 +678,13 @@ window.__ModuleLoader__.load({
             style: btnStyle,
           }, t('launchMultiver')),
           h('button', {
+            onClick: () => runAction(
+              () => sendAction(t, 'open', { target: 'multiver-settings' }),
+              t('openMultiverSettings') + ' ✓'
+            ),
+            style: btnStyle,
+          }, t('openMultiverSettings')),
+          h('button', {
             onClick: async () => {
               const r = await copyDiagnostics(v)
               setCopyFallback(r.ok ? null : r.text)
@@ -718,6 +827,7 @@ window.__ModuleLoader__.load({
             'err.launch-failed': '启动 multiver 失败',
             launchMultiver: '打开 multiver',
             openMultiverDir: '打开 multiver 目录',
+            openMultiverSettings: '打开 multiver 路径设置',
             openVersionDir: '打开版本目录',
             copyDiagnostics: '复制诊断信息',
             copyFallbackHint: '剪贴板不可用，请手动复制以下内容：',
@@ -782,8 +892,17 @@ window.__ModuleLoader__.load({
             'err.embedded-blocked': '内嵌窗口下不能执行更新',
             'update.staged': '已暂存，multiver 下次启动时自动安装',
             'update.pendingInstall': '待安装：v{v}（multiver 下次启动时生效）',
+            'update.workingWithTime': '处理中…（已用 {s}）',
+            'update.noCancelHint': '更新期间不可取消：multiver 的 update 是阻塞调用，中途终止可能留下损坏的文件。',
             'err.download-url-missing': 'Release 资产缺失，无法下载新版本',
             'err.disk-full': '磁盘剩余空间不足',
+            'err.aborted': '已取消',
+            'err.all-sources-failed': '所有下载源均失败（检查网络或稍后重试）',
+            'err.download-busy': '已有下载任务在进行中',
+            'err.bad-binary': '下载内容不是可执行文件（可能是镜像返回了错误页）',
+            'download.connecting': '正在连接…',
+            'download.cancel': '取消下载',
+            'download.cancelling': '正在取消…',
           },
           en: {
             section: 'Versions',
@@ -833,6 +952,7 @@ window.__ModuleLoader__.load({
             'err.launch-failed': 'Failed to launch multiver',
             launchMultiver: 'Open multiver',
             openMultiverDir: 'Open multiver folder',
+            openMultiverSettings: 'Open multiver path settings',
             openVersionDir: 'Open version folder',
             copyDiagnostics: 'Copy diagnostics',
             copyFallbackHint: 'Clipboard unavailable. Copy the text below manually:',
@@ -897,8 +1017,17 @@ window.__ModuleLoader__.load({
             'err.embedded-blocked': 'Update is not allowed from the embedded window',
             'update.staged': 'Staged — installs automatically on next multiver launch',
             'update.pendingInstall': 'Pending install: v{v} (applies on next multiver launch)',
+            'update.workingWithTime': 'Working… ({s} elapsed)',
+            'update.noCancelHint': 'Cannot be cancelled: multiver update is a blocking call and aborting it may leave a corrupted file.',
             'err.download-url-missing': 'Release asset missing, cannot download',
             'err.disk-full': 'Not enough free disk space',
+            'err.aborted': 'Cancelled',
+            'err.all-sources-failed': 'All download sources failed (check network or retry later)',
+            'err.download-busy': 'Another download is in progress',
+            'err.bad-binary': 'Downloaded content is not an executable (mirror may have returned an error page)',
+            'download.connecting': 'Connecting…',
+            'download.cancel': 'Cancel download',
+            'download.cancelling': 'Cancelling…',
           },
         }), 'multiver-bridge: dictionaries')
 

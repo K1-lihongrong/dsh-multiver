@@ -18,13 +18,15 @@
       "name": "@deepseek-harness-tui/dsh-tui",
       "description": "Claude Code 风格的终端界面，像素鲸鱼顶栏与鼠标交互。作者建议全局安装：npm i -g @deepseek-ai/dsh @deepseek-harness-tui/dsh-tui",
       "category": "终端界面",
-      "repo": "https://github.com/ccch1mneyyy/dsh-TUI"
+      "repo": "https://github.com/ccch1mneyyy/dsh-TUI",
+      "tags": ["featured"]
     },
     {
       "name": "dsh-ops",
       "description": "底层操作工具集，减少 Token 消耗与任务耗时",
       "category": "工具增强",
-      "repo": "https://github.com/T-Auto/dsh-ops"
+      "repo": "https://github.com/T-Auto/dsh-ops",
+      "tags": ["featured"]
     },
     {
       "name": "dsh-cost-meter",

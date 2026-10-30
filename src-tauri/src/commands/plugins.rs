@@ -658,3 +658,29 @@ pub(crate) async fn ds_check_updates(
         Err(res.output)
     }
 }
+
+/// 读本地推荐列表（磁盘缓存优先，缺失回退内置副本）。不联网，立即返回。
+#[tauri::command]
+pub(crate) fn ds_plugin_catalog(app: tauri::AppHandle) -> Result<crate::catalog::Catalog, String> {
+    let mdir = manager_dir(&app);
+    let cfg = Config::load(&mdir);
+    let root = cfg.resolve_root(&mdir);
+    crate::catalog::load_local(&root)
+}
+
+/// 检查远端推荐列表是否有更新。有更新时写入磁盘缓存。
+///
+/// force=true 跳过 30 分钟节流窗口（用户手动点刷新）。
+#[tauri::command]
+pub(crate) async fn ds_plugin_catalog_check(
+    app: tauri::AppHandle,
+    force: Option<bool>,
+) -> Result<crate::catalog::CheckResult, String> {
+    let mdir = manager_dir(&app);
+    let cfg = Config::load(&mdir);
+    let root = cfg.resolve_root(&mdir);
+    let force = force.unwrap_or(false);
+    tauri::async_runtime::spawn_blocking(move || crate::catalog::check_remote(&root, force))
+        .await
+        .map_err(|e| format!("检查推荐列表更新失败：{e}"))
+}

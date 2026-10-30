@@ -42,6 +42,7 @@ const launchStage = ref(props.launchError ? "error" : "preparing");
 const launchError = ref(props.launchError || "");
 let unlistenProgress = null;
 let unlistenModeStart = null;
+let unlistenOpenSettings = null;
 
 /// 进入启动态（运行按钮 / 事件兜底）。
 function enterLaunch(version) {
@@ -201,6 +202,21 @@ onMounted(async () => {
     if (p.stage === "error" && p.error) launchError.value = p.error;
   }).then((u) => { unlistenProgress = u; }).catch(() => {});
 
+  // v0.3.2：--open-settings=<section> —— 滚动到对应区块。
+  // setup 阶段 emit 的事件可能早于本监听，故先主动取一次（take 语义，取后即清）。
+  const scrollToSection = (section) => {
+    if (section !== "paths") return;
+    // 等一帧让主界面渲染完成，否则 #path-settings 还不在 DOM 里
+    requestAnimationFrame(() => {
+      goToRootSettings();
+    });
+  };
+  invoke("take_open_settings").then((s) => { if (s) scrollToSection(s); }).catch(() => {});
+  listen("open-settings", (e) => {
+    const p = e.payload || {};
+    if (p.section) scrollToSection(p.section);
+  }).then((u) => { unlistenOpenSettings = u; }).catch(() => {});
+
   // M3b：窗口焦点 / 可见性变化时刷新（去抖 300ms）
   window.addEventListener("focus", scheduleFocusRefresh);
   document.addEventListener("visibilitychange", onAppVisibility);
@@ -266,6 +282,7 @@ onUnmounted(() => {
   if (unlistenCrash) unlistenCrash();
   if (unlistenModeStart) unlistenModeStart();
   if (unlistenProgress) unlistenProgress();
+  if (unlistenOpenSettings) unlistenOpenSettings();
   // M3b：移除焦点/可见性监听并清掉未触发的去抖 timer
   window.removeEventListener("focus", scheduleFocusRefresh);
   document.removeEventListener("visibilitychange", onAppVisibility);
