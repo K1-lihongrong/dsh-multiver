@@ -1,0 +1,64 @@
+{
+  "version": 2,
+  "plugins": [
+    {
+      "name": "dsh-multiver-bridge",
+      "description": "在 dsh 设置页管理 multiver 的多版本与更新",
+      "category": "版本管理",
+      "repo": "https://github.com/K1-lihongrong/dsh-multiver",
+      "tags": ["same-author"]
+    },
+    {
+      "name": "dsh-pocket",
+      "description": "手机扫码远程访问电脑上的 DSH，支持局域网与公网",
+      "category": "远程访问",
+      "repo": "https://github.com/shaobeichen/dsh-pocket"
+    },
+    {
+      "name": "@deepseek-harness-tui/dsh-tui",
+      "description": "Claude Code 风格的终端界面，像素鲸鱼顶栏与鼠标交互。作者建议全局安装：npm i -g @deepseek-ai/dsh @deepseek-harness-tui/dsh-tui",
+      "category": "终端界面",
+      "repo": "https://github.com/ccch1mneyyy/dsh-TUI"
+    },
+    {
+      "name": "dsh-ops",
+      "description": "底层操作工具集，减少 Token 消耗与任务耗时",
+      "category": "工具增强",
+      "repo": "https://github.com/T-Auto/dsh-ops"
+    },
+    {
+      "name": "dsh-cost-meter",
+      "description": "会话费用追踪，含峰谷计价、多模型价格与额度查询",
+      "category": "费用统计",
+      "repo": "https://github.com/Han-1413141/dsh-cost-meter",
+      "minDshVersion": "0.2.0"
+    },
+    {
+      "name": "@smalltailqwq/dsh-client-ui-skin-deep-whale-manager",
+      "description": "皮肤管理器，安装后可在设置页切换与调整各款深海主题",
+      "category": "主题皮肤",
+      "repo": "https://github.com/Small-tailqwq/dsh-deep-whale"
+    },
+    {
+      "name": "dsh-bili-scroll",
+      "spec": "https://github.com/c1overzz/dsh-bili-scroll/releases/download/v2.0.2/dsh-bili-scroll-2.0.2.tgz",
+      "description": "每天自动刷一轮 B 站，读字幕挑出值得的写日报，值得的 @ 你",
+      "category": "内容聚合",
+      "repo": "https://github.com/c1overzz/dsh-bili-scroll"
+    },
+    {
+      "name": "dsh-bili-whale",
+      "spec": "github:Alterssss/dsh-bili-whale",
+      "description": "按自己的作息刷 B 站，写两本日记，值得的 @ 你（不是定时任务，有生物钟和克制）",
+      "category": "内容聚合",
+      "repo": "https://github.com/Alterssss/dsh-bili-whale",
+      "noNpm": true
+    },
+    {
+      "name": "@tt-a1i/archify-dsh",
+      "description": "把想法、计划或代码库转成可交互的 HTML 图。仅适配 dsh 0.1.2-rc.1，更高版本安装可能被拒",
+      "category": "可视化",
+      "repo": "https://github.com/tt-a1i/archify"
+    }
+  ]
+}
