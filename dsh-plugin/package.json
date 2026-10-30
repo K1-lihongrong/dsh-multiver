@@ -40,6 +40,7 @@
     "locale/*.json",
     "icon.svg",
     "README.md",
+    "LICENSE",
     "install.ps1",
     "uninstall.ps1"
   ],
