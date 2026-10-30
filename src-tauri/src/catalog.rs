@@ -1,12 +1,18 @@
 //! 推荐插件列表（设计见 docs/交互设计约定.md §2.8）。
 //!
-//! 列表源是仓库的 `docs/plugins.json`，运行时拉取。拉取失败时回退到编译期嵌入的副本，
-//! 保证断网或镜像全挂时推荐页仍有内容（标注「可能不是最新」）。
+//! 数据源分三层：
+//!   1. 编译期嵌入的副本（`include_str!`）—— 首次打开时的初始内容
+//!   2. 磁盘缓存 `<数据根>/cache/plugins.json` —— 上次成功拉取的内容
+//!   3. 远端 `docs/plugins.json` —— 每次检查更新时的比对源
 //!
-//! 插件不缓存到磁盘：列表很小（几 KB），每次打开推荐页拉一次即可，
-//! 进程内缓存 30 分钟避免频繁请求。
+//! 打开推荐页的流程：
+//!   a. `load_local()` 立即返回（磁盘缓存 → 内置），不联网
+//!   b. `check_remote()` 后台拉远端，与本地做 sha256 比对，不同则写盘
+//!   c. 前端拿到 `updated=true` 后再次 `load_local()` 渲染新内容
 
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
@@ -14,14 +20,17 @@ use std::time::{Duration, Instant};
 const CATALOG_URL: &str =
     "https://raw.githubusercontent.com/K1-lihongrong/dsh-multiver/main/docs/plugins.json";
 
-/// 编译期嵌入的副本，拉取失败时使用。
+/// 编译期嵌入的副本，无磁盘缓存时使用。
 const BUILTIN: &str = include_str!("../../docs/plugins.json");
 
 /// 支持的 schema 版本。
 const SUPPORTED_VERSION: u32 = 2;
 
-/// 进程内缓存有效期。
-const CACHE_TTL: Duration = Duration::from_secs(30 * 60);
+/// 检查更新的节流窗口：窗口内重复打开推荐页不重新检查。
+const CHECK_TTL: Duration = Duration::from_secs(30 * 60);
+
+/// 缓存文件名（位于 `<数据根>/cache/`）。
+const CACHE_FILE: &str = "plugins.json";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CatalogPlugin {
@@ -51,74 +60,154 @@ struct RawCatalog {
     plugins: Vec<CatalogPlugin>,
 }
 
-/// 返回给前端的列表。
+/// 当前展示的列表。
 #[derive(Debug, Clone, Serialize)]
 pub struct Catalog {
     pub plugins: Vec<CatalogPlugin>,
-    /// 实际使用的源：网络源名（direct / gh-proxy / jsdelivr）或 "builtin"。
-    pub source: String,
-    /// 是否来自内置副本（即拉取失败）。
-    pub stale: bool,
-    /// 拉取失败时的原因，供排查与提示。
+}
+
+/// 一次远端检查的结果。
+#[derive(Debug, Clone, Serialize)]
+pub struct CheckResult {
+    /// 是否真的发起了检查。false = 节流窗口内跳过。
+    pub checked: bool,
+    /// 远端内容与本地不同、已写入磁盘缓存。
+    pub updated: bool,
+    /// 检查失败的原因（网络、解析、写入）。成功或跳过时为 None。
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub failure: Option<String>,
+    pub error: Option<String>,
 }
 
-struct CacheEntry {
-    at: Instant,
-    value: Catalog,
+/// 上次检查时间（进程级节流）。
+static LAST_CHECK: Mutex<Option<Instant>> = Mutex::new(None);
+
+fn cache_path(root: &Path) -> PathBuf {
+    root.join("cache").join(CACHE_FILE)
 }
 
-static CACHE: Mutex<Option<CacheEntry>> = Mutex::new(None);
-
-/// 拉取推荐列表。force=true 时忽略缓存。
+/// 读本地列表：磁盘缓存优先，缺失或损坏则回退内置副本。
 ///
-/// 拉取、解析、校验任一环节失败 → 回退内置副本（stale=true）并记录失败原因。
-/// 内置副本本身解析失败（打包异常）→ 返回错误。
-pub fn load(force: bool) -> Result<Catalog, String> {
-    if !force {
-        if let Ok(guard) = CACHE.lock() {
-            if let Some(e) = guard.as_ref() {
-                if e.at.elapsed() < CACHE_TTL {
-                    return Ok(e.value.clone());
-                }
-            }
+/// 不联网，立即返回。
+pub fn load_local(root: &Path) -> Result<Catalog, String> {
+    if let Ok(text) = std::fs::read_to_string(cache_path(root)) {
+        if let Ok(plugins) = parse_catalog(&text) {
+            return Ok(Catalog { plugins });
         }
+        // 缓存损坏：静默回退内置，下次 check 会重写
+    }
+    Ok(Catalog {
+        plugins: parse_builtin()?,
+    })
+}
+
+/// 检查远端是否有更新。
+///
+/// 比对基准：有磁盘缓存就用缓存，否则用内置副本。内容字节的 sha256 不同即视为有更新。
+/// 有更新时校验远端能解析、写盘，然后返回 `updated=true`。
+///
+/// `force=true` 时跳过节流窗口（用户手动刷新）。
+pub fn check_remote(root: &Path, force: bool) -> CheckResult {
+    if !force && within_throttle() {
+        return CheckResult {
+            checked: false,
+            updated: false,
+            error: None,
+        };
     }
 
-    let result = match fetch_remote() {
-        Ok((plugins, source)) => Catalog {
-            plugins,
-            source,
-            stale: false,
-            failure: None,
-        },
+    let remote = match fetch_remote() {
+        Ok(bytes) => bytes,
         Err(e) => {
-            let plugins = parse_builtin()?;
-            Catalog {
-                plugins,
-                source: "builtin".to_string(),
-                stale: true,
-                failure: Some(e),
-            }
+            mark_checked();
+            return CheckResult {
+                checked: true,
+                updated: false,
+                error: Some(e),
+            };
         }
     };
 
-    if let Ok(mut guard) = CACHE.lock() {
-        *guard = Some(CacheEntry {
-            at: Instant::now(),
-            value: result.clone(),
-        });
+    let baseline = baseline_bytes(root);
+    if sha256_hex(&remote) == sha256_hex(&baseline) {
+        mark_checked();
+        return CheckResult {
+            checked: true,
+            updated: false,
+            error: None,
+        };
     }
-    Ok(result)
+
+    // 远端内容必须先能解析，否则不写盘——避免把坏数据固化到缓存
+    let text = match String::from_utf8(remote.clone()) {
+        Ok(t) => t,
+        Err(e) => {
+            mark_checked();
+            return CheckResult {
+                checked: true,
+                updated: false,
+                error: Some(format!("远端列表不是 UTF-8：{}", e)),
+            };
+        }
+    };
+    if let Err(e) = parse_catalog(&text) {
+        mark_checked();
+        return CheckResult {
+            checked: true,
+            updated: false,
+            error: Some(format!("远端列表解析失败：{}", e)),
+        };
+    }
+
+    let path = cache_path(root);
+    if let Some(dir) = path.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    if let Err(e) = std::fs::write(&path, &remote) {
+        mark_checked();
+        return CheckResult {
+            checked: true,
+            updated: false,
+            error: Some(format!("写入缓存失败：{}", e)),
+        };
+    }
+
+    mark_checked();
+    CheckResult {
+        checked: true,
+        updated: true,
+        error: None,
+    }
 }
 
-fn fetch_remote() -> Result<(Vec<CatalogPlugin>, String), String> {
+fn within_throttle() -> bool {
+    LAST_CHECK
+        .lock()
+        .ok()
+        .and_then(|g| *g)
+        .map(|at| at.elapsed() < CHECK_TTL)
+        .unwrap_or(false)
+}
+
+fn mark_checked() {
+    if let Ok(mut g) = LAST_CHECK.lock() {
+        *g = Some(Instant::now());
+    }
+}
+
+/// 比对基准：有磁盘缓存用缓存，否则用内置副本。
+fn baseline_bytes(root: &Path) -> Vec<u8> {
+    std::fs::read(cache_path(root)).unwrap_or_else(|_| BUILTIN.as_bytes().to_vec())
+}
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    let mut h = Sha256::new();
+    h.update(bytes);
+    h.finalize().iter().map(|b| format!("{:02x}", b)).collect()
+}
+
+fn fetch_remote() -> Result<Vec<u8>, String> {
     let chain = crate::net::catalog_chain();
-    let got = crate::net::fetch(CATALOG_URL, &chain, crate::net::Shape::Json)?;
-    let text = String::from_utf8(got.bytes).map_err(|e| format!("推荐列表不是 UTF-8：{}", e))?;
-    let plugins = parse_catalog(&text)?;
-    Ok((plugins, got.source.to_string()))
+    crate::net::fetch(CATALOG_URL, &chain, crate::net::Shape::Json).map(|got| got.bytes)
 }
 
 fn parse_builtin() -> Result<Vec<CatalogPlugin>, String> {
@@ -144,28 +233,30 @@ fn parse_catalog(text: &str) -> Result<Vec<CatalogPlugin>, String> {
 mod tests {
     use super::*;
 
+    fn tmp_root(tag: &str) -> PathBuf {
+        let p = std::env::temp_dir().join(format!("catalog-test-{}-{}", tag, std::process::id()));
+        let _ = std::fs::remove_dir_all(&p);
+        std::fs::create_dir_all(p.join("cache")).unwrap();
+        p
+    }
+
     #[test]
     fn builtin_parses() {
         let plugins = parse_builtin().expect("内置副本应能解析");
-        assert!(!plugins.is_empty(), "内置副本不应为空");
+        assert!(!plugins.is_empty());
     }
 
     #[test]
     fn builtin_entries_have_required_fields() {
-        let plugins = parse_builtin().unwrap();
-        for p in &plugins {
-            assert!(!p.name.trim().is_empty(), "name 不能为空");
+        for p in parse_builtin().unwrap() {
+            assert!(!p.name.trim().is_empty());
             assert!(
                 !p.description.trim().is_empty(),
-                "description 不能为空：{}",
+                "description 为空：{}",
                 p.name
             );
-            assert!(
-                !p.category.trim().is_empty(),
-                "category 不能为空：{}",
-                p.name
-            );
-            assert!(p.repo.starts_with("http"), "repo 必须是 URL：{}", p.name);
+            assert!(!p.category.trim().is_empty(), "category 为空：{}", p.name);
+            assert!(p.repo.starts_with("http"), "repo 非 URL：{}", p.name);
         }
     }
 
@@ -182,21 +273,56 @@ mod tests {
 
     #[test]
     fn newer_schema_version_is_rejected() {
-        let text = r#"{"version":99,"plugins":[]}"#;
-        let err = parse_catalog(text).unwrap_err();
-        assert!(err.contains("版本"), "应提示版本过高：{}", err);
+        let err = parse_catalog(r#"{"version":99,"plugins":[]}"#).unwrap_err();
+        assert!(err.contains("版本"));
     }
 
     #[test]
     fn optional_fields_are_preserved() {
         let text = r#"{"version":2,"plugins":[
             {"name":"a","description":"d","category":"c","repo":"https://x/y",
-             "spec":"github:o/r","minDshVersion":"0.2.0","tags":["same-author"],"noNpm":true}
+             "spec":"github:o/r","minDshVersion":"0.2.0","tags":["featured"],"noNpm":true}
         ]}"#;
         let p = &parse_catalog(text).unwrap()[0];
         assert_eq!(p.spec.as_deref(), Some("github:o/r"));
         assert_eq!(p.min_dsh_version.as_deref(), Some("0.2.0"));
-        assert_eq!(p.tags.as_ref().unwrap(), &vec!["same-author".to_string()]);
+        assert_eq!(p.tags.as_ref().unwrap(), &vec!["featured".to_string()]);
         assert_eq!(p.no_npm, Some(true));
+    }
+
+    #[test]
+    fn load_local_falls_back_to_builtin_without_cache() {
+        let root = tmp_root("no-cache");
+        let c = load_local(&root).unwrap();
+        assert!(!c.plugins.is_empty());
+    }
+
+    #[test]
+    fn load_local_uses_cache_when_present() {
+        let root = tmp_root("with-cache");
+        let custom = r#"{"version":2,"plugins":[
+            {"name":"only-one","description":"d","category":"c","repo":"https://x/y"}
+        ]}"#;
+        std::fs::write(cache_path(&root), custom).unwrap();
+        let c = load_local(&root).unwrap();
+        assert_eq!(c.plugins.len(), 1);
+        assert_eq!(c.plugins[0].name, "only-one");
+    }
+
+    #[test]
+    fn load_local_ignores_corrupt_cache() {
+        let root = tmp_root("corrupt");
+        std::fs::write(cache_path(&root), "not json").unwrap();
+        let c = load_local(&root).unwrap();
+        // 缓存损坏 → 回退内置（内置条目数 > 1）
+        assert!(c.plugins.len() > 1);
+    }
+
+    #[test]
+    fn sha256_hex_is_stable() {
+        assert_eq!(
+            sha256_hex(b"abc"),
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
     }
 }

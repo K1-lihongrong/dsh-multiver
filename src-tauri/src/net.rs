@@ -57,8 +57,6 @@ pub enum Shape {
 /// 一次下载的结果。
 pub struct Downloaded {
     pub bytes: Vec<u8>,
-    /// 实际使用的源名。
-    pub source: &'static str,
 }
 
 fn looks_like(shape: Shape, body: &[u8]) -> bool {
@@ -112,7 +110,6 @@ pub fn fetch(url: &str, chain: &[Source], shape: Shape) -> Result<Downloaded, St
                         }
                         return Ok(Downloaded {
                             bytes: body.to_vec(),
-                            source: src.name,
                         });
                     }
                     Err(e) => errors.push(format!("{}: 读取响应失败 {}", src.name, e)),

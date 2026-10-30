@@ -480,6 +480,7 @@ pub fn run() {
             commands::ds_inspect_spec,
             commands::ds_probe_registries,
             commands::ds_plugin_catalog,
+            commands::ds_plugin_catalog_check,
         ])
         .setup(move |app| {
             use tauri::Manager;

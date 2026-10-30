@@ -43,6 +43,9 @@ const tab = ref("installed"); // installed | catalog
 const catalog = ref(null); // { plugins, source, stale, failure }
 const catalogLoading = ref(false);
 const catalogError = ref("");
+/// 后台检查远端更新的进行中标志，与 catalogLoading 分开——本地列表已渲染，只是顶部显示「正在检查」
+const catalogChecking = ref(false);
+const catalogCheckError = ref("");
 
 const homeKindLabel = computed(() => {
   const m = { isolated: "dsplugins.homeIsolated", official: "dsplugins.homeOfficial", shared: "dsplugins.homeShared" };
@@ -120,12 +123,13 @@ const currentProfile = () => profiles.value.find((p) => p.name === activeProfile
 
 // ---------- 推荐列表（阶段 4）----------
 
-async function loadCatalog(force) {
+/// 读本地列表（缓存 → 内置）。不联网，立即返回。
+async function loadCatalogLocal() {
   if (catalogLoading.value) return;
   catalogLoading.value = true;
   catalogError.value = "";
   try {
-    catalog.value = await invoke("ds_plugin_catalog", { force: !!force });
+    catalog.value = await invoke("ds_plugin_catalog");
   } catch (e) {
     catalogError.value = "" + e;
   } finally {
@@ -133,9 +137,34 @@ async function loadCatalog(force) {
   }
 }
 
+/// 检查远端更新。updated=true 时重新读本地并渲染新内容。
+async function checkCatalogRemote(force) {
+  if (catalogChecking.value) return;
+  catalogChecking.value = true;
+  catalogCheckError.value = "";
+  try {
+    const r = await invoke("ds_plugin_catalog_check", { force: !!force });
+    if (r?.updated) {
+      await loadCatalogLocal();
+    } else if (r?.error) {
+      catalogCheckError.value = r.error;
+    }
+  } catch (e) {
+    catalogCheckError.value = "" + e;
+  } finally {
+    catalogChecking.value = false;
+  }
+}
+
+/// 进入推荐页：先渲染本地，再后台检查更新。
 function switchTab(next) {
   tab.value = next;
-  if (next === "catalog" && !catalog.value && !catalogLoading.value) loadCatalog(false);
+  if (next !== "catalog") return;
+  if (!catalog.value && !catalogLoading.value) {
+    loadCatalogLocal().then(() => checkCatalogRemote(false));
+  } else {
+    checkCatalogRemote(false);
+  }
 }
 
 /// 已安装的插件名集合，用于在推荐列表上标「已安装」。
@@ -145,26 +174,84 @@ const installedNames = computed(() => {
   return set;
 });
 
-/// 推荐列表按分类分组。
-/// 同作者（tags 含 same-author）的条目提到最前面，单独成组。
-const catalogGroups = computed(() => {
+/// 当前选中的分类标签。"__all__" 表示「全部」。
+const activeCatalogCat = ref("__all__");
+
+/// 分类列表（按首次出现顺序去重），首项是「全部」。
+const catalogCategories = computed(() => {
   const list = catalog.value?.plugins || [];
-  const pinned = [];
-  const byCategory = new Map();
+  const seen = [];
   for (const p of list) {
-    if ((p.tags || []).includes("same-author")) {
-      pinned.push(p);
-    } else {
-      const c = p.category || "";
-      if (!byCategory.has(c)) byCategory.set(c, []);
-      byCategory.get(c).push(p);
-    }
+    const c = (p.category || "").trim();
+    if (c && !seen.includes(c)) seen.push(c);
   }
-  const groups = [];
-  if (pinned.length) groups.push({ title: t("dsplugins.catalogSameAuthor"), items: pinned });
-  for (const [title, items] of byCategory) groups.push({ title, items });
-  return groups;
+  return [{ key: "__all__", label: t("dsplugins.catalogAll") }].concat(
+    seen.map((c) => ({ key: c, label: c })),
+  );
 });
+
+/// 当前标签下要展示的条目。
+///
+/// 置顶：tags 含 `featured`（推荐）或 `same-author`（与本软件同作者）。
+/// 纯排序，不改变分类归属。
+/// 不再按分类分组：标签栏已承担导航，分组会产生多条参差边缘。
+const catalogItems = computed(() => {
+  const list = catalog.value?.plugins || [];
+  const filtered =
+    activeCatalogCat.value === "__all__"
+      ? list
+      : list.filter((p) => (p.category || "").trim() === activeCatalogCat.value);
+  // 稳定排序：星标在前，其余保持目录顺序
+  return filtered
+    .map((p, i) => {
+      const tags = p.tags || [];
+      const starred = tags.includes("featured") || tags.includes("same-author");
+      return { p, i, star: starred ? 1 : 0 };
+    })
+    .sort((a, b) => b.star - a.star || a.i - b.i)
+    .map((x) => x.p);
+});
+
+/// 该条目是否显示星标。
+function isStarred(p) {
+  const tags = p.tags || [];
+  return tags.includes("featured") || tags.includes("same-author");
+}
+
+/// 星标的悬停说明：同作者优先，其次是推荐。
+function starTitle(p) {
+  const tags = p.tags || [];
+  if (tags.includes("same-author")) return t("dsplugins.catalogSameAuthor");
+  return t("dsplugins.catalogFeatured");
+}
+
+/// 分类标签栏是否溢出（决定是否显示 ‹ › 控件）。
+const catalogTabsRef = ref(null);
+const catalogTabsOverflow = ref(false);
+const catalogTabsAtEnd = ref(false);
+
+function updateCatalogTabsState() {
+  const el = catalogTabsRef.value;
+  if (!el) return;
+  catalogTabsOverflow.value = el.scrollWidth > el.clientWidth + 1;
+  catalogTabsAtEnd.value = el.scrollLeft + el.clientWidth >= el.scrollWidth - 1;
+}
+
+function scrollCatalogTabs(dir) {
+  const el = catalogTabsRef.value;
+  if (!el) return;
+  el.scrollBy({ left: dir * 120, behavior: "smooth" });
+}
+
+/// 打开外部链接。Tauri WebView 里 <a target="_blank"> 不生效，必须走 open_url 命令。
+async function openExternal(url) {
+  if (!url) return;
+  try {
+    await invoke("open_url", { url });
+  } catch (e) {
+    notify(String(e));
+  }
+}
 
 /// 推荐项的安装 spec：有 spec 用 spec，否则用包名。
 const catalogSpec = (p) => p.spec || p.name;
@@ -179,6 +266,74 @@ function installFromCatalog(p) {
     installSpec.value = catalogSpec(p);
   });
 }
+
+// ---------- 推荐卡片：描述浮窗 ----------
+//
+// 卡片第二行只放一行描述，溢出时右侧渐隐。完整描述在浮窗里。
+// 触发方式三种：悬停 400ms、点击卡片、点「查看完整描述」按钮。
+// 不挂在 dsh 的 settings.section 之外——浮窗是组件内部的固定定位元素。
+const catalogTip = ref(null); // { text, left, top, width }
+let catalogHoverTimer = null;
+let catalogHideTimer = null;
+
+function showCatalogTip(p, el) {
+  if (!el) return;
+  const rect = el.getBoundingClientRect();
+  // 右边缘对齐卡片右边缘；卡片窄于 320px 时收窄到卡片宽度
+  const width = Math.min(320, rect.width);
+  catalogTip.value = {
+    text: p.description || "",
+    left: rect.right - width,
+    top: rect.bottom + 4,
+    width,
+  };
+}
+
+function hideCatalogTip() {
+  clearTimeout(catalogHoverTimer);
+  clearTimeout(catalogHideTimer);
+  catalogTip.value = null;
+}
+
+/// 卡片移出：延迟关闭，给鼠标移到浮窗的时间。进入浮窗会取消这次关闭。
+function scheduleHideCatalogTip() {
+  clearTimeout(catalogHideTimer);
+  catalogHideTimer = setTimeout(() => {
+    catalogTip.value = null;
+  }, 200);
+}
+
+/// 鼠标进入浮窗：取消待执行的关闭。
+function cancelHideCatalogTip() {
+  clearTimeout(catalogHideTimer);
+}
+
+function onCardEnter(p, e) {
+  clearTimeout(catalogHoverTimer);
+  clearTimeout(catalogHideTimer);
+  const el = e.currentTarget.closest?.(".dp-catalog-card") || e.currentTarget;
+  catalogHoverTimer = setTimeout(() => showCatalogTip(p, el), 400);
+}
+
+/// 卡片移出：按鼠标的真实去向决定。
+///
+/// - 移向浮窗 → 保留（由浮窗自己的 mouseleave 负责关闭）
+/// - 移向其他元素 → 立即关闭（不再等 200ms，否则会显得热区比卡片大一圈）
+/// - relatedTarget 为 null（落在卡片与浮窗之间几像素的间隙）→ 给 80ms 缓冲
+function onCardLeave(e) {
+  clearTimeout(catalogHoverTimer);
+  clearTimeout(catalogHideTimer);
+  const to = e && e.relatedTarget;
+  if (to instanceof Element && to.closest(".dp-cc-tip")) return;
+  if (to === null) {
+    catalogHideTimer = setTimeout(() => {
+      catalogTip.value = null;
+    }, 80);
+    return;
+  }
+  catalogTip.value = null;
+}
+
 
 // B1-10：按包名/版本过滤
 const filteredPlugins = computed(() => {
@@ -590,7 +745,30 @@ watch(activeProfile, () => {
 
 onUnmounted(() => {
   if (unlistenProgress) unlistenProgress();
+  document.removeEventListener("click", onDocClickCloseTip);
+  window.removeEventListener("resize", onResizeCloseTip);
 });
+
+// 浮窗：点外部 / 窗口缩放 / 滚动时关闭
+function onDocClickCloseTip(e) {
+  if (!catalogTip.value) return;
+  if (e.target.closest?.(".dp-catalog-card") || e.target.closest?.(".dp-cc-tip")) return;
+  hideCatalogTip();
+}
+function onResizeCloseTip() {
+  if (catalogTip.value) hideCatalogTip();
+}
+
+onMounted(() => {
+  document.addEventListener("click", onDocClickCloseTip);
+  window.addEventListener("resize", onResizeCloseTip);
+});
+
+// 切到推荐标签时，等 DOM 渲染完再判一次标签栏是否溢出
+watch([tab, catalog], () => {
+  if (tab.value !== "catalog") return;
+  setTimeout(updateCatalogTabsState, 0);
+}, { flush: "post" });
 </script>
 
 <template>
@@ -670,9 +848,14 @@ onUnmounted(() => {
 
       <!-- ===== 推荐标签页 ===== -->
       <template v-if="tab === 'catalog'">
-        <div v-if="catalog?.stale" class="dp-catalog-stale">
+        <!-- 远端检查状态：本地内容已渲染，这里只是附加提示 -->
+        <div v-if="catalogChecking" class="dp-catalog-stale dp-catalog-checking">
+          <span class="dp-spinner"></span>
+          {{ t("dsplugins.catalogChecking") }}
+        </div>
+        <div v-else-if="catalogCheckError" class="dp-catalog-stale">
           {{ t("dsplugins.catalogStale") }}
-          <button class="dp-link-btn" @click="loadCatalog(true)" :disabled="catalogLoading">
+          <button class="dp-link-btn" @click="checkCatalogRemote(true)" :disabled="catalogChecking">
             {{ t("dsplugins.catalogRetry") }}
           </button>
         </div>
@@ -682,62 +865,99 @@ onUnmounted(() => {
         </div>
         <div v-else-if="catalogError" class="dp-state dp-state-empty">
           <span>{{ catalogError }}</span>
-          <button class="dp-link-btn" @click="loadCatalog(true)">{{ t("dsplugins.catalogRetry") }}</button>
+          <button class="dp-link-btn" @click="loadCatalogLocal()">{{ t("dsplugins.catalogRetry") }}</button>
         </div>
-        <div v-else-if="!catalogGroups.length" class="dp-state dp-state-empty">
+        <div v-else-if="!catalogItems.length" class="dp-state dp-state-empty">
           <span class="dp-state-icon">🧩</span>
           <span>{{ t("dsplugins.catalogEmpty") }}</span>
         </div>
         <template v-else>
-          <div v-for="g in catalogGroups" :key="g.title" class="dp-catalog-group">
-            <div class="dp-catalog-title">{{ g.title }}</div>
-            <ul class="dp-list">
-              <li v-for="p in g.items" :key="p.name" class="dp-item dp-catalog-item">
-                <div class="dp-item-main">
-                  <span class="dp-item-icon">🧩</span>
-                  <div class="dp-item-info">
-                    <div class="dp-catalog-name-row">
-                      <code class="dp-item-name" :title="p.name">{{ p.name }}</code>
-                      <span
-                        v-if="(p.tags || []).includes('same-author')"
-                        class="dp-badge dp-badge-author"
-                      >{{ t("dsplugins.catalogSameAuthorBadge") }}</span>
-                      <span v-if="installedNames.has(p.name)" class="dp-badge dp-badge-bundle">
-                        {{ t("dsplugins.catalogInstalled") }}
-                      </span>
-                    </div>
-                    <span class="dp-catalog-desc">{{ p.description }}</span>
-                    <span v-if="p.minDshVersion" class="dp-catalog-req">
-                      {{ t("dsplugins.catalogMinDsh", { v: p.minDshVersion }) }}
-                    </span>
-                  </div>
-                </div>
-                <div class="dp-catalog-actions">
-                  <a
-                    v-if="p.repo"
-                    class="dp-icon-btn dp-catalog-link"
-                    :href="p.repo"
-                    target="_blank"
-                    rel="noreferrer"
-                    :title="t('dsplugins.catalogRepo')"
-                  >GitHub ↗</a>
-                  <a
-                    v-if="npmUrl(p)"
-                    class="dp-icon-btn dp-catalog-link"
-                    :href="npmUrl(p)"
-                    target="_blank"
-                    rel="noreferrer"
-                    :title="t('dsplugins.catalogNpm')"
-                  >npmjs ↗</a>
-                  <button
-                    class="dp-btn dp-btn-primary dp-btn-sm"
-                    :disabled="busy || installing || installedNames.has(p.name)"
-                    @click="installFromCatalog(p)"
-                  >{{ t("dsplugins.catalogInstall") }}</button>
-                </div>
-              </li>
-            </ul>
+          <!-- 分类标签栏：分类多时溢出，右侧出现 ‹ › 滚动控件 -->
+          <div class="dp-cat-tabs">
+            <div
+              ref="catalogTabsRef"
+              class="dp-cat-tabs-scroll"
+              @scroll="updateCatalogTabsState"
+            >
+              <button
+                v-for="c in catalogCategories"
+                :key="c.key"
+                class="dp-cat-tab"
+                :class="{ on: activeCatalogCat === c.key }"
+                @click="activeCatalogCat = c.key"
+              >{{ c.label }}</button>
+            </div>
+            <div v-if="catalogTabsOverflow" class="dp-cat-nav">
+              <button title="向前" @click="scrollCatalogTabs(-1)">‹</button>
+              <button title="向后" :disabled="catalogTabsAtEnd" @click="scrollCatalogTabs(1)">›</button>
+            </div>
+            <button
+              class="dp-cat-refresh"
+              :title="t('dsplugins.catalogRefresh')"
+              :disabled="catalogChecking"
+              @click="checkCatalogRemote(true)"
+            >↻</button>
           </div>
+
+          <!-- 单网格：星标排最前，不再按分类分组 -->
+          <ul class="dp-list">
+            <li
+              v-for="p in catalogItems"
+              :key="p.name"
+              class="dp-catalog-card"
+            >
+              <!-- 第一行：图标 + ⭐ + 包名 + 徽标 + 安装 -->
+              <div class="dp-cc-row1">
+                <span class="dp-cc-icon">🧩</span>
+                <span
+                  v-if="isStarred(p)"
+                  class="dp-cc-star"
+                  :title="starTitle(p)"
+                >⭐</span>
+                <code class="dp-cc-name" :title="p.name">{{ p.name }}</code>
+                <span v-if="installedNames.has(p.name)" class="dp-badge dp-badge-bundle">
+                  {{ t("dsplugins.catalogInstalled") }}
+                </span>
+                <span v-if="p.minDshVersion" class="dp-badge">
+                  {{ t("dsplugins.catalogMinDsh", { v: p.minDshVersion }) }}
+                </span>
+                <button
+                  class="dp-btn dp-btn-primary dp-btn-sm dp-cc-install"
+                  :disabled="busy || installing || installedNames.has(p.name)"
+                  @click.stop="installFromCatalog(p)"
+                >{{ t("dsplugins.catalogInstall") }}</button>
+              </div>
+
+              <!-- 第二行：链接 + 单行描述（溢出渐隐）+ 查看完整描述 -->
+              <div class="dp-cc-row2">
+                <span v-if="p.repo || npmUrl(p)" class="dp-cc-links">
+                  <button
+                    v-if="p.repo"
+                    class="dp-cc-link"
+                    :title="t('dsplugins.catalogRepo')"
+                    @click.stop="openExternal(p.repo)"
+                  >GitHub ↗</button>
+                  <button
+                    v-if="npmUrl(p)"
+                    class="dp-cc-link"
+                    :title="t('dsplugins.catalogNpm')"
+                    @click.stop="openExternal(npmUrl(p))"
+                  >npmjs ↗</button>
+                </span>
+                <span
+                  class="dp-cc-descwrap"
+                  @mouseenter="onCardEnter(p, $event)"
+                  @mouseleave="onCardLeave"
+                >
+                  <span class="dp-cc-desc">{{ p.description }}</span>
+                  <button
+                    class="dp-cc-more"
+                    @click.stop="showCatalogTip(p, $event.currentTarget.closest('.dp-catalog-card'))"
+                  >{{ t("dsplugins.catalogViewDesc") }}</button>
+                </span>
+              </div>
+            </li>
+          </ul>
         </template>
       </template>
 
@@ -848,6 +1068,18 @@ onUnmounted(() => {
         </details>
       </div>
     </template>
+
+    <!-- 推荐卡片的描述浮窗：fixed 定位，右边缘对齐卡片右边缘 -->
+    <Transition name="dp-tip">
+      <div
+        v-if="catalogTip"
+        class="dp-cc-tip"
+        :style="{ left: catalogTip.left + 'px', top: catalogTip.top + 'px', width: catalogTip.width + 'px' }"
+        @mouseenter="cancelHideCatalogTip"
+        @mouseleave="hideCatalogTip"
+        @click.stop
+      >{{ catalogTip.text }}</div>
+    </Transition>
 
     <!-- 官方风格安装对话框：form → confirm → installing → done/failed -->
     <div class="dp-modal-mask" v-if="showInstall" @click.self="closeInstall">
@@ -1113,51 +1345,204 @@ onUnmounted(() => {
   gap: 8px;
   align-items: center;
 }
-.dp-catalog-group { margin-top: 14px; }
-.dp-catalog-title {
-  font-size: 11.5px;
-  font-weight: 600;
-  opacity: .65;
-  margin-bottom: 6px;
-  letter-spacing: .02em;
-}
-.dp-catalog-item { align-items: flex-start; }
-.dp-catalog-name-row {
+/* ---------- 分类标签栏 ---------- */
+.dp-cat-tabs {
   display: flex;
   align-items: center;
   gap: 6px;
-  flex-wrap: wrap;
+  padding: 2px 16px 0;
+  margin-bottom: 12px;
 }
-.dp-catalog-desc {
-  display: block;
+.dp-cat-tabs-scroll {
+  display: flex;
+  gap: 6px;
+  overflow-x: auto;
+  scrollbar-width: none;
+  flex: 1;
+  min-width: 0;
+}
+.dp-cat-tabs-scroll::-webkit-scrollbar { display: none; }
+.dp-cat-tab {
+  flex: none;
   font-size: 11.5px;
-  opacity: .72;
-  line-height: 16px;
-  margin-top: 2px;
+  padding: 3px 10px;
+  border-radius: 12px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: all .12s;
 }
-.dp-catalog-req {
-  display: block;
+.dp-cat-tab:hover { color: var(--text); background: var(--surface-3); }
+.dp-cat-tab.on {
+  background: var(--accent-weak);
+  color: var(--text);
+  border-color: var(--accent-border);
+  font-weight: 600;
+}
+.dp-cat-nav { display: flex; gap: 2px; flex: none; }
+.dp-cat-nav button {
+  width: 20px;
+  height: 20px;
+  padding: 0;
   font-size: 11px;
-  opacity: .55;
-  margin-top: 3px;
+  line-height: 1;
+  border-radius: 4px;
+  border: 1px solid var(--panel-border);
+  background: var(--panel-bg);
+  color: var(--text-muted);
+  cursor: pointer;
 }
-.dp-catalog-actions {
+.dp-cat-nav button:hover:not(:disabled) { color: var(--text); }
+.dp-cat-nav button:disabled { opacity: .35; cursor: default; }
+.dp-cat-refresh {
+  flex: none;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  font-size: 13px;
+  line-height: 1;
+  border-radius: 5px;
+  border: 1px solid var(--panel-border);
+  background: var(--panel-bg);
+  color: var(--text-muted);
+  cursor: pointer;
+}
+.dp-cat-refresh:hover:not(:disabled) { color: var(--text); background: var(--surface-3); }
+.dp-cat-refresh:disabled { opacity: .4; cursor: default; }
+.dp-catalog-checking { gap: 6px; }
+.dp-catalog-checking .dp-spinner { width: 11px; height: 11px; border-width: 1.5px; }
+
+/* ---------- 推荐卡片：双行 ---------- */
+.dp-catalog-card {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 8px 12px;
+  border-radius: 7px;
+  background: var(--surface-2);
+  border: 1px solid transparent;
+  transition: all .12s;
+  min-width: 0;
+  cursor: pointer;
+}
+.dp-catalog-card:hover {
+  border-color: var(--panel-border);
+  background: var(--surface-3);
+}
+
+/* 第一行：图标 + ⭐ + 包名 + 徽标 + 安装 */
+.dp-cc-row1 {
   display: flex;
   align-items: center;
   gap: 8px;
-  flex-shrink: 0;
+  min-width: 0;
 }
-.dp-catalog-link {
+.dp-cc-icon { font-size: 14px; flex: none; opacity: .8; }
+.dp-cc-star { font-size: 11px; line-height: 1; flex: none; color: #f5c542; }
+.dp-cc-name {
+  flex: 1;
+  min-width: 0;
+  font-size: 12px;
+  color: var(--text);
+  font-family: ui-monospace, Consolas, monospace;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.dp-cc-row1 .dp-badge { flex: none; }
+.dp-cc-install { flex: none; }
+
+/* 第二行：链接 + 单行描述（右侧渐隐）+ 查看完整描述 */
+.dp-cc-row2 {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+.dp-cc-links {
+  display: flex;
+  gap: 2px;
+  flex: none;
+}
+.dp-cc-links a,
+.dp-cc-link {
+  font: inherit;
   font-size: 11px;
   text-decoration: none;
   color: inherit;
   opacity: .65;
   padding: 2px 4px;
+  white-space: nowrap;
+  border: 0;
+  background: none;
+  cursor: pointer;
 }
-.dp-catalog-link:hover { opacity: 1; }
-.dp-badge-author {
-  background: rgba(107, 134, 255, .18);
-  color: var(--accent, #6b86ff);
+.dp-cc-links a:hover,
+.dp-cc-link:hover { opacity: 1; text-decoration: underline; }
+/* mask 只淡出右端 25%；短描述到不了该区域，会完整显示。 */
+.dp-cc-desc {
+  flex: 1;
+  min-width: 0;
+  font-size: 11px;
+  opacity: .7;
+  white-space: nowrap;
+  overflow: hidden;
+  text-align: right;
+  -webkit-mask-image: linear-gradient(to right, #000 0%, #000 75%, transparent 100%);
+  mask-image: linear-gradient(to right, #000 0%, #000 75%, transparent 100%);
+}
+/* 悬停热区：只覆盖描述与「查看完整描述」，不扩展到整张卡片 */
+.dp-cc-descwrap {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.dp-cc-more {
+  flex: none;
+  font-size: 11px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  opacity: .6;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.dp-cc-more:hover { opacity: 1; text-decoration: underline; }
+
+/* ---------- 描述浮窗 ---------- */
+.dp-cc-tip {
+  position: fixed;
+  z-index: 60;
+  /* 实色底：半透明会让背后的卡片透出来，影响阅读 */
+  background: var(--surface-3);
+  border: 1px solid var(--panel-border);
+  border-radius: 8px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, .38);
+  padding: 10px 12px;
+  font-size: 11.5px;
+  line-height: 17px;
+  color: var(--text);
+  white-space: normal;
+  word-break: break-word;
+  pointer-events: auto;
+}
+
+/* 进出场：淡入 + 轻微上浮，比直接闪现柔和 */
+.dp-tip-enter-active {
+  transition: opacity .16s ease-out, transform .16s ease-out;
+}
+.dp-tip-leave-active {
+  transition: opacity .12s ease-in, transform .12s ease-in;
+}
+.dp-tip-enter-from,
+.dp-tip-leave-to {
+  opacity: 0;
+  transform: translateY(-4px);
 }
 
 /* 插件列表：自适应列数（宽屏多列，窄屏单列） */
@@ -1166,6 +1551,9 @@ onUnmounted(() => {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
   gap: 8px;
+  /* auto-fill 的 grid 容器 min-width 默认为 auto（= min-content），
+     会被 minmax(320px) 撑到最大列数总和、超出父容器。压成 0 才遵守父宽。 */
+  min-width: 0;
 }
 .dp-item {
   display: flex; align-items: center; justify-content: space-between; gap: 10px;
