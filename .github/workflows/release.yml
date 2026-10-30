@@ -77,6 +77,15 @@ jobs:
         if: runner.os == 'Windows'
         run: Copy-Item "src-tauri\target\release\dsh-multiver.exe" "dsh-multiver.exe"
 
+      # ── 打包 dsh 插件（只在 Windows 跑一次）──
+      # 插件是纯 JS + JSON，与平台无关；用 pnpm pack 保证 tarball 内容与 npm 通道一致
+      - name: Pack dsh plugin
+        if: runner.os == 'Windows'
+        working-directory: dsh-plugin
+        run: |
+          pnpm pack
+          Get-ChildItem *.tgz | ForEach-Object { "打包产物：$($_.Name) / $($_.Length) 字节" }
+
       # ── Linux：AppImage + deb ──
       - name: Build (Linux)
         if: runner.os == 'Linux'
@@ -88,7 +97,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: dsh-multiver-windows
-          path: dsh-multiver.exe
+          path: |
+            dsh-multiver.exe
+            dsh-plugin/*.tgz
 
       - name: Upload artifact (Linux)
         if: runner.os == 'Linux'
@@ -126,6 +137,10 @@ jobs:
             if [ -f dsh-multiver-windows/dsh-multiver.exe ]; then
               (cd dsh-multiver-windows && sha256sum dsh-multiver.exe)
             fi
+            # 插件 tarball：插件部署引导与用户手工校验都靠它
+            while IFS= read -r -d '' f; do
+              (cd "$(dirname "$f")" && sha256sum "$(basename "$f")")
+            done < <(find dsh-multiver-windows -type f -name '*.tgz' -print0)
             while IFS= read -r -d '' f; do
               (cd "$(dirname "$f")" && sha256sum "$(basename "$f")")
             done < <(find dsh-multiver-linux -type f \( -name '*.AppImage' -o -name '*.deb' \) -print0)
@@ -139,6 +154,7 @@ jobs:
           name: DSH 版本管理器 ${{ github.event.inputs.tag || github.ref_name }}
           files: |
             artifacts/dsh-multiver-windows/dsh-multiver.exe
+            artifacts/dsh-multiver-windows/*.tgz
             artifacts/dsh-multiver-linux/**/*.AppImage
             artifacts/dsh-multiver-linux/**/*.deb
             artifacts/SHA256SUMS.txt
