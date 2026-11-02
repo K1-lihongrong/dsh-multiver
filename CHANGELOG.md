@@ -9,6 +9,25 @@
 
 ## [0.3.3] - 未发布
 
+### 移除版本豁免功能
+
+- **「版本豁免」区块已从插件面板移除**。该功能自 v0.3.0 上线起就无法工作——它调用的 `dsh plugin allow-version` 在所有已测 dsh 版本（`0.2.0-rc.2` / `0.2.1-rc.2` / `0.2.1-rc.3`）中都不存在。`dsh plugin` 本身只是把参数转发给 pnpm，没有这个子命令。
+  - 豁免机制在 dsh 内部确实存在（`dsh-app-boot` 的 `setProfileVersionExemption`，状态存 `<profile>/compatibility.json`），但没有暴露 CLI 入口。当初据错误提示文本实现，未验证命令能否跑通。
+  - 后端 `ds_exemption_action` 命令保留未删。等 dsh 提供 CLI 后按 `docs/开发缺口.md` B1-19 恢复。
+  - 同步移除：组件内豁免 UI、4 语言各 10 条 i18n 词条、相关 CSS、2 条 E2E 用例。
+- **不再把 `allow-version` 转成「可执行指引」**。安装失败时透传官方原文，只补充诊断日志路径——指向不存在的命令只会误导。
+
+### 插件面板修复与改进
+
+- **修版本豁免命令参数名**（虽该功能已移除，参数映射本身是错的）：Tauri 2 默认把命令参数映射成 camelCase，而 `ds_exemption_action` 的后端参数是 `package_version`，导致 `missing required key packageVersion`。加 `rename_all = "snake_case"`。
+- **插件描述支持多语言**：catalog 新增可选字段 `descriptionI18n`，前端按当前语言取用，缺项回退中文原文。`docs/plugins.json` 9 条插件补了繁中 / 英文 / 日文译文。
+- **已安装列表改两行排版**：包名独占一行、可换行完整显示，版本与徽标、操作按钮移到第二行。此前长包名被省略号截断。
+- **按钮 hover 反馈加强**：浅色主题下 `#fff` 到 `#f0f2f5` 色差极小，只换背景几乎看不出。改为同时加深边框；补 `:focus-visible` 焦点环供键盘导航。
+- **分类标签栏支持拖动**：按住左键横向拖动，拖动距离超 4px 才算拖拽，避免误吞按钮点击。
+- **卸载时显示已运行秒数**：大包卸载时 pnpm 会长时间无输出，加计时器 + 自动展开日志区，缓解「卡死」观感。
+- **识别 `ERR_PNPM_CANNOT_REMOVE_MISSING_DEPS`**：包已不在 `dependencies` 但仍在 profile 的 `bundles` 列表时，提示用户去 `package.json` 的 `dsh.profile.bundles` 手动清理。
+- **补回窗口 resize 时重算标签栏溢出**：拆分 D21 时遗漏，导致窄窗口不出现 ‹ › 滚动按钮。
+
 ### 插件面板拆分（技术债 D21）
 
 - **`DsPluginPanel.vue` 从 1677 行降到 343 行**，按职责拆成四块，互不共享状态的代码不再挤在一个文件里：

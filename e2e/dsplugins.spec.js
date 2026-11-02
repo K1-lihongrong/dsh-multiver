@@ -31,7 +31,10 @@ const PROFILE = {
 };
 
 // 官方 CLI 失败诊断 → 面板补充本地化提示
-test("安装失败且带官方诊断 → 显示 allow-version 指引（对齐官方）", async ({ page }) => {
+//
+// 注意：dsh CLI 实际没有 allow-version 子命令（plugin 只是转发给 pnpm），
+// 因此不再把错误里的 allow-version 转成"可执行指引"，只透传原文 + 诊断日志路径。
+test("安装失败且带官方诊断 → 透传原文并提示诊断日志", async ({ page }) => {
   await mockTauri(page, {
     installed: [makeVersion("0.2.0-rc.1", { isolated: true })],
     extra: {
@@ -47,7 +50,7 @@ test("安装失败且带官方诊断 → 显示 allow-version 指引（对齐官
   await page.locator(".dp-modal").getByRole("button", { name: "安装", exact: true }).click();
   await page.locator(".dp-modal").getByRole("button", { name: "确认安装", exact: true }).click();
   await page.waitForTimeout(400);
-  await expect(page.locator(".dp-modal")).toContainText("版本不兼容");
+  await expect(page.locator(".dp-modal")).toContainText("incompatible");
   await expect(page.locator(".dp-modal")).toContainText("诊断日志");
 });
 
@@ -259,34 +262,6 @@ test("显示待决定构建脚本并允许（B1-12）", async ({ page }) => {
   expect(flatApprove).toContain("esbuild");
 });
 
-test("显示版本豁免并可撤销（B1-12）", async ({ page }) => {
-  const calls = [];
-  await page.exposeFunction("__recordExemption", (x) => calls.push(x));
-  await mockTauri(page, {
-    installed: [makeVersion("0.2.0-rc.1", { isolated: true })],
-    extra: {
-      ds_list_plugins: { dsh_home: "D:/dsh", home_kind: "shared", profiles: [PROFILE] },
-      ds_profile_info: {
-        runtime_version: "0.2.0-rc.1",
-        exemptions: { "pkg@1.0.0": ["0.2.0-rc.1"] },
-        pending_builds: [],
-        logs_dir: "D:/dsh/profiles/web/.plugin-manager/logs",
-      },
-      ds_exemption_action: "(args) => { window.__recordExemption(args); return Promise.resolve('ok'); }",
-      "plugin:dialog|message": "Yes",
-    },
-  });
-  await page.goto("/");
-  await page.getByRole("button", { name: "插件", exact: true }).click();
-  await page.locator(".dp-exemptions summary").click();
-  await expect(page.getByText("pkg@1.0.0")).toBeVisible();
-  await page.getByRole("button", { name: "撤销", exact: true }).click();
-  await page.waitForTimeout(400);
-  const flatEx = JSON.stringify(calls);
-  expect(flatEx).toContain('"action":"revoke"');
-  expect(flatEx).toContain("pkg@1.0.0");
-});
-
 test("安装对话框选择镜像源 → registry 透传（对齐官方安装源）", async ({ page }) => {
   const calls = [];
   await page.exposeFunction("__recordRegistry", (x) => calls.push(x));
@@ -330,35 +305,6 @@ test("检查更新 → 显示新版本并可更新（B1-13）", async ({ page })
   const flat = JSON.stringify(calls);
   expect(flat).toContain('"action":"remove"');
   expect(flat).toContain("my-plugin@2.0.0");
-});
-
-test("允许版本豁免（B1-14）", async ({ page }) => {
-  const calls = [];
-  await page.exposeFunction("__recordAllow", (x) => calls.push(x));
-  await mockTauri(page, {
-    installed: [makeVersion("0.2.0-rc.1", { isolated: true })],
-    extra: {
-      ds_list_plugins: { dsh_home: "D:/dsh", home_kind: "shared", profiles: [PROFILE] },
-      ds_profile_info: {
-        runtime_version: "0.2.0-rc.1",
-        exemptions: {},
-        pending_builds: [],
-        logs_dir: "D:/dsh/profiles/web/.plugin-manager/logs",
-      },
-      ds_exemption_action: "(args) => { window.__recordAllow(args); return Promise.resolve('ok'); }",
-    },
-  });
-  await page.goto("/");
-  await page.getByRole("button", { name: "插件", exact: true }).click();
-  await page.locator(".dp-exemptions summary").click();
-  await page.locator(".dp-allow-spec").fill("pkg@1.0.0");
-  await page.locator(".dp-allow-rt").fill("0.2.0-rc.1");
-  await page.locator(".dp-allow-risk input").check();
-  await page.getByRole("button", { name: "允许此版本", exact: true }).click();
-  await page.waitForTimeout(400);
-  const flat = JSON.stringify(calls);
-  expect(flat).toContain('"action":"allow"');
-  expect(flat).toContain("pkg@1.0.0");
 });
 
 test("安装前 inspect 拒绝非组合包（B1-16）", async ({ page }) => {

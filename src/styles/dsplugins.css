@@ -410,11 +410,6 @@
 .dp-meta-label { color: var(--danger, #e5484d); font-weight: 600; }
 .dp-meta-code { color: var(--text-muted); font-size: 11px; font-family: ui-monospace, Consolas, monospace; word-break: break-all; }
 .dp-meta-empty { color: var(--text-muted); font-size: 11.5px; padding: 2px 0 0; }
-.dp-exemptions summary { cursor: pointer; font-size: 11.5px; color: var(--text-muted); }
-.dp-exemption-list { list-style: none; margin: 6px 0 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
-.dp-exemption { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 11px; color: var(--text-muted); }
-.dp-exemption code { color: var(--text); font-family: ui-monospace, Consolas, monospace; }
-.dp-exemption-rt { display: inline-flex; align-items: center; gap: 4px; }
 .dp-badge-kind { background: var(--surface-3); color: var(--text-3); border-color: var(--panel-border); }
 
 /* B1-08：操作输出 */
@@ -466,12 +461,6 @@
   background: rgba(229, 72, 77, 0.1); color: var(--danger, #e5484d);
   border-color: rgba(229, 72, 77, 0.4);
 }
-.dp-allow { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
-.dp-allow .dp-input { font-size: 11px; padding: 4px 8px; }
-.dp-allow-spec { width: 180px; }
-.dp-allow-rt { width: 130px; }
-.dp-allow-risk { font-size: 11px; color: var(--text-muted); display: inline-flex; align-items: center; gap: 4px; }
-
 /* 安装对话框阶段 */
 .dp-confirm-row { display: flex; align-items: baseline; gap: 8px; font-size: 12px; word-break: break-all; }
 .dp-confirm-label { color: var(--text-muted); flex: none; }
