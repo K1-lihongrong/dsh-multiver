@@ -1,6 +1,7 @@
 import { createApp } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import "./styles/common.css";
+import "./styles/dsplugins.css";
 import { applyStored } from "./composables/useTheme.js";
 import { applyStoredLang } from "./composables/useI18n.js";
 import App from "./App.vue";

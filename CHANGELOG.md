@@ -7,6 +7,27 @@
 
 ---
 
+## [0.3.3] - 未发布
+
+### 插件面板拆分（技术债 D21）
+
+- **`DsPluginPanel.vue` 从 1677 行降到 343 行**，按职责拆成四块，互不共享状态的代码不再挤在一个文件里：
+  - `DsPluginCatalog.vue`（386 行）：推荐页——分类标签栏、双行卡片、描述浮窗、星标排序、远端检查。
+  - `DsPluginInstallDialog.vue`（338 行）：安装对话框五阶段（form → checking → confirm → installing → done/failed）+ 安装源记忆与首次探测。
+  - `DsPluginInstalled.vue`（207 行）：已安装列表、筛选、卸载、检查更新、更新。
+  - `DsPluginMeta.vue`（130 行）：待决定的构建脚本、版本豁免的允许与撤销。
+- **状态归属按实际共享关系上提**：`installedNames`、`busy`、`lastAction` 留在壳；进度行抽成 `composables/useDsPluginLog.js`，由壳 `provide` 给安装对话框与底部日志区共用。
+- **样式独立成文件**：全部 `dp-*` 规则移到 `styles/dsplugins.css`（466 行），由 `main.js` 引入。子组件不需要再各自复制一份 scoped 样式。
+- **推荐页改为切到该标签时才激活**，避免拆组件后一挂载就发远端请求。
+- 官方失败诊断的本地化提示抽到 `composables/useDsPluginErrors.js`，壳与子组件共用。
+
+### 验证
+
+- `pnpm build` 通过。
+- **E2E 35 passed**（`dsplugins.spec.js` 20 条全绿，覆盖标签切换、安装、卸载、豁免、推荐页）。
+
+---
+
 ## [0.3.2] - 未发布
 
 ### 更新下载的镜像回退
