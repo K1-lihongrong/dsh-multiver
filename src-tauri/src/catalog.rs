@@ -66,6 +66,10 @@ pub struct CatalogPlugin {
 #[derive(Debug, Deserialize)]
 struct RawCatalog {
     version: u32,
+    /// 列表内容的时间戳（ISO 8601）。用于判断"哪边更新"。
+    /// 缺失时视为最旧——旧数据没有这个字段，远端推送时会自动补上。
+    #[serde(rename = "updatedAt", default)]
+    updated_at: Option<String>,
     plugins: Vec<CatalogPlugin>,
 }
 
@@ -158,12 +162,44 @@ pub fn check_remote(root: &Path, force: bool) -> CheckResult {
             };
         }
     };
-    if let Err(e) = parse_catalog(&text) {
+    let remote_raw = match parse_raw(&text) {
+        Ok(r) => r,
+        Err(e) => {
+            mark_checked();
+            return CheckResult {
+                checked: true,
+                updated: false,
+                error: Some(format!("远端列表解析失败：{}", e)),
+            };
+        }
+    };
+
+    // 本地比远端新时不覆盖。
+    //
+    // 场景：开发者改了 docs/plugins.json 但还没推到远端，或缓存里已有
+    // 更新的数据。仅按 sha256 判"不同就写盘"会把本地新内容冲掉。
+    //
+    // 判定规则（缺失时间戳视为最旧）：
+    //   本地有 + 远端无  → 本地新，跳过
+    //   本地无 + 远端有  → 远端新，写入
+    //   两边都有         → 比字符串
+    //   两边都无         → 维持原 sha256 行为
+    let local_ts = String::from_utf8(baseline)
+        .ok()
+        .and_then(|t| parse_raw(&t).ok())
+        .and_then(|r| r.updated_at);
+    let remote_is_newer = match (&local_ts, &remote_raw.updated_at) {
+        (Some(local), Some(remote_ts)) => remote_ts > local,
+        (Some(_), None) => false, // 远端是旧格式，视为更旧
+        (None, Some(_)) => true,  // 本地是旧格式，远端带时间戳即更新
+        (None, None) => true,     // 都无时间戳，维持原行为（有差异就写）
+    };
+    if !remote_is_newer {
         mark_checked();
         return CheckResult {
             checked: true,
             updated: false,
-            error: Some(format!("远端列表解析失败：{}", e)),
+            error: None,
         };
     }
 
@@ -223,19 +259,22 @@ fn parse_builtin() -> Result<Vec<CatalogPlugin>, String> {
     parse_catalog(BUILTIN).map_err(|e| format!("内置推荐列表解析失败（打包异常）：{}", e))
 }
 
-fn parse_catalog(text: &str) -> Result<Vec<CatalogPlugin>, String> {
-    let raw: RawCatalog = serde_json::from_str(text).map_err(|e| format!("解析失败：{}", e))?;
+/// 解析并校验 catalog，返回完整结构（含 updatedAt）。
+fn parse_raw(text: &str) -> Result<RawCatalog, String> {
+    let mut raw: RawCatalog =
+        serde_json::from_str(text).map_err(|e| format!("解析失败：{}", e))?;
     if raw.version > SUPPORTED_VERSION {
         return Err(format!(
             "推荐列表版本 {} 高于本程序支持的 {}，请更新 dsh-multiver",
             raw.version, SUPPORTED_VERSION
         ));
     }
-    Ok(raw
-        .plugins
-        .into_iter()
-        .filter(|p| p.hidden != Some(true))
-        .collect())
+    raw.plugins.retain(|p| p.hidden != Some(true));
+    Ok(raw)
+}
+
+fn parse_catalog(text: &str) -> Result<Vec<CatalogPlugin>, String> {
+    Ok(parse_raw(text)?.plugins)
 }
 
 #[cfg(test)]
@@ -348,6 +387,41 @@ mod tests {
         let c = load_local(&root).unwrap();
         // 缓存损坏 → 回退内置（内置条目数 > 1）
         assert!(c.plugins.len() > 1);
+    }
+
+    #[test]
+    fn updated_at_is_parsed() {
+        let text = r#"{"version":2,"updatedAt":"2026-11-02T20:00:00Z","plugins":[
+            {"name":"a","description":"d","category":"c","repo":"https://x/y"}
+        ]}"#;
+        let raw = parse_raw(text).unwrap();
+        assert_eq!(raw.updated_at.as_deref(), Some("2026-11-02T20:00:00Z"));
+    }
+
+    #[test]
+    fn updated_at_optional_for_legacy_catalog() {
+        let text = r#"{"version":2,"plugins":[
+            {"name":"a","description":"d","category":"c","repo":"https://x/y"}
+        ]}"#;
+        assert!(parse_raw(text).unwrap().updated_at.is_none());
+    }
+
+    #[test]
+    fn newer_remote_is_accepted_older_is_skipped() {
+        // 与 check_remote 里的判定规则保持一致。
+        let remote_is_newer = |local: &Option<String>, remote: &Option<String>| match (local, remote) {
+            (Some(l), Some(r)) => r > l,
+            (Some(_), None) => false,
+            (None, Some(_)) => true,
+            (None, None) => true,
+        };
+
+        let local = Some("2026-11-02T20:00:00Z".to_string());
+        assert!(!remote_is_newer(&local, &Some("2026-11-01T10:00:00Z".to_string())), "远端更旧应跳过");
+        assert!(remote_is_newer(&local, &Some("2026-11-03T10:00:00Z".to_string())), "远端更新应写入");
+        assert!(!remote_is_newer(&local, &None), "本地有时间戳、远端没有 → 本地新，跳过");
+        assert!(remote_is_newer(&None, &Some("2026-11-03T10:00:00Z".to_string())), "本地无时间戳、远端有 → 远端新，写入");
+        assert!(remote_is_newer(&None, &None), "都无时间戳 → 维持 sha256 行为");
     }
 
     #[test]

@@ -1,5 +1,6 @@
 {
   "version": 2,
+  "updatedAt": "2026-11-02T20:00:00Z",
   "plugins": [
     {
       "name": "dsh-multiver-bridge",
