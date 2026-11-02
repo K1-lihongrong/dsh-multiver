@@ -286,6 +286,7 @@ export default {
     "dsplugins.sourceUser": "已安裝",
     "dsplugins.incompatibleHint": "版本不相容：依上方輸出中的 allow-version 指令可接受風險（僅限精確的 套件@版本 + DSH 版本）。",
     "dsplugins.pnpmMissingHint": "找不到 pnpm：請先安裝 pnpm 並確認它在 PATH 中。",
+    "dsplugins.missingDepHint": "該套件已不在 profile 的相依項目中，但仍列在 dsh 的 bundles 設定裡。請開啟 profile 目錄，從 package.json 的 dsh.profile.bundles 中移除它。",
     "dsplugins.diagnosticsHint": "診斷日誌：{p}",
     "dsplugins.kindPlugin": "外掛",
     "dsplugins.kindDependency": "相依（非外掛）",

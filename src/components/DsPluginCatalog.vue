@@ -1,7 +1,7 @@
 <script setup>
 import { ref, computed, watch, onMounted, onUnmounted } from "vue";
 import { invoke } from "@tauri-apps/api/core";
-import { t } from "../composables/useI18n.js";
+import { t, langMode } from "../composables/useI18n.js";
 import { useToast } from "../composables/useToast.js";
 
 // 「推荐」标签页：分类标签栏、双行卡片、描述浮窗、星标排序。
@@ -135,6 +135,46 @@ function scrollCatalogTabs(dir) {
   el.scrollBy({ left: dir * 120, behavior: "smooth" });
 }
 
+// 拖动标签栏：按住左键横向拖动。拖动距离超过 4px 才算拖拽，
+// 避免轻微抖动吞掉按钮点击。
+let dragStartX = 0;
+let dragStartScroll = 0;
+let dragMoved = false;
+let dragging = false;
+
+function onTabsMouseDown(e) {
+  if (e.button !== 0) return;
+  const el = catalogTabsRef.value;
+  if (!el) return;
+  dragging = true;
+  dragMoved = false;
+  dragStartX = e.clientX;
+  dragStartScroll = el.scrollLeft;
+}
+
+function onTabsMouseMove(e) {
+  if (!dragging) return;
+  const el = catalogTabsRef.value;
+  if (!el) return;
+  const dx = e.clientX - dragStartX;
+  if (!dragMoved && Math.abs(dx) < 4) return;
+  dragMoved = true;
+  el.scrollLeft = dragStartScroll - dx;
+  e.preventDefault();
+}
+
+function onTabsMouseUp() {
+  dragging = false;
+}
+
+// 拖拽结束时拦掉紧随其后的 click，否则会误切分类。
+function onTabsClickCapture(e) {
+  if (!dragMoved) return;
+  dragMoved = false;
+  e.stopPropagation();
+  e.preventDefault();
+}
+
 /// 打开外部链接。Tauri WebView 里 <a target="_blank"> 不生效，必须走 open_url 命令。
 async function openExternal(url) {
   if (!url) return;
@@ -143,6 +183,21 @@ async function openExternal(url) {
   } catch (e) {
     notify(String(e));
   }
+}
+
+/// 插件描述：按当前语言取 descriptionI18n，缺项回退到 description（中文原文）。
+/// 语言跟随 langMode；"system" 时用浏览器语言判定。
+const currentLang = computed(() => {
+  const mode = langMode.value;
+  if (mode && mode !== "system") return mode;
+  const l = (navigator.language || "zh-CN").toLowerCase();
+  if (l.startsWith("zh")) return l.includes("tw") || l.includes("hk") || l.includes("mo") ? "zh-TW" : "zh-CN";
+  if (l.startsWith("ja")) return "ja-JP";
+  return "en-US";
+});
+
+function descOf(p) {
+  return p.descriptionI18n?.[currentLang.value] || p.description || "";
 }
 
 /// 推荐项的安装 spec：有 spec 用 spec，否则用包名。
@@ -172,7 +227,7 @@ function showCatalogTip(p, el) {
   // 右边缘对齐卡片右边缘；卡片窄于 320px 时收窄到卡片宽度
   const width = Math.min(320, rect.width);
   catalogTip.value = {
-    text: p.description || "",
+    text: descOf(p),
     left: rect.right - width,
     top: rect.bottom + 4,
     width,
@@ -251,9 +306,20 @@ watch(catalog, () => {
   setTimeout(updateCatalogTabsState, 0);
 }, { flush: "post" });
 
+// 窗口宽度变化时重算（拆分前没有这条，窄窗口不会出现 ‹ ›）
+onMounted(() => {
+  window.addEventListener("resize", updateCatalogTabsState);
+});
+onUnmounted(() => {
+  window.removeEventListener("resize", updateCatalogTabsState);
+});
+
 // 切到推荐标签时激活（首次拉本地列表 + 后台检查远端）
 watch(() => props.active, (on) => {
-  if (on) activate();
+  if (on) {
+    activate();
+    setTimeout(updateCatalogTabsState, 0);
+  }
 }, { immediate: true });
 </script>
 
@@ -289,6 +355,11 @@ watch(() => props.active, (on) => {
           ref="catalogTabsRef"
           class="dp-cat-tabs-scroll"
           @scroll="updateCatalogTabsState"
+          @mousedown="onTabsMouseDown"
+          @mousemove="onTabsMouseMove"
+          @mouseup="onTabsMouseUp"
+          @mouseleave="onTabsMouseUp"
+          @click.capture="onTabsClickCapture"
         >
           <button
             v-for="c in catalogCategories"
@@ -360,7 +431,7 @@ watch(() => props.active, (on) => {
               @mouseenter="onCardEnter(p, $event)"
               @mouseleave="onCardLeave"
             >
-              <span class="dp-cc-desc">{{ p.description }}</span>
+              <span class="dp-cc-desc">{{ descOf(p) }}</span>
               <button
                 class="dp-cc-more"
                 @click.stop="showCatalogTip(p, $event.currentTarget.closest('.dp-catalog-card'))"

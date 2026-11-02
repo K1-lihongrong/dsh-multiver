@@ -4,6 +4,11 @@
     {
       "name": "dsh-multiver-bridge",
       "description": "在 dsh 设置页管理 multiver 的多版本与更新",
+      "descriptionI18n": {
+        "zh-TW": "在 dsh 設定頁管理 multiver 的多版本與更新",
+        "en-US": "Manage multiver versions and updates from the dsh settings page",
+        "ja-JP": "dsh の設定ページから multiver のバージョン管理と更新を行う"
+      },
       "category": "版本管理",
       "repo": "https://github.com/K1-lihongrong/dsh-multiver",
       "tags": ["same-author"]
@@ -11,12 +16,22 @@
     {
       "name": "dsh-pocket",
       "description": "手机扫码远程访问电脑上的 DSH，支持局域网与公网",
+      "descriptionI18n": {
+        "zh-TW": "手機掃碼遠端存取電腦上的 DSH，支援區域網路與公網",
+        "en-US": "Scan a QR code on your phone to access DSH on your computer, over LAN or the internet",
+        "ja-JP": "スマホで QR コードを読み取り、LAN またはインターネット経由で PC 上の DSH にアクセス"
+      },
       "category": "远程访问",
       "repo": "https://github.com/shaobeichen/dsh-pocket"
     },
     {
       "name": "@deepseek-harness-tui/dsh-tui",
       "description": "Claude Code 风格的终端界面，像素鲸鱼顶栏与鼠标交互。作者建议全局安装：npm i -g @deepseek-ai/dsh @deepseek-harness-tui/dsh-tui",
+      "descriptionI18n": {
+        "zh-TW": "Claude Code 風格的終端介面，像素鯨魚頂欄與滑鼠互動。作者建議全域安裝：npm i -g @deepseek-ai/dsh @deepseek-harness-tui/dsh-tui",
+        "en-US": "A Claude Code-style terminal UI with a pixel whale top bar and mouse interaction. The author recommends a global install: npm i -g @deepseek-ai/dsh @deepseek-harness-tui/dsh-tui",
+        "ja-JP": "Claude Code 風のターミナル UI。ピクセルホエールのトップバーとマウス操作に対応。作者はグローバルインストールを推奨：npm i -g @deepseek-ai/dsh @deepseek-harness-tui/dsh-tui"
+      },
       "category": "终端界面",
       "repo": "https://github.com/ccch1mneyyy/dsh-TUI",
       "tags": ["featured"]
@@ -24,6 +39,11 @@
     {
       "name": "dsh-ops",
       "description": "底层操作工具集，减少 Token 消耗与任务耗时",
+      "descriptionI18n": {
+        "zh-TW": "底層操作工具集，減少 Token 消耗與任務耗時",
+        "en-US": "Low-level operation toolset that cuts token usage and task time",
+        "ja-JP": "低レベル操作ツール集。トークン消費とタスク時間を削減"
+      },
       "category": "工具增强",
       "repo": "https://github.com/T-Auto/dsh-ops",
       "tags": ["featured"]
@@ -31,6 +51,11 @@
     {
       "name": "dsh-cost-meter",
       "description": "会话费用追踪，含峰谷计价、多模型价格与额度查询",
+      "descriptionI18n": {
+        "zh-TW": "工作階段費用追蹤，含峰谷計價、多模型價格與額度查詢",
+        "en-US": "Session cost tracking with peak/off-peak pricing, multi-model rates, and quota lookup",
+        "ja-JP": "セッション費用の追跡。ピーク・オフピーク料金、複数モデルの価格と残量照会に対応"
+      },
       "category": "费用统计",
       "repo": "https://github.com/Han-1413141/dsh-cost-meter",
       "minDshVersion": "0.2.0"
@@ -38,6 +63,11 @@
     {
       "name": "@smalltailqwq/dsh-client-ui-skin-deep-whale-manager",
       "description": "皮肤管理器，安装后可在设置页切换与调整各款深海主题",
+      "descriptionI18n": {
+        "zh-TW": "面板管理器，安裝後可在設定頁切換與調整各款深海主題",
+        "en-US": "Skin manager. After installing, switch and tweak deep-sea themes in the settings page",
+        "ja-JP": "スキンマネージャー。インストール後、設定ページで深海テーマの切り替えと調整が可能"
+      },
       "category": "主题皮肤",
       "repo": "https://github.com/Small-tailqwq/dsh-deep-whale"
     },
@@ -45,6 +75,11 @@
       "name": "dsh-bili-scroll",
       "spec": "https://github.com/c1overzz/dsh-bili-scroll/releases/download/v2.0.2/dsh-bili-scroll-2.0.2.tgz",
       "description": "每天自动刷一轮 B 站，读字幕挑出值得的写日报，值得的 @ 你",
+      "descriptionI18n": {
+        "zh-TW": "每天自動刷一輪 B 站，讀字幕挑出值得的寫日報，值得的 @ 你",
+        "en-US": "Scans Bilibili once a day, reads subtitles, writes a digest of what is worth your time, and mentions you for the keepers",
+        "ja-JP": "毎日 B 站をひと通り巡回し、字幕を読んで価値のあるものを日報にまとめ、見逃せないものはあなたにメンション"
+      },
       "category": "内容聚合",
       "repo": "https://github.com/c1overzz/dsh-bili-scroll"
     },
@@ -52,6 +87,11 @@
       "name": "dsh-bili-whale",
       "spec": "github:Alterssss/dsh-bili-whale",
       "description": "按自己的作息刷 B 站，写两本日记，值得的 @ 你（不是定时任务，有生物钟和克制）",
+      "descriptionI18n": {
+        "zh-TW": "按自己的作息刷 B 站，寫兩本日記，值得的 @ 你（不是定時任務，有生物鐘和克制）",
+        "en-US": "Browses Bilibili on its own schedule, keeps two journals, and mentions you for the keepers (not a cron job—it has a body clock and restraint)",
+        "ja-JP": "自分の生活リズムで B 站を巡回し、2 冊の日記を書く。見逃せないものはあなたにメンション（定時タスクではなく、体内時計と自制心を持つ）"
+      },
       "category": "内容聚合",
       "repo": "https://github.com/Alterssss/dsh-bili-whale",
       "noNpm": true
@@ -59,6 +99,11 @@
     {
       "name": "@tt-a1i/archify-dsh",
       "description": "把想法、计划或代码库转成可交互的 HTML 图。仅适配 dsh 0.1.2-rc.1，更高版本安装可能被拒",
+      "descriptionI18n": {
+        "zh-TW": "把想法、計畫或程式碼庫轉成可互動的 HTML 圖。僅適配 dsh 0.1.2-rc.1，更高版本安裝可能被拒",
+        "en-US": "Turns ideas, plans, or codebases into interactive HTML diagrams. Only tested with dsh 0.1.2-rc.1; newer versions may refuse the install",
+        "ja-JP": "アイデア・計画・コードベースをインタラクティブな HTML 図に変換。dsh 0.1.2-rc.1 のみ対応、それ以降のバージョンではインストールが拒否される可能性"
+      },
       "category": "可视化",
       "repo": "https://github.com/tt-a1i/archify"
     }

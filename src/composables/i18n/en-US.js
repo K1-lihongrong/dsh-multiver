@@ -286,6 +286,7 @@ export default {
     "dsplugins.sourceUser": "Installed",
     "dsplugins.incompatibleHint": "Incompatible version: run the allow-version command from the output above to accept the risk (exact package@version + DSH version only).",
     "dsplugins.pnpmMissingHint": "pnpm not found: install pnpm and make sure it is on PATH.",
+    "dsplugins.missingDepHint": "This package is no longer a profile dependency but is still listed in the dsh bundles config. Open the profile directory and remove it from dsh.profile.bundles in package.json.",
     "dsplugins.diagnosticsHint": "Diagnostics log: {p}",
     "dsplugins.kindPlugin": "Plugin",
     "dsplugins.kindDependency": "Dependency (not a plugin)",

@@ -12,6 +12,7 @@
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
@@ -36,6 +37,14 @@ const CACHE_FILE: &str = "plugins.json";
 pub struct CatalogPlugin {
     pub name: String,
     pub description: String,
+    /// 各语言的描述覆盖项。前端按当前语言取用，缺项回退到 `description`。
+    /// 旧版 catalog 与未写翻译的条目此字段为 None。
+    #[serde(
+        rename = "descriptionI18n",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub description_i18n: Option<HashMap<String, String>>,
     pub category: String,
     pub repo: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -288,6 +297,29 @@ mod tests {
         assert_eq!(p.min_dsh_version.as_deref(), Some("0.2.0"));
         assert_eq!(p.tags.as_ref().unwrap(), &vec!["featured".to_string()]);
         assert_eq!(p.no_npm, Some(true));
+    }
+
+    #[test]
+    fn description_i18n_is_parsed() {
+        let text = r#"{"version":2,"plugins":[
+            {"name":"a","description":"中文","category":"c","repo":"https://x/y",
+             "descriptionI18n":{"en-US":"English","ja-JP":"日本語"}}
+        ]}"#;
+        let p = &parse_catalog(text).unwrap()[0];
+        let map = p.description_i18n.as_ref().unwrap();
+        assert_eq!(map.get("en-US").map(String::as_str), Some("English"));
+        assert_eq!(map.get("ja-JP").map(String::as_str), Some("日本語"));
+        // 缺项时前端回退到中文原文，这里确认原字段仍在
+        assert_eq!(p.description, "中文");
+    }
+
+    #[test]
+    fn description_i18n_optional_for_legacy_entries() {
+        let text = r#"{"version":2,"plugins":[
+            {"name":"a","description":"d","category":"c","repo":"https://x/y"}
+        ]}"#;
+        let p = &parse_catalog(text).unwrap()[0];
+        assert!(p.description_i18n.is_none());
     }
 
     #[test]

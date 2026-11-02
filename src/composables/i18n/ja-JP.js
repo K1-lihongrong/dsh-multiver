@@ -286,6 +286,7 @@ export default {
     "dsplugins.sourceUser": "インストール済み",
     "dsplugins.incompatibleHint": "バージョン非互換: 上の出力にある allow-version コマンドでリスクを承認できます（完全一致の package@version + DSH バージョンのみ）。",
     "dsplugins.pnpmMissingHint": "pnpm が見つかりません: pnpm をインストールし PATH に通してください。",
+    "dsplugins.missingDepHint": "このパッケージは profile の依存関係にはありませんが、dsh の bundles 設定に残っています。profile ディレクトリを開き、package.json の dsh.profile.bundles から削除してください。",
     "dsplugins.diagnosticsHint": "診断ログ: {p}",
     "dsplugins.kindPlugin": "プラグイン",
     "dsplugins.kindDependency": "依存（プラグインではない）",

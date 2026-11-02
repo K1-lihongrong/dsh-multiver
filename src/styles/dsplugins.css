@@ -89,9 +89,20 @@
 .dp-btn {
   font-size: 12px; padding: 5px 14px; border-radius: 6px; cursor: pointer;
   border: 1px solid var(--panel-border); background: var(--panel-bg); color: var(--text);
-  transition: all .15s; white-space: nowrap;
+  transition: background .15s, border-color .15s, color .15s; white-space: nowrap;
 }
-.dp-btn:hover:not(:disabled) { background: var(--surface-3); }
+/* 浅色主题下 --panel-bg(#fff) 与 --surface-3(#f0f2f5) 色差极小，
+   hover 只换背景几乎看不出。改为同时加深边框，形成明确的视觉反馈。 */
+.dp-btn:hover:not(:disabled) {
+  background: var(--surface-3);
+  border-color: var(--accent-border);
+  color: var(--text);
+}
+/* 键盘导航的焦点环。鼠标点击不显示（:focus-visible 语义） */
+.dp-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
 .dp-btn:disabled { opacity: .5; cursor: not-allowed; }
 .dp-btn-primary {
   background: var(--accent); color: #fff; border-color: var(--accent);
@@ -346,20 +357,30 @@
   min-width: 0;
 }
 .dp-item {
-  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  display: flex; flex-direction: column; gap: 6px;
   padding: 8px 12px; border-radius: 7px;
   background: var(--surface-2); border: 1px solid transparent;
   transition: all .12s;
   min-width: 0;
 }
 .dp-item:hover { border-color: var(--panel-border); background: var(--surface-3); }
-.dp-item-main { display: flex; align-items: center; gap: 8px; min-width: 0; flex: 1; }
-.dp-item-icon { font-size: 14px; flex: none; opacity: .8; }
-.dp-item-info { display: flex; align-items: baseline; gap: 6px; min-width: 0; }
+/* 第一行：图标 + 包名。包名过长时换行完整显示，不再省略 */
+.dp-item-row1 { display: flex; align-items: flex-start; gap: 8px; min-width: 0; }
+.dp-item-icon { font-size: 14px; flex: none; opacity: .8; line-height: 18px; }
 .dp-item-name {
+  flex: 1; min-width: 0;
   font-size: 12px; color: var(--text); font-family: ui-monospace, Consolas, monospace;
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  line-height: 18px;
+  word-break: break-all;
 }
+/* 第二行：版本 + 徽标 + 操作按钮 */
+.dp-item-row2 { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding-left: 22px; }
+
+/* 正在操作的条目：整行淡出 + 右上角转圈与已运行秒数，避免长时间无反馈 */
+.dp-item-pending { opacity: .65; }
+.dp-item-progress { display: inline-flex; align-items: center; gap: 5px; flex: none; }
+.dp-item-spinner { flex: none; width: 11px; height: 11px; border-width: 1.5px; }
+.dp-item-elapsed { font-size: 10.5px; color: var(--text-muted); font-variant-numeric: tabular-nums; }
 .dp-item-ver { font-size: 10.5px; color: var(--text-muted); font-variant-numeric: tabular-nums; flex: none; }
 .dp-badge {
   font-size: 9.5px; padding: 1px 7px; border-radius: 8px; flex: none;
