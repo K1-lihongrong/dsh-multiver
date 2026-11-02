@@ -15,7 +15,7 @@ const props = defineProps({
   profileInfo: { type: Object, required: true },
   plugins: { type: Array, default: () => [] },
 });
-const emit = defineEmits(["close", "installed", "refresh-info"]);
+const emit = defineEmits(["close", "installed", "refresh-info", "installing-change"]);
 
 const { notify } = useToast();
 const { logLines } = inject(DS_PLUGIN_LOG_KEY);

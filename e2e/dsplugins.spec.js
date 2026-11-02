@@ -437,3 +437,33 @@ test("失败弹窗内允许构建脚本并重试（B1-12 对齐官方）", async
   expect(flat).toContain('"kind":"approve"');
   expect(flat).toContain("esbuild");
 });
+
+test("安装中关闭对话框 → 推荐页安装按钮仍禁用", async ({ page }) => {
+  await mockTauri(page, {
+    installed: [makeVersion("0.2.0-rc.1", { isolated: true })],
+    extra: {
+      ds_list_plugins: { dsh_home: "D:/dsh", home_kind: "shared", profiles: [PROFILE] },
+      ds_plugin_catalog: {
+        plugins: [
+          { name: "some-pkg", description: "示例包", category: "工具", repo: "https://github.com/x/y", tags: [] },
+        ],
+      },
+      // 永不 resolve：安装一直停在 installing 阶段
+      ds_plugin_action: "() => new Promise(() => {})",
+    },
+  });
+  await page.goto("/");
+  await page.getByRole("button", { name: "插件", exact: true }).click();
+  await page.getByRole("button", { name: /添加插件/ }).click();
+  await page.locator(".dp-modal-input").first().fill("hang-pkg");
+  await page.locator(".dp-modal").getByRole("button", { name: "安装", exact: true }).click();
+  await page.locator(".dp-modal").getByRole("button", { name: "确认安装", exact: true }).click();
+  await page.waitForTimeout(300);
+  // 安装卡在 installing：此时仍可关闭对话框（closeInstall 不判 installing）
+  await page.locator(".dp-modal-head .dp-icon-btn").click();
+  await expect(page.locator(".dp-modal")).toHaveCount(0);
+  // 切到推荐页：安装按钮应保持禁用——installing 状态由壳持有，
+  // 依赖子组件 emit("installing-change")，漏声明时此处会失败。
+  await page.getByRole("tab", { name: "推荐" }).click();
+  await expect(page.locator(".dp-cc-install")).toBeDisabled();
+});
