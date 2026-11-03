@@ -423,7 +423,9 @@ function toggleInstalledNote(v) {
   display: flex; align-items: center; flex-wrap: wrap;
   gap: 6px 12px;
   padding: 10px 14px; border: 1px solid var(--surface-5); border-radius: 9px;
-  background: var(--panel-bg); transition: border-color .15s, background .15s;
+  background: var(--panel-bg);
+  transition: border-color var(--motion-base) var(--ease-standard),
+              background-color var(--motion-base) var(--ease-standard);
 }
 .ver-item:hover { border-color: var(--gray-scroll); background: var(--panel-bg); }
 .ver-item.item-selected { border-color: var(--accent); background: var(--accent-weak-2); }

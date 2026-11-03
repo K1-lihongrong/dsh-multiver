@@ -76,6 +76,17 @@
   --shadow-pop:      rgba(0,0,0,0.12);
   --shadow-pop2:     rgba(0,0,0,0.18);
   --accent-glow:     rgba(79,110,247,0.15);
+
+  /* ── 动效（全站统一，D22）──
+   * 所有可点击控件的过渡一律引用这三个令牌，不再写字面值。
+   * fast：密集小控件（分类标签、图标按钮、文字链接按钮）
+   * base：常规按钮
+   * 曲线统一用 ease-standard（Material 标准曲线），比默认 ease 收尾更利落。
+   */
+  --motion-fast:     .12s;
+  --motion-base:     .15s;
+  --ease-standard:   cubic-bezier(.2, 0, 0, 1);
+  --press-scale:     .97;
 }
 
 * { box-sizing: border-box; }
@@ -107,20 +118,50 @@ body {
 .btn {
   border: 1px solid var(--border); background: var(--panel-bg); color: var(--text-2);
   padding: 6px 14px; border-radius: 7px; font-size: 13px;
-  cursor: pointer; transition: all .15s; font-family: inherit;
+  cursor: pointer; font-family: inherit;
   white-space: nowrap; flex-shrink: 0;
+  /* 分属性过渡，不用 all：避免把布局属性也纳入动画 */
+  transition: background-color var(--motion-base) var(--ease-standard),
+              border-color var(--motion-base) var(--ease-standard),
+              color var(--motion-base) var(--ease-standard),
+              box-shadow var(--motion-base) var(--ease-standard),
+              transform var(--motion-fast) var(--ease-standard);
 }
-.btn:hover:not(:disabled) { border-color: var(--border-strong); background: var(--gray-hover); }
+/* hover：浅底 + 主色描边。文字色不变（保持 --text-2，避免"发黑"观感） */
+.btn:hover:not(:disabled) { border-color: var(--accent-border); background: var(--surface-3); }
+/* 按下：底色再深一档 + 缩到 97%，点击有落点 */
+.btn:active:not(:disabled) {
+  background: var(--accent-weak-3);
+  border-color: var(--accent-border);
+  transform: scale(var(--press-scale));
+}
+/* 键盘导航焦点环；鼠标点击不显示（:focus-visible 语义） */
+.btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .btn:disabled { opacity: .5; cursor: not-allowed; }
 .btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
-.btn.primary:hover:not(:disabled) { background: var(--accent-hover); border-color: var(--accent-hover); }
+/* D22 决策 5：hover 变深 + 主色光晕。文字保持白色不变 */
+.btn.primary:hover:not(:disabled) {
+  background: var(--accent-hover);
+  border-color: var(--accent-hover);
+  box-shadow: 0 0 0 3px var(--accent-glow), 0 2px 10px var(--accent-glow);
+}
+/* 主按钮按下维持主色深档，不落到 .btn:active 的浅蓝底 */
+.btn.primary:active:not(:disabled) {
+  background: var(--accent-hover);
+  border-color: var(--accent-hover);
+  box-shadow: 0 0 0 2px var(--accent-glow), 0 1px 4px var(--accent-glow);
+  transform: scale(var(--press-scale));
+}
 .btn.danger { color: var(--danger); }
-.btn.danger:hover:not(:disabled) { background: var(--danger-weak); border-color: var(--danger-border); }
+/* D22 决策 6：hover 实心红底白字，反馈明确 */
+.btn.danger:hover:not(:disabled) { background: var(--danger); border-color: var(--danger); color: #fff; }
+.btn.danger:active:not(:disabled) { background: var(--danger); border-color: var(--danger); color: #fff; filter: brightness(.94); }
 .btn.small { padding: 4px 12px; font-size: 12px; }
 .btn.active {
   background: var(--warn-weak); border-color: var(--warn-border); color: var(--warn);
 }
 .btn.active:hover:not(:disabled) { background: var(--warn-weak-2); border-color: var(--warn-border-2); }
+.btn.active:active:not(:disabled) { background: var(--warn-weak-2); border-color: var(--warn-border-2); transform: scale(var(--press-scale)); }
 
 /* ---------- 徽章 ---------- */
 .badge {

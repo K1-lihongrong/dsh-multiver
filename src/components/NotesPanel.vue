@@ -110,7 +110,9 @@ onMounted(() => loadNotes(props.version));
 .notes-head {
   display: flex; align-items: center; justify-content: space-between;
   margin: -6px -8px 4px; padding: 6px 8px; border-radius: 6px;
-  cursor: pointer; user-select: none; transition: background .12s;
+  cursor: pointer; user-select: none;
+  /* D22：与全站共用动效令牌 */
+  transition: background-color var(--motion-fast) var(--ease-standard);
 }
 .notes-head:hover { background: var(--gray-chip); }
 .notes-title { font-weight: 600; font-size: 13px; color: var(--text-2); }

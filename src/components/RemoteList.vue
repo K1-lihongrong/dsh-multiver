@@ -367,8 +367,12 @@ pnpm install &amp;&amp; pnpm build</pre>
 .chip {
   border: 1px solid var(--surface-5); background: var(--surface-1); color: var(--text-code);
   padding: 4px 10px; border-radius: 6px; font-size: 12px;
-  cursor: pointer; transition: all .12s; font-family: inherit;
+  cursor: pointer; font-family: inherit;
   font-variant-numeric: tabular-nums;
+  /* D22：与全站共用动效令牌 */
+  transition: background-color var(--motion-fast) var(--ease-standard),
+              border-color var(--motion-fast) var(--ease-standard),
+              color var(--motion-fast) var(--ease-standard);
 }
 .chip:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); background: var(--accent-weak-2); }
 .chip:disabled { opacity: .5; cursor: not-allowed; }

@@ -116,7 +116,8 @@ onUnmounted(() => document.removeEventListener("click", onDocClick));
 .menu-item {
   text-align: left; border: none; background: none; color: var(--text-2);
   padding: 8px 12px; border-radius: 6px; font-size: 13px; cursor: pointer;
-  font-family: inherit; transition: background .12s;
+  font-family: inherit;
+  transition: background-color var(--motion-fast) var(--ease-standard);
 }
 .menu-item:hover:not(:disabled) { background: var(--surface-4); }
 .menu-item:disabled { opacity: .6; cursor: not-allowed; }
