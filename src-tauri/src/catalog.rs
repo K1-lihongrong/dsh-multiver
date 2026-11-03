@@ -278,8 +278,7 @@ fn parse_builtin() -> Result<Vec<CatalogPlugin>, String> {
 
 /// 解析并校验 catalog，返回完整结构（含 updatedAt）。
 fn parse_raw(text: &str) -> Result<RawCatalog, String> {
-    let mut raw: RawCatalog =
-        serde_json::from_str(text).map_err(|e| format!("解析失败：{}", e))?;
+    let mut raw: RawCatalog = serde_json::from_str(text).map_err(|e| format!("解析失败：{}", e))?;
     if raw.version > SUPPORTED_VERSION {
         return Err(format!(
             "推荐列表版本 {} 高于本程序支持的 {}，请更新 dsh-multiver",
@@ -439,19 +438,35 @@ mod tests {
     #[test]
     fn newer_remote_is_accepted_older_is_skipped() {
         // 与 check_remote 里的判定规则保持一致。
-        let remote_is_newer = |local: &Option<String>, remote: &Option<String>| match (local, remote) {
-            (Some(l), Some(r)) => r > l,
-            (Some(_), None) => false,
-            (None, Some(_)) => true,
-            (None, None) => true,
-        };
+        let remote_is_newer =
+            |local: &Option<String>, remote: &Option<String>| match (local, remote) {
+                (Some(l), Some(r)) => r > l,
+                (Some(_), None) => false,
+                (None, Some(_)) => true,
+                (None, None) => true,
+            };
 
         let local = Some("2026-11-02T20:00:00Z".to_string());
-        assert!(!remote_is_newer(&local, &Some("2026-11-01T10:00:00Z".to_string())), "远端更旧应跳过");
-        assert!(remote_is_newer(&local, &Some("2026-11-03T10:00:00Z".to_string())), "远端更新应写入");
-        assert!(!remote_is_newer(&local, &None), "本地有时间戳、远端没有 → 本地新，跳过");
-        assert!(remote_is_newer(&None, &Some("2026-11-03T10:00:00Z".to_string())), "本地无时间戳、远端有 → 远端新，写入");
-        assert!(remote_is_newer(&None, &None), "都无时间戳 → 维持 sha256 行为");
+        assert!(
+            !remote_is_newer(&local, &Some("2026-11-01T10:00:00Z".to_string())),
+            "远端更旧应跳过"
+        );
+        assert!(
+            remote_is_newer(&local, &Some("2026-11-03T10:00:00Z".to_string())),
+            "远端更新应写入"
+        );
+        assert!(
+            !remote_is_newer(&local, &None),
+            "本地有时间戳、远端没有 → 本地新，跳过"
+        );
+        assert!(
+            remote_is_newer(&None, &Some("2026-11-03T10:00:00Z".to_string())),
+            "本地无时间戳、远端有 → 远端新，写入"
+        );
+        assert!(
+            remote_is_newer(&None, &None),
+            "都无时间戳 → 维持 sha256 行为"
+        );
     }
 
     #[test]
