@@ -364,14 +364,16 @@
   min-width: 0;
 }
 .dp-item:hover { border-color: var(--panel-border); background: var(--surface-3); }
-/* 第一行：图标 + 包名。包名过长时换行完整显示，不再省略 */
-.dp-item-row1 { display: flex; align-items: flex-start; gap: 8px; min-width: 0; }
+/* 第一行：图标 + 包名。包名不换行，过长时省略号截断，悬停看全名 */
+.dp-item-row1 { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .dp-item-icon { font-size: 14px; flex: none; opacity: .8; line-height: 18px; }
 .dp-item-name {
   flex: 1; min-width: 0;
   font-size: 12px; color: var(--text); font-family: ui-monospace, Consolas, monospace;
   line-height: 18px;
-  word-break: break-all;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 /* 第二行：版本 + 徽标 + 操作按钮 */
 .dp-item-row2 { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding-left: 22px; }
