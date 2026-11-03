@@ -31,15 +31,15 @@ catalog 的远端检查原先只判「内容 sha256 不同即视为有更新」�
 
 ### 🏗️ 插件面板拆分（技术债 D21）
 
-`DsPluginPanel.vue` 从 1677 行降到 343 行，按职责拆成四块：
+`DsPluginPanel.vue` 从 1677 行降到 341 行，按职责拆成四块：
 
 | 文件 | 行数 | 职责 |
 | :--- | ---: | :--- |
-| `DsPluginPanel.vue` | 343 | 壳：头部、工具栏、标签切换、profile 加载、日志 |
-| `DsPluginCatalog.vue` | 386 | 推荐页 |
-| `DsPluginInstallDialog.vue` | 338 | 安装对话框五阶段 |
-| `DsPluginInstalled.vue` | 207 | 已安装列表、筛选、卸载、更新 |
-| `DsPluginMeta.vue` | 51 | 待决定的构建脚本审批 |
+| `DsPluginPanel.vue` | 341 | 壳：头部、工具栏、标签切换、profile 加载、日志 |
+| `DsPluginCatalog.vue` | 458 | 推荐页 |
+| `DsPluginInstallDialog.vue` | 339 | 安装对话框五阶段 |
+| `DsPluginInstalled.vue` | 247 | 已安装列表、筛选、卸载、更新 |
+| `DsPluginMeta.vue` | 52 | 待决定的构建脚本审批 |
 
 `dp-*` 样式抽到 `styles/dsplugins.css`，进度行与失败诊断抽成 composable。
 
