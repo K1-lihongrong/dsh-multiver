@@ -34,7 +34,7 @@
   - `DsPluginCatalog.vue`（386 行）：推荐页——分类标签栏、双行卡片、描述浮窗、星标排序、远端检查。
   - `DsPluginInstallDialog.vue`（338 行）：安装对话框五阶段（form → checking → confirm → installing → done/failed）+ 安装源记忆与首次探测。
   - `DsPluginInstalled.vue`（207 行）：已安装列表、筛选、卸载、检查更新、更新。
-  - `DsPluginMeta.vue`（130 行）：待决定的构建脚本、版本豁免的允许与撤销。
+  - `DsPluginMeta.vue`（51 行）：待决定的构建脚本审批。
 - **状态归属按实际共享关系上提**：`installedNames`、`busy`、`lastAction` 留在壳；进度行抽成 `composables/useDsPluginLog.js`，由壳 `provide` 给安装对话框与底部日志区共用。
 - **样式独立成文件**：全部 `dp-*` 规则移到 `styles/dsplugins.css`（466 行），由 `main.js` 引入。子组件不需要再各自复制一份 scoped 样式。
 - **推荐页改为切到该标签时才激活**，避免拆组件后一挂载就发远端请求。
@@ -43,7 +43,9 @@
 ### 验证
 
 - `pnpm build` 通过。
-- **E2E 35 passed**（`dsplugins.spec.js` 20 条全绿，覆盖标签切换、安装、卸载、豁免、推荐页）。
+- **E2E 38 passed**（`dsplugins.spec.js` 24 条，新增推荐页的分类筛选、星标排序、描述浮窗、描述随语言切换）。
+- **Rust 单测 187 passed / 1 ignored**。
+- `cargo clippy -D warnings` 干净。
 
 ---
 
