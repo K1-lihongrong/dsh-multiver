@@ -1,0 +1,66 @@
+import { test } from "@playwright/test";
+import { mockTauri, makeVersion } from "../helpers.js";
+import { installCursor, glide, clickAt, waitReady, HOLD_START, HOLD_END } from "./_rec.js";
+
+// 06 安装进度：点「安装」→ 逐条推 install-progress 事件 → 进度条按阶段推进。
+// 事件字段来自 src-tauri/src/versions/install.rs 的 ProgressEvent：
+// { step, total, stage, detail, fraction }
+test("06 安装进度", async ({ page }) => {
+  await installCursor(page);
+  await mockTauri(page, {
+    state: {
+      version: "0.3.4",
+      root_dir: "D:/dsh-data",
+      default_version: null,
+      isolated_versions: [],
+      broken_versions: [],
+      use_official_dsh_home: false,
+      runtime_prompt_dismissed: true,
+      maintenance: { auto_enabled: true, last_cleanup_at: null, last_cleanup_count: 0, last_prune_at: null },
+    },
+    installed: [],
+    extra: {
+      // 让 install_version 挂起 6 秒，期间由测试脚本手动推事件
+      install_version: "(args) => new Promise((r) => setTimeout(() => r('已安装 ' + args.version), 6500))",
+    },
+  });
+  await page.goto("/");
+  await waitReady(page);
+  await page.waitForTimeout(HOLD_START);
+
+  // 填入版本号并点「安装」
+  const input = page.locator(".install-row input").first();
+  const box = await input.boundingBox();
+  if (box) {
+    await glide(page, box.x + 60, box.y + box.height / 2);
+    await page.mouse.click(box.x + 60, box.y + box.height / 2);
+    await page.waitForTimeout(150);
+    await page.keyboard.type("0.2.2-alpha.2", { delay: 70 });
+    await page.waitForTimeout(300);
+  }
+  await clickAt(page, page.getByRole("button", { name: "安装", exact: true }).first());
+  await page.waitForTimeout(300);
+
+  // 逐条推进度事件，节奏与真实安装相近（8 个阶段）
+  const steps = [
+    { step: 1, stage: "准备目录", detail: "", fraction: 1 },
+    { step: 2, stage: "写入配置", detail: "", fraction: 1 },
+    { step: 3, stage: "启动 pnpm", detail: "", fraction: 1 },
+    { step: 4, stage: "解析依赖", detail: "已解析 312 个包", fraction: 1 },
+    { step: 5, stage: "下载依赖", detail: "下载 1.2 GB", fraction: 0.35 },
+    { step: 5, stage: "下载依赖", detail: "下载 2.6 GB", fraction: 0.72 },
+    { step: 5, stage: "下载依赖", detail: "下载 3.6 GB", fraction: 1 },
+    { step: 6, stage: "写入文件", detail: "写入 4821 / 12045", fraction: 0.4 },
+    { step: 6, stage: "写入文件", detail: "写入 9640 / 12045", fraction: 0.8 },
+    { step: 6, stage: "写入文件", detail: "写入 12045 / 12045", fraction: 1 },
+    { step: 7, stage: "构建原生模块", detail: "", fraction: 0.6 },
+    { step: 7, stage: "构建原生模块", detail: "", fraction: 1 },
+    { step: 8, stage: "完成", detail: "", fraction: 1 },
+  ];
+  for (const s of steps) {
+    await page.evaluate((p) => window.__mockEmit("install-progress", { step: p.step, total: 8, stage: p.stage, detail: p.detail, fraction: p.fraction }), s);
+    await page.waitForTimeout(s.step >= 5 && s.step <= 6 ? 450 : 260);
+  }
+  await page.waitForTimeout(900);
+  await page.waitForTimeout(HOLD_END);
+});
