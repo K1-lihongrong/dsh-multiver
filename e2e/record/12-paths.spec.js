@@ -43,13 +43,27 @@ test("12 路径设置", async ({ page }) => {
     await page.waitForTimeout(800);
   }
 
-  // 悬停某一个目录行，展示可点击的视觉提示
-  const item = page.locator(".path-item").nth(2);
-  if (await item.count()) {
-    const ib = await item.boundingBox();
-    if (ib) {
-      await glide(page, ib.x + ib.width / 2, ib.y + ib.height / 2);
-      await page.waitForTimeout(700);
+  // 悬停目录行，展示"点击即在文件管理器打开"（正文 215 行）
+  for (const idx of [1, 2]) {
+    const item = page.locator(".path-item").nth(idx);
+    if (await item.count()) {
+      const ib = await item.boundingBox();
+      if (ib) {
+        await glide(page, ib.x + ib.width / 2, ib.y + ib.height / 2);
+        await page.waitForTimeout(650);
+      }
+    }
+  }
+
+  // 正文 221 行：「导出配置」和「导入配置」按钮
+  for (const name of [/导出配置/, /导入配置/]) {
+    const btn = page.getByRole("button", { name }).first();
+    if (await btn.count()) {
+      const bb = await btn.boundingBox();
+      if (bb) {
+        await glide(page, bb.x + bb.width / 2, bb.y + bb.height / 2);
+        await page.waitForTimeout(750);
+      }
     }
   }
   await page.waitForTimeout(HOLD_END);

@@ -40,18 +40,39 @@ test("07 换源弹窗", async ({ page }) => {
   await page.locator(".modal-mask .modal").first().waitFor({ state: "visible", timeout: 10000 });
   await page.waitForTimeout(900);
 
-  // 打开源下拉，展示可选镜像
+  // 正文 199 行："弹出换源对话框（官方 / 阿里云 / 腾讯云 / 华为云 / 自定义），一键重试"
+  // 依次切换几个源，最后悬停「换源重试」按钮
   const select = page.locator(".modal select").first();
   if (await select.count()) {
     const sb = await select.boundingBox();
     if (sb) {
       await glide(page, sb.x + sb.width / 2, sb.y + sb.height / 2);
-      await page.waitForTimeout(250);
-      await page.mouse.click(sb.x + sb.width / 2, sb.y + sb.height / 2);
-      await page.waitForTimeout(500);
-      await page.keyboard.press("ArrowDown");
-      await page.keyboard.press("Enter");
-      await page.waitForTimeout(700);
+      await page.waitForTimeout(300);
+      // 官方 → 阿里云 → 腾讯云（逐个展示源名称）
+      for (const idx of [1, 2, 3]) {
+        await select.selectOption({ index: idx });
+        await page.waitForTimeout(700);
+      }
+      // 回到阿里云（国内最常用）
+      await select.selectOption({ index: 1 });
+      await page.waitForTimeout(600);
+    }
+  }
+
+  // 展开「原始错误」，让观众看到失败原因
+  const rawErr = page.locator(".modal details, .modal summary").first();
+  if (await rawErr.count()) {
+    await clickAt(page, rawErr);
+    await page.waitForTimeout(800);
+  }
+
+  // 悬停「换源重试」主按钮（正文 199 行的"一键重试"）
+  const retryBtn = page.locator(".modal .btn.primary").first();
+  if (await retryBtn.count()) {
+    const rb = await retryBtn.boundingBox();
+    if (rb) {
+      await glide(page, rb.x + rb.width / 2, rb.y + rb.height / 2);
+      await page.waitForTimeout(800);
     }
   }
   await page.waitForTimeout(HOLD_END);

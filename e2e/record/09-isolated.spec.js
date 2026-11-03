@@ -33,13 +33,24 @@ test("09 隔离菜单", async ({ page }) => {
   await clickAt(page, menuBtn);
   await page.waitForTimeout(600);
 
-  // 悬停「清理隔离数据」（danger 项），展示危险态
+  // 正文 360-364 行列出 5 项操作，依次悬停让观众看清
+  // 打开隔离目录 / 扫描占用大小 / 复制共享数据到此 / 清理隔离数据 / 关闭隔离
+  const items = page.locator(".menu-item");
+  const count = await items.count();
+  for (let i = 0; i < count; i++) {
+    const ib = await items.nth(i).boundingBox();
+    if (ib) {
+      await glide(page, ib.x + ib.width / 2, ib.y + ib.height / 2);
+      await page.waitForTimeout(650);
+    }
+  }
+  // 停在最后一项「清理隔离数据」（danger 红字）上收尾
   const danger = page.locator(".menu-item.danger").first();
   if (await danger.count()) {
     const db = await danger.boundingBox();
     if (db) {
       await glide(page, db.x + db.width / 2, db.y + db.height / 2);
-      await page.waitForTimeout(700);
+      await page.waitForTimeout(900);
     }
   }
   await page.waitForTimeout(HOLD_END);
