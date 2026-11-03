@@ -102,12 +102,29 @@ fn cache_path(root: &Path) -> PathBuf {
 ///
 /// 不联网，立即返回。
 pub fn load_local(root: &Path) -> Result<Catalog, String> {
+    // 内置副本在编译期嵌入，随程序升级。缓存可能来自旧版程序，
+    // 若不加判断就用缓存，新版内置的字段（如 descriptionI18n）永远到不了用户。
+    // 按 updatedAt 取较新者；缓存没有时间戳（旧格式）视为更旧。
+    let builtin_text = BUILTIN;
+    let builtin_ts = parse_raw(builtin_text).ok().and_then(|r| r.updated_at);
+
     if let Ok(text) = std::fs::read_to_string(cache_path(root)) {
-        if let Ok(plugins) = parse_catalog(&text) {
-            return Ok(Catalog { plugins });
+        if let Ok(cached) = parse_raw(&text) {
+            let cached_ts = cached.updated_at.clone();
+            let cached_is_newer = match (&cached_ts, &builtin_ts) {
+                (Some(c), Some(b)) => c > b,
+                (Some(_), None) => true,
+                _ => false, // 缓存无时间戳，视为旧
+            };
+            if cached_is_newer {
+                return Ok(Catalog {
+                    plugins: cached.plugins,
+                });
+            }
         }
-        // 缓存损坏：静默回退内置，下次 check 会重写
+        // 缓存损坏或比内置旧：用内置，下次 check 会重写缓存
     }
+
     Ok(Catalog {
         plugins: parse_builtin()?,
     })
@@ -362,22 +379,35 @@ mod tests {
     }
 
     #[test]
+    fn load_local_uses_builtin_when_cache_is_older() {
+        let root = tmp_root("older-cache");
+        // 缓存没有 updatedAt（旧格式），内置有 → 应用内置
+        let old = r#"{"version":2,"plugins":[
+            {"name":"old-only","description":"d","category":"c","repo":"https://x/y"}
+        ]}"#;
+        std::fs::write(cache_path(&root), old).unwrap();
+        let c = load_local(&root).unwrap();
+        assert!(c.plugins.len() > 1, "应回退内置而非使用旧缓存");
+        assert!(!c.plugins.iter().any(|p| p.name == "old-only"));
+    }
+
+    #[test]
+    fn load_local_uses_cache_when_newer_than_builtin() {
+        let root = tmp_root("newer-cache");
+        let newer = r#"{"version":2,"updatedAt":"2099-01-01T00:00:00Z","plugins":[
+            {"name":"future-only","description":"d","category":"c","repo":"https://x/y"}
+        ]}"#;
+        std::fs::write(cache_path(&root), newer).unwrap();
+        let c = load_local(&root).unwrap();
+        assert_eq!(c.plugins.len(), 1);
+        assert_eq!(c.plugins[0].name, "future-only");
+    }
+
+    #[test]
     fn load_local_falls_back_to_builtin_without_cache() {
         let root = tmp_root("no-cache");
         let c = load_local(&root).unwrap();
         assert!(!c.plugins.is_empty());
-    }
-
-    #[test]
-    fn load_local_uses_cache_when_present() {
-        let root = tmp_root("with-cache");
-        let custom = r#"{"version":2,"plugins":[
-            {"name":"only-one","description":"d","category":"c","repo":"https://x/y"}
-        ]}"#;
-        std::fs::write(cache_path(&root), custom).unwrap();
-        let c = load_local(&root).unwrap();
-        assert_eq!(c.plugins.len(), 1);
-        assert_eq!(c.plugins[0].name, "only-one");
     }
 
     #[test]

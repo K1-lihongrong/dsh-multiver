@@ -204,7 +204,7 @@ defineExpose({ checkUpdates, runAction });
         <!-- 第一行：图标 + 包名（长名换行显示完整，不再省略） -->
         <div class="dp-item-row1">
           <span class="dp-item-icon">{{ pl.is_bundle ? "📦" : "🧩" }}</span>
-          <code class="dp-item-name" :title="pl.description || ''">{{ pl.name }}</code>
+          <code class="dp-item-name" :title="pl.name">{{ pl.name }}</code>
           <span v-if="pendingName === pl.name" class="dp-item-progress">
             <span class="dp-spinner dp-item-spinner"></span>
             <span class="dp-item-elapsed">{{ pendingSeconds }}s</span>
