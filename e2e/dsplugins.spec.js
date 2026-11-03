@@ -31,7 +31,10 @@ const PROFILE = {
 };
 
 // 官方 CLI 失败诊断 → 面板补充本地化提示
-test("安装失败且带官方诊断 → 显示 allow-version 指引（对齐官方）", async ({ page }) => {
+//
+// 注意：dsh CLI 实际没有 allow-version 子命令（plugin 只是转发给 pnpm），
+// 因此不再把错误里的 allow-version 转成"可执行指引"，只透传原文 + 诊断日志路径。
+test("安装失败且带官方诊断 → 透传原文并提示诊断日志", async ({ page }) => {
   await mockTauri(page, {
     installed: [makeVersion("0.2.0-rc.1", { isolated: true })],
     extra: {
@@ -47,7 +50,7 @@ test("安装失败且带官方诊断 → 显示 allow-version 指引（对齐官
   await page.locator(".dp-modal").getByRole("button", { name: "安装", exact: true }).click();
   await page.locator(".dp-modal").getByRole("button", { name: "确认安装", exact: true }).click();
   await page.waitForTimeout(400);
-  await expect(page.locator(".dp-modal")).toContainText("版本不兼容");
+  await expect(page.locator(".dp-modal")).toContainText("incompatible");
   await expect(page.locator(".dp-modal")).toContainText("诊断日志");
 });
 
@@ -259,34 +262,6 @@ test("显示待决定构建脚本并允许（B1-12）", async ({ page }) => {
   expect(flatApprove).toContain("esbuild");
 });
 
-test("显示版本豁免并可撤销（B1-12）", async ({ page }) => {
-  const calls = [];
-  await page.exposeFunction("__recordExemption", (x) => calls.push(x));
-  await mockTauri(page, {
-    installed: [makeVersion("0.2.0-rc.1", { isolated: true })],
-    extra: {
-      ds_list_plugins: { dsh_home: "D:/dsh", home_kind: "shared", profiles: [PROFILE] },
-      ds_profile_info: {
-        runtime_version: "0.2.0-rc.1",
-        exemptions: { "pkg@1.0.0": ["0.2.0-rc.1"] },
-        pending_builds: [],
-        logs_dir: "D:/dsh/profiles/web/.plugin-manager/logs",
-      },
-      ds_exemption_action: "(args) => { window.__recordExemption(args); return Promise.resolve('ok'); }",
-      "plugin:dialog|message": "Yes",
-    },
-  });
-  await page.goto("/");
-  await page.getByRole("button", { name: "插件", exact: true }).click();
-  await page.locator(".dp-exemptions summary").click();
-  await expect(page.getByText("pkg@1.0.0")).toBeVisible();
-  await page.getByRole("button", { name: "撤销", exact: true }).click();
-  await page.waitForTimeout(400);
-  const flatEx = JSON.stringify(calls);
-  expect(flatEx).toContain('"action":"revoke"');
-  expect(flatEx).toContain("pkg@1.0.0");
-});
-
 test("安装对话框选择镜像源 → registry 透传（对齐官方安装源）", async ({ page }) => {
   const calls = [];
   await page.exposeFunction("__recordRegistry", (x) => calls.push(x));
@@ -330,35 +305,6 @@ test("检查更新 → 显示新版本并可更新（B1-13）", async ({ page })
   const flat = JSON.stringify(calls);
   expect(flat).toContain('"action":"remove"');
   expect(flat).toContain("my-plugin@2.0.0");
-});
-
-test("允许版本豁免（B1-14）", async ({ page }) => {
-  const calls = [];
-  await page.exposeFunction("__recordAllow", (x) => calls.push(x));
-  await mockTauri(page, {
-    installed: [makeVersion("0.2.0-rc.1", { isolated: true })],
-    extra: {
-      ds_list_plugins: { dsh_home: "D:/dsh", home_kind: "shared", profiles: [PROFILE] },
-      ds_profile_info: {
-        runtime_version: "0.2.0-rc.1",
-        exemptions: {},
-        pending_builds: [],
-        logs_dir: "D:/dsh/profiles/web/.plugin-manager/logs",
-      },
-      ds_exemption_action: "(args) => { window.__recordAllow(args); return Promise.resolve('ok'); }",
-    },
-  });
-  await page.goto("/");
-  await page.getByRole("button", { name: "插件", exact: true }).click();
-  await page.locator(".dp-exemptions summary").click();
-  await page.locator(".dp-allow-spec").fill("pkg@1.0.0");
-  await page.locator(".dp-allow-rt").fill("0.2.0-rc.1");
-  await page.locator(".dp-allow-risk input").check();
-  await page.getByRole("button", { name: "允许此版本", exact: true }).click();
-  await page.waitForTimeout(400);
-  const flat = JSON.stringify(calls);
-  expect(flat).toContain('"action":"allow"');
-  expect(flat).toContain("pkg@1.0.0");
 });
 
 test("安装前 inspect 拒绝非组合包（B1-16）", async ({ page }) => {
@@ -436,4 +382,176 @@ test("失败弹窗内允许构建脚本并重试（B1-12 对齐官方）", async
   const flat = JSON.stringify(calls);
   expect(flat).toContain('"kind":"approve"');
   expect(flat).toContain("esbuild");
+});
+
+test("安装中关闭对话框 → 推荐页安装按钮仍禁用", async ({ page }) => {
+  await mockTauri(page, {
+    installed: [makeVersion("0.2.0-rc.1", { isolated: true })],
+    extra: {
+      ds_list_plugins: { dsh_home: "D:/dsh", home_kind: "shared", profiles: [PROFILE] },
+      ds_plugin_catalog: {
+        plugins: [
+          { name: "some-pkg", description: "示例包", category: "工具", repo: "https://github.com/x/y", tags: [] },
+        ],
+      },
+      // 永不 resolve：安装一直停在 installing 阶段
+      ds_plugin_action: "() => new Promise(() => {})",
+    },
+  });
+  await page.goto("/");
+  await page.getByRole("button", { name: "插件", exact: true }).click();
+  await page.getByRole("button", { name: /添加插件/ }).click();
+  await page.locator(".dp-modal-input").first().fill("hang-pkg");
+  await page.locator(".dp-modal").getByRole("button", { name: "安装", exact: true }).click();
+  await page.locator(".dp-modal").getByRole("button", { name: "确认安装", exact: true }).click();
+  await page.waitForTimeout(300);
+  // 安装卡在 installing：此时仍可关闭对话框（closeInstall 不判 installing）
+  await page.locator(".dp-modal-head .dp-icon-btn").click();
+  await expect(page.locator(".dp-modal")).toHaveCount(0);
+  // 切到推荐页：安装按钮应保持禁用——installing 状态由壳持有，
+  // 依赖子组件 emit("installing-change")，漏声明时此处会失败。
+  await page.getByRole("tab", { name: "推荐" }).click();
+  await expect(page.locator(".dp-cc-install")).toBeDisabled();
+});
+
+// ---------- 推荐页（v0.3.3 补：此前完全无覆盖）----------
+
+/// 推荐页的 catalog mock 数据。三条，两个分类，用于筛选测试。
+const CATALOG = {
+  plugins: [
+    { name: "pkg-a", description: "工具 A 的插件", category: "工具增强", repo: "https://github.com/x/a" },
+    { name: "pkg-b", description: "内容聚合的插件", category: "内容聚合", repo: "https://github.com/x/b" },
+    { name: "pkg-c", description: "另一个工具插件", category: "工具增强", repo: "https://github.com/x/c" },
+  ],
+};
+
+/// 打开插件面板并切到「推荐」标签。各条推荐页用例共用。
+async function openCatalog(page) {
+  await mockTauri(page, {
+    installed: [makeVersion("0.2.0-rc.1", { isolated: true })],
+    extra: {
+      ds_list_plugins: { dsh_home: "D:/dsh", home_kind: "shared", profiles: [PROFILE] },
+    },
+  });
+}
+
+test("推荐页：分类标签筛选条目", async ({ page }) => {
+  await mockTauri(page, {
+    installed: [makeVersion("0.2.0-rc.1", { isolated: true })],
+    extra: {
+      ds_list_plugins: { dsh_home: "D:/dsh", home_kind: "shared", profiles: [PROFILE] },
+      ds_plugin_catalog: CATALOG,
+    },
+  });
+  await page.goto("/");
+  await page.getByRole("button", { name: "插件", exact: true }).click();
+  await page.getByRole("tab", { name: "推荐" }).click();
+  await expect(page.locator(".dp-catalog-card")).toHaveCount(3);
+
+  // 分类栏应含「全部 / 工具增强 / 内容聚合」
+  const catTab = (label) => page.locator(".dp-cat-tab", { hasText: label });
+  await expect(catTab("工具增强")).toBeVisible();
+  await expect(catTab("内容聚合")).toBeVisible();
+
+  await catTab("工具增强").click();
+  await expect(page.locator(".dp-catalog-card")).toHaveCount(2);
+  await expect(page.locator(".dp-cc-name").first()).toHaveText("pkg-a");
+
+  await catTab("内容聚合").click();
+  await expect(page.locator(".dp-catalog-card")).toHaveCount(1);
+  await expect(page.locator(".dp-cc-name")).toHaveText("pkg-b");
+
+  await catTab("全部").click();
+  await expect(page.locator(".dp-catalog-card")).toHaveCount(3);
+});
+
+test("推荐页：星标条目排在最前且保持原相对顺序", async ({ page }) => {
+  await mockTauri(page, {
+    installed: [makeVersion("0.2.0-rc.1", { isolated: true })],
+    extra: {
+      ds_list_plugins: { dsh_home: "D:/dsh", home_kind: "shared", profiles: [PROFILE] },
+      ds_plugin_catalog: {
+        plugins: [
+          { name: "pkg-normal", description: "普通", category: "工具增强", repo: "https://github.com/x/n" },
+          { name: "pkg-featured", description: "推荐", category: "工具增强", repo: "https://github.com/x/f", tags: ["featured"] },
+          { name: "pkg-author", description: "同作者", category: "工具增强", repo: "https://github.com/x/a", tags: ["same-author"] },
+        ],
+      },
+    },
+  });
+  await page.goto("/");
+  await page.getByRole("button", { name: "插件", exact: true }).click();
+  await page.getByRole("tab", { name: "推荐" }).click();
+
+  const cards = page.locator(".dp-catalog-card");
+  await expect(cards).toHaveCount(3);
+  // 稳定排序：星标在前，两个星标保持原顺序（featured 在 same-author 前）
+  await expect(cards.nth(0).locator(".dp-cc-name")).toHaveText("pkg-featured");
+  await expect(cards.nth(1).locator(".dp-cc-name")).toHaveText("pkg-author");
+  await expect(cards.nth(2).locator(".dp-cc-name")).toHaveText("pkg-normal");
+  // 星标只在带 tags 的两条上出现
+  await expect(cards.nth(0).locator(".dp-cc-star")).toBeVisible();
+  await expect(cards.nth(1).locator(".dp-cc-star")).toBeVisible();
+  await expect(cards.nth(2).locator(".dp-cc-star")).toHaveCount(0);
+});
+
+test("推荐页：点「查看完整描述」弹出浮窗显示全文", async ({ page }) => {
+  const longDesc = "这是一段很长的插件描述，用来验证浮窗会显示完整内容而不是被截断。".repeat(4);
+  await mockTauri(page, {
+    installed: [makeVersion("0.2.0-rc.1", { isolated: true })],
+    extra: {
+      ds_list_plugins: { dsh_home: "D:/dsh", home_kind: "shared", profiles: [PROFILE] },
+      ds_plugin_catalog: {
+        plugins: [
+          { name: "pkg-long", description: longDesc, category: "工具增强", repo: "https://github.com/x/long" },
+        ],
+      },
+    },
+  });
+  await page.goto("/");
+  await page.getByRole("button", { name: "插件", exact: true }).click();
+  await page.getByRole("tab", { name: "推荐" }).click();
+  await expect(page.locator(".dp-catalog-card")).toHaveCount(1);
+
+  await page.locator(".dp-cc-more").click();
+  const tip = page.locator(".dp-cc-tip");
+  await expect(tip).toBeVisible();
+  await expect(tip).toHaveText(longDesc);
+});
+
+test("推荐页：描述随语言切换（descriptionI18n）", async ({ page }) => {
+  await mockTauri(page, {
+    installed: [makeVersion("0.2.0-rc.1", { isolated: true })],
+    extra: {
+      ds_list_plugins: { dsh_home: "D:/dsh", home_kind: "shared", profiles: [PROFILE] },
+      ds_plugin_catalog: {
+        plugins: [
+          {
+            name: "pkg-i18n",
+            description: "中文描述",
+            descriptionI18n: { "en-US": "English description", "ja-JP": "日本語の説明" },
+            category: "工具增强",
+            repo: "https://github.com/x/i18n",
+          },
+        ],
+      },
+    },
+  });
+  await page.goto("/");
+  await page.getByRole("button", { name: "插件", exact: true }).click();
+  await page.getByRole("tab", { name: "推荐" }).click();
+  await expect(page.locator(".dp-cc-desc")).toHaveText("中文描述");
+
+  // 通过界面切到 English（不能用 localStorage + reload：helpers 的
+  // addInitScript 每次导航都会把 lang 重置回 zh-CN）
+  await page.locator(".field-row select").last().selectOption("en-US");
+  await expect(page.locator(".dp-cc-desc")).toHaveText("English description");
+
+  // 切到日本语
+  await page.locator(".field-row select").last().selectOption("ja-JP");
+  await expect(page.locator(".dp-cc-desc")).toHaveText("日本語の説明");
+
+  // 没有 descriptionI18n 的语言回退到中文原文（切回简中验证）
+  await page.locator(".field-row select").last().selectOption("zh-TW");
+  await expect(page.locator(".dp-cc-desc")).toHaveText("中文描述");
 });

@@ -82,7 +82,11 @@ pub(crate) fn ds_profile_info(
 }
 
 /// 版本豁免操作（B1-12）：allow / revoke，走官方 CLI 子命令。
-#[tauri::command]
+///
+/// `rename_all = "snake_case"`：Tauri 2 默认把命令参数映射成 camelCase，
+/// 而本命令的 `package_version` / `dsh_version` 是 snake_case，不加会报
+/// `missing required key packageVersion`。
+#[tauri::command(rename_all = "snake_case")]
 pub(crate) async fn ds_exemption_action(
     app: tauri::AppHandle,
     version: String,
