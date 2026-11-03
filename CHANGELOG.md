@@ -7,7 +7,7 @@
 
 ---
 
-## [0.3.3] - 未发布
+## [0.3.3] - 2026-11-03
 
 ### 移除版本豁免功能
 
@@ -21,7 +21,7 @@
 
 - **修版本豁免命令参数名**（虽该功能已移除，参数映射本身是错的）：Tauri 2 默认把命令参数映射成 camelCase，而 `ds_exemption_action` 的后端参数是 `package_version`，导致 `missing required key packageVersion`。加 `rename_all = "snake_case"`。
 - **插件描述支持多语言**：catalog 新增可选字段 `descriptionI18n`，前端按当前语言取用，缺项回退中文原文。`docs/plugins.json` 9 条插件补了繁中 / 英文 / 日文译文。
-- **已安装列表改两行排版**：包名独占一行、可换行完整显示，版本与徽标、操作按钮移到第二行。此前长包名被省略号截断。
+- **已安装列表改两行排版**：包名独占一行，版本与徽标、操作按钮移到第二行。包名过长时省略号截断、悬停显示全名；卸载按钮推到行尾右对齐。此前长包名被截断，第一版改成换行后观感参差，用户实测后改回单行。
 - **按钮 hover 反馈加强**：浅色主题下 `#fff` 到 `#f0f2f5` 色差极小，只换背景几乎看不出。改为同时加深边框；补 `:focus-visible` 焦点环供键盘导航。
 - **分类标签栏支持拖动**：按住左键横向拖动，拖动距离超 4px 才算拖拽，避免误吞按钮点击。
 - **卸载时显示已运行秒数**：大包卸载时 pnpm 会长时间无输出，加计时器 + 自动展开日志区，缓解「卡死」观感。
@@ -30,22 +30,31 @@
 
 ### 插件面板拆分（技术债 D21）
 
-- **`DsPluginPanel.vue` 从 1677 行降到 343 行**，按职责拆成四块，互不共享状态的代码不再挤在一个文件里：
-  - `DsPluginCatalog.vue`（386 行）：推荐页——分类标签栏、双行卡片、描述浮窗、星标排序、远端检查。
-  - `DsPluginInstallDialog.vue`（338 行）：安装对话框五阶段（form → checking → confirm → installing → done/failed）+ 安装源记忆与首次探测。
-  - `DsPluginInstalled.vue`（207 行）：已安装列表、筛选、卸载、检查更新、更新。
-  - `DsPluginMeta.vue`（51 行）：待决定的构建脚本审批。
+- **`DsPluginPanel.vue` 从 1677 行降到 341 行**，按职责拆成四块，互不共享状态的代码不再挤在一个文件里：
+  - `DsPluginCatalog.vue`（458 行）：推荐页——分类标签栏、双行卡片、描述浮窗、星标排序、远端检查。
+  - `DsPluginInstallDialog.vue`（339 行）：安装对话框五阶段（form → checking → confirm → installing → done/failed）+ 安装源记忆与首次探测。
+  - `DsPluginInstalled.vue`（247 行）：已安装列表、筛选、卸载、检查更新、更新。
+  - `DsPluginMeta.vue`（52 行）：待决定的构建脚本审批。
 - **状态归属按实际共享关系上提**：`installedNames`、`busy`、`lastAction` 留在壳；进度行抽成 `composables/useDsPluginLog.js`，由壳 `provide` 给安装对话框与底部日志区共用。
-- **样式独立成文件**：全部 `dp-*` 规则移到 `styles/dsplugins.css`（466 行），由 `main.js` 引入。子组件不需要再各自复制一份 scoped 样式。
+- **样式独立成文件**：全部 `dp-*` 规则移到 `styles/dsplugins.css`（481 行），由 `main.js` 引入。子组件不需要再各自复制一份 scoped 样式。
 - **推荐页改为切到该标签时才激活**，避免拆组件后一挂载就发远端请求。
 - 官方失败诊断的本地化提示抽到 `composables/useDsPluginErrors.js`，壳与子组件共用。
+
+### 验收后的修复
+
+- **修内置副本被旧缓存遮挡**：`load_local` 原先「有缓存就用缓存」，不比较新旧。旧版程序写的缓存（没有 `updatedAt`）会永远遮住新版程序内置的副本，导致 `descriptionI18n` 等新字段到不了用户。改为按 `updatedAt` 取较新者，缓存无时间戳视为更旧、回退内置。
+- **已安装列表包名与按钮排版**：包名过长时省略号截断（悬停显示全名），卸载按钮推到行尾右对齐。两处均为用户实机验收后的反馈。
+
+### 技术债
+
+- **记录 D22**：插件面板按钮的过渡属性与界面其他按钮不一致（v0.3.3 加强 hover 时把 `transition: all` 拆成了分属性过渡）。用户决定下个版本统一。
 
 ### 验证
 
 - `pnpm build` 通过。
-- **E2E 38 passed**（`dsplugins.spec.js` 24 条，新增推荐页的分类筛选、星标排序、描述浮窗、描述随语言切换）。
-- **Rust 单测 187 passed / 1 ignored**。
-- `cargo clippy -D warnings` 干净。
+- **E2E 38 passed**（`dsplugins.spec.js` 23 条，含新增推荐页的分类筛选、星标排序、描述浮窗、描述随语言切换）。
+- **Rust 单测 188 passed / 1 ignored**（新增 catalog 时间戳、i18n 字段、内置副本优先级的用例）。
+- `cargo fmt --check` 干净、`cargo clippy -D warnings` 干净。
 
 ---
 
