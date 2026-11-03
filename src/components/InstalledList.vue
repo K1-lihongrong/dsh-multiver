@@ -336,7 +336,13 @@ function toggleInstalledNote(v) {
           <button class="btn" @click="openInBrowser(v.version)" :disabled="isBlocked(v.version)" :title="t('installed.openBrowserTip')">{{ t("installed.openBrowser") }}</button>
           <button class="btn" @click="setDefault(v.version)" :disabled="v.is_default || isBlocked(v.version)">{{ t("installed.setDefault") }}</button>
           <button class="btn" @click="createShortcut(v.version)" :disabled="isBlocked(v.version)" :title="t('installed.shortcutTip')">{{ t("installed.shortcut") }}</button>
-          <button class="btn" @click="pluginPanelVer = pluginPanelVer === v.version ? null : v.version" :disabled="isBlocked(v.version)">{{ t("dsplugins.button") }}</button>
+          <button
+            class="btn btn-plugin-toggle"
+            :class="{ 'is-open': pluginPanelVer === v.version }"
+            @click="pluginPanelVer = pluginPanelVer === v.version ? null : v.version"
+            :disabled="isBlocked(v.version)"
+            :aria-expanded="pluginPanelVer === v.version"
+          >{{ t("dsplugins.button") }}</button>
           <button class="btn" @click="scanVersionSize(v.version)" :disabled="scanning || isBlocked(v.version)" :title="t('installed.scanTip')">
             {{ isScanningVer(v.version) ? t("installed.scanning") : (verSizes[v.version] != null ? t("installed.rescanSize") : t("installed.scanSize")) }}
           </button>
@@ -437,6 +443,38 @@ function toggleInstalledNote(v) {
 .ver-caret { font-size: 10px; margin-left: 3px; color: var(--text-muted); }
 .ver-meta { color: var(--text-muted); font-size: 11px; }
 .ver-actions { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; justify-content: flex-start; }
+
+/* 插件面板展开按钮：展开时显示浅主色底 + 描边，三角箭头转 90°，
+   提示「再点一次可以收起」。
+   箭头用 border 画三角、content 留空——若用文字字符会进入按钮的可访问名称，
+   导致 E2E 的 getByRole("button", { name: "插件", exact: true }) 匹配失败。
+   选择器特异性高于 .btn:hover，避免 hover 覆盖展开态。 */
+.btn-plugin-toggle::before {
+  content: "";
+  display: inline-block;
+  width: 0; height: 0;
+  margin-right: 5px;
+  vertical-align: middle;
+  border-left: 4px solid currentColor;
+  border-top: 3px solid transparent;
+  border-bottom: 3px solid transparent;
+  opacity: .55;
+  transition: transform var(--motion-fast) var(--ease-standard),
+              opacity var(--motion-fast) var(--ease-standard);
+}
+.btn-plugin-toggle.is-open::before {
+  transform: rotate(90deg);
+  opacity: 1;
+}
+.btn-plugin-toggle.is-open {
+  background: var(--accent-weak);
+  border-color: var(--accent-border);
+  color: var(--accent);
+}
+.btn-plugin-toggle.is-open:hover:not(:disabled) {
+  background: var(--accent-weak-2);
+  border-color: var(--accent);
+}
 .batch-bar {
   display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
   margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--gray-chip);
