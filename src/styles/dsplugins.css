@@ -375,8 +375,10 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-/* 第二行：版本 + 徽标 + 操作按钮 */
+/* 第二行：版本 + 徽标靠左，操作按钮靠右 */
 .dp-item-row2 { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding-left: 22px; }
+/* 最后一个按钮（恒为「卸载」）推到行尾；有「更新」时两个按钮一起靠右 */
+.dp-item-row2 .dp-btn:last-of-type { margin-left: auto; }
 
 /* 正在操作的条目：整行淡出 + 右上角转圈与已运行秒数，避免长时间无反馈 */
 .dp-item-pending { opacity: .65; }
