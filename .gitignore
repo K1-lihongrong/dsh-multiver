@@ -60,3 +60,4 @@ dsh-plugin/*.tgz
 
 # 临时提交信息文件
 .msg.txt
+.commit-msg.txt 

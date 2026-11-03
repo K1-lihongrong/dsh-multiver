@@ -64,6 +64,25 @@ export async function mockTauri(page, opts = {}) {
         detail: null,
       }),
       ds_probe_registries: () => ({ kind: null, url: null, ms: null }),
+      // 可用版本列表（远端 npm 查询结果）。录屏/截图需要真实感的版本号。
+      list_remote: () => [
+        "0.2.2-alpha.2",
+        "0.2.1-rc.5",
+        "0.2.1-rc.4",
+        "0.2.1-rc.3",
+        "0.2.1-rc.2",
+        "0.2.1-rc.1",
+        "0.2.0",
+        "0.2.0-rc.1",
+        "0.1.8",
+        "0.1.7",
+        "0.1.6",
+        "0.1.5",
+        "0.1.5-rc.3",
+      ],
+      // 占用扫描：先给一组像样的数字，避免界面全空
+      scan_usage: () => ({ "0.2.1-rc.2": { total: 1483237376, shared_size: 1181116006, exclusive_size: 302121370, shared_count: 12045 } }),
+      scan_version_size: () => ({ total: 1483237376, shared_size: 1181116006, exclusive_size: 302121370, shared_count: 12045 }),
     };
     // 合并 extra：JSON 值 → 静态返回；函数体字符串 → eval 成函数
     const jsonExtra = JSON.parse(extraSerialized);
@@ -72,10 +91,38 @@ export async function mockTauri(page, opts = {}) {
       // eslint-disable-next-line no-eval
       callbacks[key] = (0, eval)(src);
     }
+    // ---- 事件通道 ----
+    // Tauri 前端的 listen() 走 invoke('plugin:event|listen', {event, target, handler})，
+    // handler 是 transformCallback(handler) 的产物（本 mock 里直接就是函数本身）。
+    // 后端 emit 时以 { event, id, payload } 调用该函数。
+    let nextEventId = 1;
+    const eventHandlers = new Map(); // eventId -> { event, handler }
+
     const invoke = async (cmd, args) => {
+      if (cmd === "plugin:event|listen") {
+        const id = nextEventId++;
+        eventHandlers.set(id, { event: args.event, handler: args.handler });
+        return id;
+      }
+      if (cmd === "plugin:event|unlisten") {
+        eventHandlers.delete(args.eventId);
+        return null;
+      }
+      if (cmd === "plugin:event|emit" || cmd === "plugin:event|emit_to") {
+        __mockEmit(args.event, args.payload);
+        return null;
+      }
       const fn = callbacks[cmd];
       return fn ? fn(args) : null;
     };
+
+    // 测试脚本用：page.evaluate(([e, p]) => window.__mockEmit(e, p), ["install-progress", {...}])
+    window.__mockEmit = (event, payload) => {
+      for (const [id, h] of eventHandlers) {
+        if (h.event === event) h.handler({ event, id, payload });
+      }
+    };
+
     window.__TAURI_INTERNALS__ = {
       invoke,
       transformCallback: (cb) => cb,
