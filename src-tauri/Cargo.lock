@@ -880,7 +880,7 @@ dependencies = [
 
 [[package]]
 name = "dsh-multiver"
-version = "0.3.2"
+version = "0.3.3"
 dependencies = [
  "encoding_rs",
  "flate2",
