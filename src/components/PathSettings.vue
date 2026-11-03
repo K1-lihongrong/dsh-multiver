@@ -309,7 +309,7 @@ function fmtTs(sec) {
 .path-item {
   display: flex; align-items: center; gap: 10px;
   padding: 8px 12px; border-radius: 8px; cursor: pointer;
-  transition: background .15s;
+  transition: background-color var(--motion-base) var(--ease-standard);
 }
 .path-item:hover { background: var(--accent-weak); }
 .path-name {
@@ -338,4 +338,6 @@ function fmtTs(sec) {
 .maint-actions { display: flex; gap: 8px; flex-wrap: wrap; }
 .maint-actions .btn { color: var(--accent); border-color: var(--accent-border); }
 .maint-actions .btn:hover:not(:disabled) { background: var(--accent-weak); border-color: var(--accent); }
+/* D22：维护按钮按下态跟随 .btn 统一（浅蓝底），此处仅保留主色描边 */
+.maint-actions .btn:active:not(:disabled) { background: var(--accent-weak); border-color: var(--accent); }
 </style>

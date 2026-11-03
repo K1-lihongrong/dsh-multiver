@@ -487,8 +487,11 @@ onUnmounted(() => {
   position: absolute; top: 8px; right: 10px;
   background: none; border: none; color: var(--text-muted);
   font-size: 18px; line-height: 1; cursor: pointer; padding: 0 4px;
+  /* D22：与全站共用动效令牌 */
+  transition: color var(--motion-fast) var(--ease-standard);
 }
 .toast-close:hover { color: var(--toast-text); }
+.toast-close:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .fade-enter-active, .fade-leave-active { transition: opacity .25s; }
 .fade-enter-from, .fade-leave-to { opacity: 0; }
 </style>
