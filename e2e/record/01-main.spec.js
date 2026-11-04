@@ -1,4 +1,6 @@
 import { test } from "@playwright/test";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { mockTauri, makeVersion } from "../helpers.js";
 import { installCursor, glide, clickAt, scrollTo, waitReady, startCues, cue, saveCues, HOLD_START, HOLD_END } from "./_rec.js";
 
@@ -8,6 +10,11 @@ import { installCursor, glide, clickAt, scrollTo, waitReady, startCues, cue, sav
 //   3. 点版本号填入输入框 → 点「安装」→ 进度条走完
 //   4. 点「运行」
 const NEW_VER = "0.2.1-rc.2";
+
+// dsh 界面截图（fixture）以 base64 data URL 注入，供第 4 步展示内嵌窗口内容。
+// 用 data URL 而非文件路径：page.evaluate 里拿不到 Node 的 fs。
+const DSH_UI_SRC =
+  "data:image/png;base64," + readFileSync(join("e2e", "record", "fixtures", "dsh-ui.png")).toString("base64");
 
 /** 模拟一次安装的 8 阶段进度事件流（字段见 versions/install.rs 的 ProgressEvent）。 */
 async function playInstall(page) {
@@ -65,6 +72,8 @@ test("01 快速上手四步", async ({ page }) => {
       }`,
     },
   });
+  // 暴露 dsh 界面截图给页面内脚本用
+  await page.addInitScript((src) => { window.__DSH_UI_SRC = src; }, DSH_UI_SRC);
   await page.goto("/");
   await waitReady(page);
   await page.waitForTimeout(HOLD_START);
@@ -130,7 +139,43 @@ test("01 快速上手四步", async ({ page }) => {
     await clickAt(page, runBtn);
     // 等启动态出现（内嵌窗口打开中）
     await page.locator(".splash").waitFor({ state: "visible", timeout: 5000 }).catch(() => {});
-    await page.waitForTimeout(1800);
+    await page.waitForTimeout(1500);
+
+    // 启动完成后：模拟内嵌窗口弹出，展示真实的 dsh Web 界面
+    // （Tauri 里是独立 OS 窗口；浏览器 mock 环境下用覆盖层模拟）
+    await page.evaluate(async () => {
+      const src = window.__DSH_UI_SRC;
+      if (!src) return;
+      const mask = document.createElement("div");
+      mask.id = "__dsh_embed_mask";
+      mask.style.cssText =
+        "position:fixed;inset:0;z-index:2147483640;background:rgba(18,20,24,.55);" +
+        "display:flex;align-items:center;justify-content:center;opacity:0;transition:opacity .25s";
+      const win = document.createElement("div");
+      win.style.cssText =
+        "position:relative;width:calc(100% - 64px);max-width:1120px;height:calc(100% - 64px);" +
+        "border-radius:10px;overflow:hidden;box-shadow:0 18px 48px rgba(0,0,0,.45);" +
+        "background:#fff;transform:scale(.96);transition:transform .25s";
+      const img = document.createElement("img");
+      img.src = src;
+      img.style.cssText = "width:100%;height:100%;object-fit:contain;display:block;background:#f5f6f8";
+      win.appendChild(img);
+      mask.appendChild(win);
+      document.body.appendChild(mask);
+      requestAnimationFrame(() => {
+        mask.style.opacity = "1";
+        win.style.transform = "scale(1)";
+      });
+    });
+    await page.waitForTimeout(2600);
+
+    // 第 5 屏：dsh 界面已就绪（正文 78 行"在应用内嵌窗口中打开该版本的 dsh Web 界面"）
+    cue(
+      "dsh 的 Web 界面在独立的内嵌窗口中打开；关闭窗口即停止该版本的 dsh 进程",
+      "The dsh web UI opens in a separate embedded window; closing the window stops that version's dsh process",
+      "dsh の Web UI は独立した埋め込みウィンドウで開きます。ウィンドウを閉じると、そのバージョンの dsh プロセスも停止します",
+    );
+    await page.waitForTimeout(1400);
   }
 
   saveCues("01-main");
