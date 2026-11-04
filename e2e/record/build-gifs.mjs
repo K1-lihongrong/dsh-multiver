@@ -2,11 +2,12 @@
 //
 // 用法：node e2e/record/build-gifs.mjs [--skip-gif] [--lang=zh|en|ja|all] [--gif]
 //
-// 三语字幕：spec 里的 cue(zh, en, ja) 写入 %TEMP%/dsh-multiver/cues/<key>.json，
-// 本脚本读出来生成三份 ASS，分别烧进三份 WebP：
-//   <key>.webp      中文（手册引用的是这份）
-//   <key>.en.webp   英文
-//   <key>.ja.webp   日文
+// 默认只出中文版（--lang=zh）。多语种适配待后续专项处理（见 GAP-019）。
+// spec 里的 cue(zh, en, ja) 写入 %TEMP%/dsh-multiver/cues/<key>.json，
+// 本脚本按 --lang 生成对应 ASS 烧进 WebP：
+//   <key>.webp      中文（默认，手册引用的是这份）
+//   <key>.en.webp   英文（--lang=en 或 --lang=all）
+//   <key>.ja.webp   日文（--lang=ja 或 --lang=all）
 //
 // 格式选型（2026-11-04 实测）：默认输出 WebP 有损 q75，体积约为 GIF 的 38.6%，
 // 画质肉眼无差。加 --gif 可退回 GIF（用于离线文档等不支持 WebP 的场景）。
@@ -44,7 +45,8 @@ const FORMAT = process.argv.includes("--gif") ? "gif" : "webp";
 /** 输出扩展名 */
 const EXT = "." + FORMAT;
 
-const LANG_ARG = (process.argv.find((a) => a.startsWith("--lang=")) || "--lang=all").split("=")[1];
+// 默认只出中文版；需要多语种时显式传 --lang=all 或 --lang=en
+const LANG_ARG = (process.argv.find((a) => a.startsWith("--lang=")) || "--lang=zh").split("=")[1];
 const LANGS = LANG_ARG === "all" ? ["zh", "en", "ja"] : [LANG_ARG];
 
 // spec 前缀 → 输出文件名
@@ -61,6 +63,8 @@ const MAP = {
   "10-topbar-dot": "10-topbar-dot",
   "11-maintenance": "11-maintenance",
   "12-paths": "12-paths",
+  "13-plugin-installed": "13-plugin-installed",
+  "14-plugin-catalog": "14-plugin-catalog",
 };
 
 // 各语言字体：中 → 微软雅黑，英 → Segoe UI，日 → 游ゴシック
