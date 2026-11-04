@@ -1,6 +1,6 @@
 import { test } from "@playwright/test";
 import { mockTauri, makeVersion } from "../helpers.js";
-import { installCursor, glide, clickAt, hover, waitReady, HOLD_START, HOLD_END } from "./_rec.js";
+import { installCursor, glide, clickAt, hover, waitReady, startCues, cue, saveCues, HOLD_START, HOLD_END } from "./_rec.js";
 
 // 03 已安装版本：对应正文 115-128 行。
 // "每个版本显示：版本号、安装日期、是否默认、是否隔离、占用大小"
@@ -49,6 +49,7 @@ async function playScan(page, versions) {
 }
 
 test("03 已安装版本与占用", async ({ page }) => {
+  startCues();
   await installCursor(page);
   await mockTauri(page, {
     state: {
@@ -77,6 +78,11 @@ test("03 已安装版本与占用", async ({ page }) => {
   await page.waitForTimeout(HOLD_START);
 
   // 1) 点「扫描全部占用」，推完整事件流 → 显示"占用 X（复用 Y / 独占 Z）"
+  cue(
+    "点「扫描全部占用」：每个版本显示占用大小，并区分与其他版本共享的部分和独有部分",
+    "Click \"Scan all sizes\": each version shows its total size, split into shared and exclusive parts",
+    "「すべてのサイズをスキャン」をクリック。各バージョンの使用容量が、共有部分と専有部分に分けて表示されます",
+  );
   const scanBtn = page.getByRole("button", { name: /扫描全部占用/ }).first();
   await clickAt(page, scanBtn);
   await page.waitForTimeout(300);
@@ -84,12 +90,22 @@ test("03 已安装版本与占用", async ({ page }) => {
   await page.waitForTimeout(600);
 
   // 2) 依次悬停各操作按钮，让观众看清可用的 8 个操作
+  cue(
+    "每个版本提供 8 个操作：运行、浏览器打开、设为默认、快捷方式、插件、扫描占用、隔离、卸载",
+    "Each version offers eight actions: run, open in browser, set default, shortcut, plugins, scan size, isolate, uninstall",
+    "各バージョンには 8 つの操作があります：実行、ブラウザで開く、既定に設定、ショートカット、プラグイン、サイズスキャン、隔離、アンインストール",
+  );
   for (const name of ["运行", "浏览器打开", "设为默认", "快捷方式"]) {
     const btn = page.getByRole("button", { name, exact: true }).first();
     if (await btn.count()) await hover(page, btn);
   }
 
   // 3) 点「插件」按钮，展示 v0.3.4 的展开态（正文 128 行）
+  cue(
+    "点「插件」按钮管理该版本的 dsh 插件；面板展开时按钮变为高亮态，三角箭头旋转 90°，再点一次收起",
+    "Click \"Plugins\" to manage this version's dsh plugins. The button highlights while the panel is open, and the triangle rotates 90°",
+    "「プラグイン」をクリックすると、そのバージョンの dsh プラグインを管理できます。パネル表示中はボタンがハイライトされ、三角矢印が 90 度回転します",
+  );
   const pluginBtn = page.getByRole("button", { name: "插件", exact: true }).first();
   if (await pluginBtn.count()) {
     await clickAt(page, pluginBtn);
@@ -101,8 +117,14 @@ test("03 已安装版本与占用", async ({ page }) => {
   }
 
   // 4) 展示「已隔离 ▾」菜单按钮（正文 124 行）
+  cue(
+    "隔离版本显示「已隔离 ▾」菜单，可打开隔离目录、复制共享数据、清理或关闭隔离",
+    "Isolated versions show an \"Isolated ▾\" menu: open the isolated folder, copy shared data, clear it, or disable isolation",
+    "隔離バージョンには「隔離済み ▾」メニューが表示され、隔離フォルダを開く、共有データをコピーする、クリアする、隔離を解除する操作ができます",
+  );
   const isoBtn = page.getByRole("button", { name: /已隔离/ }).first();
   if (await isoBtn.count()) await hover(page, isoBtn);
 
+  saveCues("03-installed");
   await page.waitForTimeout(HOLD_END);
 });

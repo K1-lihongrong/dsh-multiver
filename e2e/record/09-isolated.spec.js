@@ -1,9 +1,10 @@
 import { test } from "@playwright/test";
 import { mockTauri, makeVersion } from "../helpers.js";
-import { installCursor, glide, clickAt, waitReady, HOLD_START, HOLD_END } from "./_rec.js";
+import { installCursor, glide, clickAt, waitReady, startCues, cue, saveCues, HOLD_START, HOLD_END } from "./_rec.js";
 
 // 09 隔离状态与「已隔离 ▾」菜单：隔离版本有专属菜单，点开后展示五项操作。
 test("09 隔离菜单", async ({ page }) => {
+  startCues();
   await installCursor(page);
   await mockTauri(page, {
     state: {
@@ -28,12 +29,22 @@ test("09 隔离菜单", async ({ page }) => {
   await waitReady(page);
   await page.waitForTimeout(HOLD_START);
 
+  cue(
+    "点「已隔离 ▾」菜单：隔离版本使用独立的 home，数据互不干扰",
+    "Click the \"Isolated ▾\" menu: isolated versions use their own home directory, so data stays separate",
+    "「隔離済み ▾」メニューをクリック：隔離バージョンは専用の home を使用し、データが互いに影響しません",
+  );
   // 点第二个版本的「已隔离 ▾」
   const menuBtn = page.getByRole("button", { name: /已隔离/ }).first();
   await clickAt(page, menuBtn);
   await page.waitForTimeout(600);
 
   // 正文 360-364 行列出 5 项操作，依次悬停让观众看清
+  cue(
+    "5 项操作：关闭隔离 / 打开隔离目录 / 扫描占用大小 / 复制共享数据到此 / 清理隔离数据",
+    "Five actions: disable isolation, open isolated folder, scan size, copy shared data here, clear isolated data",
+    "5 つの操作：隔離を解除 / 隔離フォルダを開く / サイズをスキャン / 共有データをここにコピー / 隔離データをクリア",
+  );
   // 打开隔离目录 / 扫描占用大小 / 复制共享数据到此 / 清理隔离数据 / 关闭隔离
   const items = page.locator(".menu-item");
   const count = await items.count();
@@ -53,5 +64,6 @@ test("09 隔离菜单", async ({ page }) => {
       await page.waitForTimeout(900);
     }
   }
+  saveCues("09-isolated");
   await page.waitForTimeout(HOLD_END);
 });
