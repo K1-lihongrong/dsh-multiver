@@ -150,23 +150,19 @@ test("01 快速上手四步", async ({ page }) => {
       mask.id = "__dsh_embed_mask";
       mask.style.cssText =
         "position:fixed;inset:0;z-index:2147483640;background:rgba(18,20,24,.55);" +
-        "display:flex;align-items:center;justify-content:center;opacity:0;transition:opacity .25s";
+        "display:flex;align-items:center;justify-content:center";
       const win = document.createElement("div");
       win.style.cssText =
         "position:relative;height:calc(100% - 64px);aspect-ratio:1100 / 760;" +
         "max-width:calc(100% - 64px);" +
         "border-radius:10px;overflow:hidden;box-shadow:0 18px 48px rgba(0,0,0,.45);" +
-        "background:#fff;transform:scale(.96);transition:transform .25s";
+        "background:#fff";
       const img = document.createElement("img");
       img.src = src;
       img.style.cssText = "width:100%;height:100%;object-fit:contain;display:block;background:#f5f6f8";
       win.appendChild(img);
       mask.appendChild(win);
       document.body.appendChild(mask);
-      requestAnimationFrame(() => {
-        mask.style.opacity = "1";
-        win.style.transform = "scale(1)";
-      });
     });
     await page.waitForTimeout(2600);
 

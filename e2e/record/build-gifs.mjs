@@ -1,17 +1,22 @@
-// 批量转码：test-results 下的录屏 → docs/screenshots/manual 下的 GIF（含多语字幕）。
+// 批量转码：test-results 下的录屏 → docs/screenshots/manual 下的 WebP（含多语字幕）。
 //
-// 用法：node e2e/record/build-gifs.mjs [--skip-gif] [--lang=zh|en|ja|all]
+// 用法：node e2e/record/build-gifs.mjs [--skip-gif] [--lang=zh|en|ja|all] [--gif]
 //
 // 三语字幕：spec 里的 cue(zh, en, ja) 写入 %TEMP%/dsh-multiver/cues/<key>.json，
-// 本脚本读出来生成三份 ASS，分别烧进三份 GIF：
-//   <key>.gif      中文（手册引用的是这份）
-//   <key>.en.gif   英文
-//   <key>.ja.gif   日文
+// 本脚本读出来生成三份 ASS，分别烧进三份 WebP：
+//   <key>.webp      中文（手册引用的是这份）
+//   <key>.en.webp   英文
+//   <key>.ja.webp   日文
+//
+// 格式选型（2026-11-04 实测）：默认输出 WebP 有损 q75，体积约为 GIF 的 38.6%，
+// 画质肉眼无差。加 --gif 可退回 GIF（用于离线文档等不支持 WebP 的场景）。
+// 详见 .cuckoo/skills/manual-gif/SKILL.md 第七节。
 //
 // 关键坑：
 // - -ss 0.8 裁掉启动白屏，ASS 里的时间轴要同步减 0.8。
 // - subtitles 滤镜在 Windows 下路径要用正斜杠 + 转义冒号，故先复制到纯 ASCII 临时目录。
 // - fps 从 10 降到 6：画面基本是静态界面 + 缓动光标，6fps 足够，体积降一半。
+// - WebP 必须显式加 -loop 0，否则只播一次。
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readdirSync, copyFileSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -30,6 +35,14 @@ const TRIM = 0.8;
 const FPS = 6;
 /** 输出宽度（高度按比例） */
 const WIDTH = 960;
+/** WebP 有损质量（0-100）。实测 75 最优：q90 反而比 GIF 大 */
+const QUALITY = 75;
+/** 底部字幕黑边高度（像素）。界面尺寸不变，画布向下扩张 */
+const SUBTITLE_BAND = 44;
+/** 输出格式：webp（默认）| gif（--gif 时） */
+const FORMAT = process.argv.includes("--gif") ? "gif" : "webp";
+/** 输出扩展名 */
+const EXT = "." + FORMAT;
 
 const LANG_ARG = (process.argv.find((a) => a.startsWith("--lang=")) || "--lang=all").split("=")[1];
 const LANGS = LANG_ARG === "all" ? ["zh", "en", "ja"] : [LANG_ARG];
@@ -70,7 +83,7 @@ function buildAss(cues, lang, duration) {
   lines.push("[Script Info]");
   lines.push("ScriptType: v4.00+");
   lines.push("PlayResX: " + WIDTH);
-  lines.push("PlayResY: 600");
+  lines.push("PlayResY: " + (600 + SUBTITLE_BAND));
   lines.push("WrapStyle: 0");
   lines.push("ScaledBorderAndShadow: yes");
   lines.push("");
@@ -80,10 +93,12 @@ function buildAss(cues, lang, duration) {
       "Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, " +
       "Alignment, MarginL, MarginR, MarginV, Encoding",
   );
-  // BorderStyle=3（不透明盒子）+ BackColour 半透明黑，字幕阅读性最好
+  // 黑底条上字幕用描边（BorderStyle=1）+ 加粗，文字直接浮在黑边上
+  // Alignment=2（底部居中）+ MarginV=12：字幕落在 pad 出的底部黑边内，不遮挡界面
+  // Outline=2 保证浅色文字在纯黑底上边缘清晰
   lines.push(
-    "Style: Default," + FONT[lang] + ",21,&H00FFFFFF,&H000000FF,&H00000000,&HA0000000," +
-      "0,0,0,0,100,100,0,0,3,2,0,2,24,24,18,1",
+    "Style: Default," + FONT[lang] + ",22,&H00FFFFFF,&H000000FF,&H00000000,&H00000000," +
+      "1,0,0,0,100,100,0,0,1,2,0,2,24,24,12,1",
   );
   lines.push("");
   lines.push("[Events]");
@@ -143,10 +158,15 @@ for (const dir of dirs) {
 
   for (const lang of LANGS) {
     const suffix = lang === "zh" ? "" : "." + lang;
-    const out = join(DEST, MAP[key] + suffix + ".gif");
-    const tmpGif = join(TMP, key + suffix + ".gif");
+    const out = join(DEST, MAP[key] + suffix + EXT);
+    const tmpOut = join(TMP, key + suffix + EXT);
 
-    const vfParts = ["fps=" + FPS, "scale=" + WIDTH + ":-2:flags=lanczos"];
+    // 向下扩张画布，给字幕留出黑边（界面尺寸不变）
+    const vfParts = [
+      "fps=" + FPS,
+      "scale=" + WIDTH + ":-2:flags=lanczos",
+      "pad=iw:ih+" + SUBTITLE_BAND + ":0:0:color=black",
+    ];
     if (cues && cues.length) {
       // 生成 ASS 到临时目录，用相对文件名 + cwd 规避路径转义
       const assName = "sub_" + key + "_" + lang + ".ass";
@@ -154,13 +174,19 @@ for (const dir of dirs) {
       vfParts.push("subtitles=" + assName);
     }
 
+    // 编码参数：WebP 用 libwebp_anim 有损；GIF 用默认调色板编码
+    const codecArgs = FORMAT === "webp"
+      ? ["-c:v", "libwebp_anim", "-lossless", "0", "-quality", String(QUALITY)]
+      : [];
+
     const args = [
       "-y",
       "-ss", String(TRIM),
       "-i", tmpWebm,
       "-vf", vfParts.join(","),
       "-loop", "0",
-      tmpGif,
+      ...codecArgs,
+      tmpOut,
     ];
     const r = spawnSync(FFMPEG, args, { cwd: TMP, encoding: "utf8" });
     if (r.status !== 0) {
@@ -169,7 +195,7 @@ for (const dir of dirs) {
       fail++;
       continue;
     }
-    copyFileSync(tmpGif, out);
+    copyFileSync(tmpOut, out);
     ok++;
   }
   console.log("已生成 " + MAP[key] + (cues && cues.length ? "（含字幕 " + cues.length + " 条）" : "（无字幕）"));
