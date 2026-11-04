@@ -153,7 +153,8 @@ test("01 快速上手四步", async ({ page }) => {
         "display:flex;align-items:center;justify-content:center;opacity:0;transition:opacity .25s";
       const win = document.createElement("div");
       win.style.cssText =
-        "position:relative;width:calc(100% - 64px);max-width:1120px;height:calc(100% - 64px);" +
+        "position:relative;height:calc(100% - 64px);aspect-ratio:1100 / 760;" +
+        "max-width:calc(100% - 64px);" +
         "border-radius:10px;overflow:hidden;box-shadow:0 18px 48px rgba(0,0,0,.45);" +
         "background:#fff;transform:scale(.96);transition:transform .25s";
       const img = document.createElement("img");
