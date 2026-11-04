@@ -358,7 +358,7 @@ pub fn install(
         if let Some((step, detail, frac)) = parser.parse(&line) {
             let advanced = step > last_step;
             let detail_changed = detail != last_detail;
-            let frac_moved = (frac - last_frac).abs() >= 0.01;
+            let frac_moved = (frac - last_frac).abs() >= 0.003;
             if advanced || detail_changed || frac_moved {
                 last_step = step;
                 last_detail = detail.clone();

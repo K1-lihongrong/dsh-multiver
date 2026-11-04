@@ -9,6 +9,12 @@
 
 ## [未发布]
 
+（暂无）
+
+---
+
+## [0.3.5] - 2026-11-04
+
 ### 韩语词条包（ko-KR）
 
 新增韩语界面。`src/composables/i18n/ko-KR.js` 376 行，覆盖全部界面文案。
@@ -19,22 +25,22 @@
 
 **用户可见变化**：界面语言多一个「한국어」选项，韩语系统用户首次启动自动使用韩语。
 
-### 手册配图改为 GIF（12 张）
+### 手册配图改为动态 WebP
 
-使用手册的 12 张插图原本是 v0.2.8 时拍的静态截图，跨了 9 个版本未更新，界面已明显不符（缺插件按钮、缺启动加载页、按钮动效未体现）。改为 Playwright 录屏生成的 GIF，同时解决"静态图看不到交互反馈"的问题。
+使用手册的插图原本是 v0.2.8 时拍的静态截图，跨了 9 个版本未更新，界面已明显不符（缺插件按钮、缺启动加载页、按钮动效未体现）。改为 Playwright 录屏转码的动态 WebP（当前 16 张），同时解决"静态图看不到交互反馈"的问题。
 
 - **录屏管线**：新增 `playwright.record.config.js`（1280×800、workers=1、video on）与 `e2e/record/_rec.js`（假光标、平滑移动、按元素点击、就绪等待）。Playwright 的 `recordVideo` 不录系统鼠标指针，观众看不到点了哪里，故注入一个跟随 `page.mouse` 的 div。
-- **12 个录屏 spec**：`e2e/record/01-main.spec.js` ~ `12-paths.spec.js`，复用 `e2e/helpers.js` 的 `mockTauri`。全部在纯前端（`vite preview`）下跑，不需要 Tauri 后端。
+- **录屏 spec**：`e2e/record/` 下的场景脚本（01 主界面 ~ 12 路径设置，后续补入 13~16 插件与外观），复用 `e2e/helpers.js` 的 `mockTauri`。全部在纯前端（`vite preview`）下跑，不需要 Tauri 后端。
 - **补事件通道**：`helpers.js` 原先只 mock 了 `invoke`，没有 mock 事件。`listen()` 走 `invoke('plugin:event|listen')`，故补上登记表并暴露 `window.__mockEmit(event, payload)`，供安装进度图推送 `install-progress` 事件。
 - **补默认假数据**：`list_remote`（13 个版本号）、`scan_usage` / `scan_version_size`（占用数字）。
-- **转码脚本**：`e2e/record/build-gifs.mjs`，`-ss 0.8` 裁掉启动白屏与启动页，`fps=10`，宽度 960，输出到 `docs/screenshots/manual/`。
+- **转码脚本**：`e2e/record/` 下的转码脚本，`-ss 0.8` 裁掉启动白屏与启动页，宽度 960，输出到 `docs/screenshots/manual/`。后续统一转 WebP（GIF 体积大且色深受限）。
 - **顶栏圆点（10）**：`topbar.js` 是注入到内嵌窗口的纯 DOM 脚本，不依赖 dsh 后端。直接注入到空白页并模拟悬停/点击，录出 dot → pill → 面板三态，无需实机录屏。
-- **删除 12 张旧图**（11 个 `.jpg` + 1 个 `.png`），手册引用同步改为 `.gif`。
-- **新增 `docs/screenshots/manual/README.md`**：说明为什么用 GIF、如何重新生成、两个坑（ffmpeg 9.0 的 `palettegen` 对单帧序列统计异常会输出全白；Playwright 自带的 ffmpeg 是极简构建，没有 GIF 编码器）。
+- **删除 12 张旧图**（11 个 `.jpg` + 1 个 `.png`），手册引用同步改为动态图。
+- **新增 `docs/screenshots/manual/README.md`**：说明重新生成的步骤与已知坑。
 
-**验证**：12 个录屏 spec 全通过（1.4 分钟）；11 张 GIF 批量转码成功，体积 100~503 KB；抽帧核对 01/02/05/06/07/08/10 内容与预期一致；07/08 首版因等待时机过早未弹出对话框，改为等 `.modal-mask .modal` 可见后重录通过。
+**验证**：录屏 spec 全通过；动态图转码成功，体积 100~503 KB；抽帧核对 01/02/05/06/07/08/10 内容与预期一致；07/08 首版因等待时机过早未弹出对话框，改为等 `.modal-mask .modal` 可见后重录通过。
 
-**用户可见变化**：使用手册的 12 张插图从静态截图换成动态 GIF，可看到悬停、点击、进度推进等交互反馈。
+**用户可见变化**：使用手册的插图从静态截图换成动态图，可看到悬停、点击、进度推进等交互反馈。
 
 ### 文档与规划
 
@@ -43,10 +49,6 @@
 - **`docs/技术债.md`**：D7/D8 实测数据更新至 v0.3.4 基线。
 - **`README.md` / `docs/使用手册.md`**：修正过期描述，补插件入口与 Linux 验收范围说明。
 - **`docs/开发缺口.md`**：新增 GAP-019（手册动态配图未做界面语种适配）。
-
----
-
-## [0.3.5] - 2026-11-04
 
 ### 按钮交互动效全站统一（技术债 D22）
 

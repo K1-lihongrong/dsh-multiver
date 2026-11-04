@@ -70,12 +70,23 @@ struct RawCatalog {
     /// 缺失时视为最旧——旧数据没有这个字段，远端推送时会自动补上。
     #[serde(rename = "updatedAt", default)]
     updated_at: Option<String>,
+    /// 分类标签的多语言映射：中文原值 → { 语言码 → 译文 }。
+    /// 分类是全局映射，不是每插件各一份。旧版 catalog 无此字段。
+    #[serde(rename = "categoryI18n", default)]
+    category_i18n: Option<HashMap<String, HashMap<String, String>>>,
     plugins: Vec<CatalogPlugin>,
 }
 
 /// 当前展示的列表。
 #[derive(Debug, Clone, Serialize)]
 pub struct Catalog {
+    /// 分类标签的多语言映射。前端按当前语言取用，缺项回退中文原值。
+    #[serde(
+        rename = "categoryI18n",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub category_i18n: Option<HashMap<String, HashMap<String, String>>>,
     pub plugins: Vec<CatalogPlugin>,
 }
 
@@ -118,6 +129,7 @@ pub fn load_local(root: &Path) -> Result<Catalog, String> {
             };
             if cached_is_newer {
                 return Ok(Catalog {
+                    category_i18n: cached.category_i18n,
                     plugins: cached.plugins,
                 });
             }
@@ -125,8 +137,11 @@ pub fn load_local(root: &Path) -> Result<Catalog, String> {
         // 缓存损坏或比内置旧：用内置，下次 check 会重写缓存
     }
 
+    let raw = parse_raw(BUILTIN)
+        .map_err(|e| format!("内置推荐列表解析失败（打包异常）：{}", e))?;
     Ok(Catalog {
-        plugins: parse_builtin()?,
+        category_i18n: raw.category_i18n,
+        plugins: raw.plugins,
     })
 }
 
@@ -366,6 +381,46 @@ mod tests {
         assert_eq!(map.get("ja-JP").map(String::as_str), Some("日本語"));
         // 缺项时前端回退到中文原文，这里确认原字段仍在
         assert_eq!(p.description, "中文");
+    }
+
+    #[test]
+    fn category_i18n_is_parsed() {
+        let text = r#"{"version":2,"categoryI18n":{
+            "版本管理":{"en-US":"Version management","ko-KR":"버전 관리"}
+        },"plugins":[
+            {"name":"a","description":"d","category":"版本管理","repo":"https://x/y"}
+        ]}"#;
+        let raw = parse_raw(text).unwrap();
+        let map = raw.category_i18n.as_ref().unwrap();
+        let entry = map.get("版本管理").unwrap();
+        assert_eq!(entry.get("en-US").map(String::as_str), Some("Version management"));
+        assert_eq!(entry.get("ko-KR").map(String::as_str), Some("버전 관리"));
+    }
+
+    #[test]
+    fn category_i18n_optional_for_legacy_catalog() {
+        let text = r#"{"version":2,"plugins":[
+            {"name":"a","description":"d","category":"c","repo":"https://x/y"}
+        ]}"#;
+        assert!(parse_raw(text).unwrap().category_i18n.is_none());
+    }
+
+    #[test]
+    fn builtin_has_category_i18n() {
+        // 内置副本应带分类多语言，否则切语言后标签仍是中文
+        let raw = parse_raw(BUILTIN).unwrap();
+        let map = raw.category_i18n.expect("内置副本应含 categoryI18n");
+        for (key, langs) in map {
+            assert!(!key.trim().is_empty());
+            for lang in ["zh-TW", "en-US", "ja-JP", "ko-KR"] {
+                assert!(
+                    langs.get(lang).is_some_and(|v| !v.trim().is_empty()),
+                    "分类「{}」缺 {} 译文",
+                    key,
+                    lang
+                );
+            }
+        }
     }
 
     #[test]
