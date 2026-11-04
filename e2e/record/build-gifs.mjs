@@ -65,6 +65,7 @@ const MAP = {
   "12-paths": "12-paths",
   "13-plugin-installed": "13-plugin-installed",
   "14-plugin-catalog": "14-plugin-catalog",
+  "15-appearance": "15-appearance",
 };
 
 // 各语言字体：中 → 微软雅黑，英 → Segoe UI，日 → 游ゴシック
