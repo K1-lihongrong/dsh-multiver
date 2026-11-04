@@ -1,13 +1,14 @@
 import { test } from "@playwright/test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { installCursor, glide, clickAt, HOLD_START, HOLD_END } from "./_rec.js";
+import { installCursor, glide, clickAt, startCues, cue, saveCues, HOLD_START, HOLD_END } from "./_rec.js";
 
 // 10 内嵌窗口顶栏圆点三态：dot → pill（悬停显示版本号）→ 面板（点击展开）。
 //
 // topbar.js 是后端用 initialization_script 注入到内嵌窗口的纯 DOM 脚本，
 // 不依赖 dsh 后端；这里直接把它注入到一个空白页面，模拟三种状态。
 test("10 顶栏圆点三态", async ({ page }) => {
+  startCues();
   await installCursor(page);
 
   // 准备一个有内容的底图，避免纯白背景看不出圆点位置
@@ -36,13 +37,28 @@ test("10 顶栏圆点三态", async ({ page }) => {
   await page.waitForTimeout(HOLD_START);
 
   // 1) dot 态：8px 小圆点，静置 1 秒
+  cue(
+    "内嵌窗口左上角有一个小圆点，平时是半透明的 8px 小圆点",
+    "A small dot sits in the top-left corner of the embedded window; at rest it is a translucent 8px circle",
+    "埋め込みウィンドウの左上に小さなドットがあります。通常は半透明の 8px の円です",
+  );
   await page.waitForTimeout(900);
 
   // 2) pill 态：悬停 → 展开成含版本号的小胶囊
+  cue(
+    "鼠标悬停时展开成胶囊形，显示当前 dsh 版本号",
+    "Hovering expands it into a pill showing the current dsh version",
+    "マウスを乗せるとカプセル状に広がり、現在の dsh バージョンが表示されます",
+  );
   await glide(page, 23, 23);
   await page.waitForTimeout(1100);
 
   // 3) 面板态：点击 → 展开面板（标题 / URL 输入框 / 重启按钮）
+  cue(
+    "点击圆点展开面板：版本号、完整 URL（可选中复制）、重启按钮、关闭",
+    "Clicking the dot opens a panel: version, full URL (selectable), restart button, and close",
+    "ドットをクリックするとパネルが開きます：バージョン、完全な URL（選択コピー可）、再起動ボタン、閉じる",
+  );
   await page.mouse.down();
   await page.waitForTimeout(100);
   await page.mouse.up();
@@ -57,5 +73,6 @@ test("10 顶栏圆点三态", async ({ page }) => {
       await page.waitForTimeout(800);
     }
   }
+  saveCues("10-topbar-dot");
   await page.waitForTimeout(HOLD_END);
 });

@@ -1,9 +1,10 @@
 import { test } from "@playwright/test";
 import { mockTauri, makeVersion } from "../helpers.js";
-import { installCursor, glide, clickAt, waitReady, HOLD_START, HOLD_END } from "./_rec.js";
+import { installCursor, glide, clickAt, waitReady, startCues, cue, saveCues, HOLD_START, HOLD_END } from "./_rec.js";
 
 // 07 网络失败换源：安装抛网络错误 → 弹出换源对话框 → 切换源下拉。
 test("07 换源弹窗", async ({ page }) => {
+  startCues();
   await installCursor(page);
   await mockTauri(page, {
     state: {
@@ -26,6 +27,11 @@ test("07 换源弹窗", async ({ page }) => {
   await waitReady(page);
   await page.waitForTimeout(HOLD_START);
 
+  cue(
+    "安装时网络请求失败",
+    "The install request fails due to a network error",
+    "インストール時のネットワークリクエストが失敗",
+  );
   const input = page.locator(".install-row input").first();
   const box = await input.boundingBox();
   if (box) {
@@ -42,6 +48,11 @@ test("07 换源弹窗", async ({ page }) => {
 
   // 正文 199 行："弹出换源对话框（官方 / 阿里云 / 腾讯云 / 华为云 / 自定义），一键重试"
   // 依次切换几个源，最后悬停「换源重试」按钮
+  cue(
+    "弹出换源对话框：可选官方 / 阿里云 / 腾讯云 / 华为云，或填自定义源，一键重试",
+    "A registry dialog appears: choose official, Aliyun, Tencent, Huawei, or enter a custom registry, then retry with one click",
+    "レジストリ切り替えダイアログが表示されます：公式 / Aliyun / Tencent / Huawei、またはカスタムレジストリを指定してワンクリックで再試行",
+  );
   const select = page.locator(".modal select").first();
   if (await select.count()) {
     const sb = await select.boundingBox();
@@ -75,5 +86,6 @@ test("07 换源弹窗", async ({ page }) => {
       await page.waitForTimeout(800);
     }
   }
+  saveCues("07-modal-net");
   await page.waitForTimeout(HOLD_END);
 });

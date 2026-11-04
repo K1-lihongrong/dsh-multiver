@@ -1,11 +1,12 @@
 import { test } from "@playwright/test";
 import { mockTauri, makeVersion } from "../helpers.js";
-import { installCursor, glide, clickAt, waitReady, HOLD_START, HOLD_END } from "./_rec.js";
+import { installCursor, glide, clickAt, waitReady, startCues, cue, saveCues, HOLD_START, HOLD_END } from "./_rec.js";
 
 // 06 安装进度：点「安装」→ 逐条推 install-progress 事件 → 进度条按阶段推进。
 // 事件字段来自 src-tauri/src/versions/install.rs 的 ProgressEvent：
 // { step, total, stage, detail, fraction }
 test("06 安装进度", async ({ page }) => {
+  startCues();
   await installCursor(page);
   await mockTauri(page, {
     state: {
@@ -29,6 +30,11 @@ test("06 安装进度", async ({ page }) => {
   await page.waitForTimeout(HOLD_START);
 
   // 填入版本号并点「安装」
+  cue(
+    "填入版本号，点「安装」",
+    "Enter a version number and click \"Install\"",
+    "バージョン番号を入力し、「インストール」をクリック",
+  );
   const input = page.locator(".install-row input").first();
   const box = await input.boundingBox();
   if (box) {
@@ -42,6 +48,11 @@ test("06 安装进度", async ({ page }) => {
   await page.waitForTimeout(300);
 
   // 逐条推进度事件，节奏与真实安装相近（8 个阶段）
+  cue(
+    "安装分 8 个阶段：准备目录 → 写入配置 → 启动 pnpm → 解析依赖 → 下载依赖 → 写入文件 → 构建原生模块 → 完成，进度条按阶段加权推进",
+    "Installation runs in eight stages: prepare, config, launch pnpm, resolve, download, write, build native modules, done. The bar advances by weighted stages",
+    "インストールは 8 段階：ディレクトリ準備 → 設定書き込み → pnpm 起動 → 依存解決 → ダウンロード → ファイル書き込み → ネイティブモジュールのビルド → 完了。進捗バーは段階ごとに進みます",
+  );
   const steps = [
     { step: 1, stage: "准备目录", detail: "", fraction: 1 },
     { step: 2, stage: "写入配置", detail: "", fraction: 1 },
@@ -62,5 +73,6 @@ test("06 安装进度", async ({ page }) => {
     await page.waitForTimeout(s.step >= 5 && s.step <= 6 ? 450 : 260);
   }
   await page.waitForTimeout(900);
+  saveCues("06-progress");
   await page.waitForTimeout(HOLD_END);
 });

@@ -1,6 +1,6 @@
 import { test } from "@playwright/test";
 import { mockTauri, makeVersion } from "../helpers.js";
-import { installCursor, glide, clickAt, scrollTo, waitReady, HOLD_START, HOLD_END } from "./_rec.js";
+import { installCursor, glide, clickAt, scrollTo, waitReady, startCues, cue, saveCues, HOLD_START, HOLD_END } from "./_rec.js";
 
 // 01 快速上手四步：对应正文 73-78 行。
 //   1. 看环境检查
@@ -35,6 +35,7 @@ async function playInstall(page) {
 }
 
 test("01 快速上手四步", async ({ page }) => {
+  startCues();
   await installCursor(page);
 
   // 首次打开：没有任何已安装版本
@@ -69,17 +70,32 @@ test("01 快速上手四步", async ({ page }) => {
   await page.waitForTimeout(HOLD_START);
 
   // ── 第 1 步：看环境检查（正文 75 行）──
+  cue(
+    "第 1 步：看环境检查 —— Node / pnpm / 磁盘 / npm 源，致命项必须先装好",
+    "Step 1: Check the environment — Node, pnpm, disk and npm registry; critical items must pass first",
+    "ステップ 1：環境チェック —— Node / pnpm / ディスク / npm レジストリ。必須項目は先に整える",
+  );
   await glide(page, 300, 100);
   await page.waitForTimeout(500);
   await glide(page, 300, 270);
   await page.waitForTimeout(800);
 
   // ── 第 2 步：点「刷新列表」拉取版本（正文 76 行）──
+  cue(
+    "第 2 步：点「刷新列表」，从 npm 拉取所有可安装的 dsh 版本",
+    "Step 2: Click \"Refresh list\" to fetch all installable dsh versions from npm",
+    "ステップ 2：「リスト更新」をクリックし、npm からインストール可能な dsh バージョンを取得",
+  );
   await clickAt(page, page.getByRole("button", { name: /刷新列表/ }).first());
   await page.locator(".chip").first().waitFor({ state: "visible", timeout: 8000 });
   await page.waitForTimeout(900);
 
   // ── 第 3 步：点版本号 → 填入输入框 → 关掉更新说明 → 点「安装」→ 进度条走完（正文 77 行）──
+  cue(
+    "第 3 步：点版本号填入输入框，再点「安装」，观察进度条走完",
+    "Step 3: Click a version to fill the input, then click \"Install\" and watch the progress bar",
+    "ステップ 3：バージョン番号をクリックして入力欄に反映し、「インストール」で進捗バーを確認",
+  );
   // 指定版本，与 list_installed mock 返回的一致
   await clickAt(page, page.locator(".chip", { hasText: NEW_VER }).first());
   await page.waitForTimeout(700);
@@ -101,6 +117,11 @@ test("01 快速上手四步", async ({ page }) => {
   await page.waitForTimeout(1200);
 
   // ── 第 4 步：点「运行」（正文 78 行）──
+  cue(
+    "第 4 步：点「运行」，在应用内嵌窗口中打开该版本的 dsh Web 界面",
+    "Step 4: Click \"Run\" to open this version's dsh web UI in an embedded window",
+    "ステップ 4：「実行」をクリックし、アプリ内の埋め込みウィンドウで dsh の Web UI を開く",
+  );
   // 滚到已安装列表，确保按钮在可视区
   await scrollTo(page, ".ver-list", -120);
   await page.waitForTimeout(500);
@@ -112,5 +133,6 @@ test("01 快速上手四步", async ({ page }) => {
     await page.waitForTimeout(1800);
   }
 
+  saveCues("01-main");
   await page.waitForTimeout(HOLD_END);
 });

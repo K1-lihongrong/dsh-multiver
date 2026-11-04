@@ -1,4 +1,9 @@
-// 录屏专用工具：假光标 + 平稳操作 + 等待。
+// 录屏专用工具：假光标 + 平稳操作 + 等待 + 多语字幕时间轴。
+//
+// 依赖：node:fs / node:path / node:os（时间轴要写盘给转码脚本读）
+import { writeFileSync, mkdirSync } from "node:fs";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
 //
 // 为什么需要假光标：Playwright 的 recordVideo 不录系统鼠标指针，
 // 观众看不到"点了哪里"。这里注入一个跟随 page.mouse 的 div，
@@ -109,6 +114,31 @@ export async function waitReady(page) {
     return els.length > 0;
   }, { timeout: 8000 }).catch(() => {});
   await page.waitForTimeout(400);
+}
+
+// ── 多语种讲解字幕（时间轴） ──
+// 用法：page.goto 前调 startCues()，每个关键动作后调 cue(zh, en, ja)，
+// 测试末尾调 saveCues("<spec 名>")。转码脚本读 JSON 烧进 GIF。
+//
+// 时间戳基于 Date.now()，与 recordVideo 起点相差几十毫秒，
+// 转码时统一减 0.8 秒（裁掉启动白屏那段）即可。
+
+const CUE_DIR = join(tmpdir(), "dsh-multiver", "cues");
+let __cues = [];
+let __t0 = 0;
+
+export function startCues() {
+  __cues = [];
+  __t0 = Date.now();
+}
+
+export function cue(zh, en, ja) {
+  __cues.push({ t: Number(((Date.now() - __t0) / 1000).toFixed(2)), zh, en, ja });
+}
+
+export function saveCues(name) {
+  mkdirSync(CUE_DIR, { recursive: true });
+  writeFileSync(join(CUE_DIR, name + ".json"), JSON.stringify(__cues, null, 2), "utf8");
 }
 
 /** 开头停顿（让观众看清初始画面），结尾停顿（让观众消化）。 */
