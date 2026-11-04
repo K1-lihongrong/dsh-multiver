@@ -2,8 +2,12 @@ import { test } from "@playwright/test";
 import { mockTauri } from "../helpers.js";
 import { installCursor, glide, hover, waitReady, HOLD_START, HOLD_END } from "./_rec.js";
 
-// 02 环境检查未通过：展示缺失项的红色行 + 下载链接按钮。
-// Node 与 pnpm 都缺失 → 出现「自动准备运行时」主按钮，符合手册描述。
+// 02 环境检查未通过：对应正文 86-102 行。
+//   "启动时自动检查 6 项"
+//   "缺失项会给出**一键下载链接**和安装步骤"
+//
+// 演示顺序：浏览检查列表 → 悬停失败项的「打开下载页」→
+// 顶部横幅三个按钮 → 「自动准备运行时」→ 「去官网安装」→ 「重新检查」
 test("02 环境检查未通过", async ({ page }) => {
   await installCursor(page);
   await mockTauri(page, {
@@ -21,10 +25,59 @@ test("02 环境检查未通过", async ({ page }) => {
   });
   await page.goto("/");
   await waitReady(page);
-  await page.waitForTimeout(400);
-  // 悬停「自动准备运行时」按钮，展示主按钮 hover 光晕
-  const btn = page.getByRole("button", { name: /自动准备运行时|准备运行时/ }).first();
-  if (await btn.count()) await hover(page, btn);
+  await page.waitForTimeout(HOLD_START);
+
+  // 1) 自上而下滑过检查列表：先看两项失败（正文 92-93 行的致命项）
+  await glide(page, 300, 120);
+  await page.waitForTimeout(500);
+  await glide(page, 300, 200);
+  await page.waitForTimeout(800);
+
+  // 2) 正文 100 行"一键下载链接"：悬停 Node 的「打开下载页」
+  const dlBtns = page.getByRole("button", { name: /打开下载页/ });
+  if (await dlBtns.count()) {
+    await hover(page, dlBtns.nth(0));
+    await page.waitForTimeout(900);
+    if (await dlBtns.count() > 1) {
+      await hover(page, dlBtns.nth(1));
+      await page.waitForTimeout(900);
+    }
+  }
+
+  // 3) 继续下滑看完通过项（正文 88 行"自动检查 6 项"）
+  await glide(page, 300, 330);
   await page.waitForTimeout(700);
+
+  // 4) 顶部横幅三个按钮（运行时引导，v0.2.9+）
+  for (const name of [/准备便携版/, /去官网安装/, /忽略/]) {
+    const btn = page.getByRole("button", { name }).first();
+    if (await btn.count()) {
+      const bb = await btn.boundingBox();
+      if (bb) {
+        await glide(page, bb.x + bb.width / 2, bb.y + bb.height / 2);
+        await page.waitForTimeout(700);
+      }
+    }
+  }
+
+  // 5) 「自动准备运行时」主按钮（正文 75 行的"先把致命项装好"）
+  const prep = page.getByRole("button", { name: /自动准备运行时/ }).first();
+  if (await prep.count()) {
+    await hover(page, prep);
+    await page.waitForTimeout(1000);
+  }
+
+  // 6) 「去官网安装」+「重新检查」（正文 75 行"安装后重新检查"）
+  for (const name of [/^去官网安装$/, /重新检查/]) {
+    const btn = page.getByRole("button", { name }).first();
+    if (await btn.count()) {
+      const bb = await btn.boundingBox();
+      if (bb) {
+        await glide(page, bb.x + bb.width / 2, bb.y + bb.height / 2);
+        await page.waitForTimeout(800);
+      }
+    }
+  }
+
   await page.waitForTimeout(HOLD_END);
 });
