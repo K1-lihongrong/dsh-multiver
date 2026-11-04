@@ -256,6 +256,7 @@ function fmtTs(sec) {
           <option value="zh-TW">繁體中文</option>
           <option value="en-US">English</option>
           <option value="ja-JP">日本語</option>
+          <option value="ko-KR">한국어</option>
         </select>
       </div>
     </div>

@@ -20,16 +20,18 @@ import zhCN from "./i18n/zh-CN.js";
 import zhTW from "./i18n/zh-TW.js";
 import enUS from "./i18n/en-US.js";
 import jaJP from "./i18n/ja-JP.js";
+import koKR from "./i18n/ko-KR.js";
 
 const MESSAGES = {
   "zh-CN": zhCN,
   "zh-TW": zhTW,
   "en-US": enUS,
   "ja-JP": jaJP,
+  "ko-KR": koKR,
 };
 
 /// 支持的语言列表（UI 下拉用）
-export const LANGS = ["zh-CN", "zh-TW", "en-US", "ja-JP"];
+export const LANGS = ["zh-CN", "zh-TW", "en-US", "ja-JP", "ko-KR"];
 
 /// 系统语言 → 支持的语言
 function systemLang() {
@@ -40,6 +42,7 @@ function systemLang() {
     return "zh-CN";
   }
   if (l.startsWith("ja")) return "ja-JP";
+  if (l.startsWith("ko")) return "ko-KR";
   return "en-US";
 }
 
