@@ -1,9 +1,9 @@
 import { test, expect } from "@playwright/test";
 import { mockTauri, makeVersion } from "./helpers.js";
 
-// v0.2.14：4 语言切换。
+// v0.2.14：4 语言切换；v0.3.5 起为 5 语言。
 
-test("4 语言切换文案正确", async ({ page }) => {
+test("5 语言切换文案正确", async ({ page }) => {
   await mockTauri(page, { installed: [makeVersion("0.2.0-rc.1")] });
   await page.goto("/");
 
@@ -18,6 +18,10 @@ test("4 语言切换文案正确", async ({ page }) => {
   // 切日本語
   await langSelect.selectOption("ja-JP");
   await expect(page.locator(".brand h1")).toHaveText("DSH バージョンマネージャー");
+
+  // 切韓国語
+  await langSelect.selectOption("ko-KR");
+  await expect(page.locator(".brand h1")).toHaveText("DSH 버전 관리자");
 });
 
 test("启动态文案随语言切换", async ({ page }) => {
