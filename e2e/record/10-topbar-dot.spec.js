@@ -11,22 +11,22 @@ test("10 顶栏圆点三态", async ({ page }) => {
   startCues();
   await installCursor(page);
 
-  // 准备一个有内容的底图，避免纯白背景看不出圆点位置
+  // 底图用真实的 dsh Web 界面截图，避免手写占位页与产品脱节。
+  // 截图 1100x760（比例 1.447），视口 1280x800（比例 1.6）。
+  // 图片按宽度撑满 1280 → 高 884，超出 800 共 84px；顶部对齐（top:0），
+  // 超出的 84px 全部裁在底部（该区域是界面留白，无内容损失）。
+  const dshUi =
+    "data:image/png;base64," +
+    readFileSync(join("e2e", "record", "fixtures", "dsh-ui.png")).toString("base64");
   await page.setContent(`<!DOCTYPE html><html><head><meta charset="utf-8"><style>
-    body { margin:0; font:14px/1.6 system-ui,sans-serif; background:#f6f7f9; color:#2b2f36; }
-    .mock-dsh { padding:24px 32px; }
-    .mock-dsh h1 { font-size:18px; margin:0 0 8px; }
-    .mock-dsh p { margin:0 0 6px; color:#5a6270; font-size:13px; }
-    .mock-card { margin-top:16px; background:#fff; border:1px solid #e3e6ea; border-radius:8px; padding:14px 18px; max-width:560px; }
+    html, body { margin:0; height:100%; overflow:hidden; background:#fff; }
+    .dsh-shot {
+      display:block;
+      width:1280px; height:auto;
+      position:absolute; left:0; top:0;
+    }
   </style></head><body>
-    <div class="mock-dsh">
-      <h1>DeepSeek Harness</h1>
-      <p>版本 0.2.1-rc.2 · 已连接</p>
-      <div class="mock-card">
-        <p>这是一个模拟的 dsh Web 界面。</p>
-        <p>左上角的圆点是版本管理器注入的顶栏控件。</p>
-      </div>
-    </div>
+    <img class="dsh-shot" src="${dshUi}" alt="dsh Web 界面" />
   </body></html>`);
 
   // 注入 topbar.js（替换占位符）
