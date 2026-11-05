@@ -160,35 +160,92 @@ pub(crate) fn extract_num(s: &str, key: &str) -> Option<u64> {
     digits.parse().ok()
 }
 
-/// 按字节把流切成行（保留不含换行符的原始字节）。
+/// 按字节把流切成行的**流式**迭代器（保留不含换行符的原始字节）。
 ///
 /// D16：不能用 `BufRead::lines()`——它按 UTF-8 解析，遇非法字节会**整行丢弃**，
 /// 中文 Windows 下 pnpm 的报错行会直接消失。这里只按 \n 切分，解码交给调用方。
-fn read_lines_bytes<R: std::io::Read>(mut reader: R) -> Vec<Vec<u8>> {
-    let mut buf = Vec::new();
-    let mut out = Vec::new();
-    let mut chunk = [0u8; 8192];
-    loop {
-        let n = match reader.read(&mut chunk) {
-            Ok(0) => break,
-            Ok(n) => n,
-            Err(_) => break,
-        };
-        for &b in &chunk[..n] {
-            if b == b'\n' {
-                if buf.last() == Some(&b'\r') {
-                    buf.pop();
-                }
-                out.push(std::mem::take(&mut buf));
-            } else {
-                buf.push(b);
+///
+/// 回归教训（v0.3.6）：曾把本函数写成返回 `Vec<Vec<u8>>`——必须读到 EOF 才返回
+/// 整个数组，调用方的 `for` 循环才开始，pnpm 的进度行全挤在进程结束时到达，
+/// 进度条从 0.3.0 起卡在 step 3 不动（v0.2.14 用 `BufReader::lines()` 是流式的）。
+/// 本类型每次 `read` 到换行就 yield 一行，恢复实时性。
+struct LinesReader<R: std::io::Read> {
+    reader: R,
+    buf: Vec<u8>,
+    chunk: [u8; 8192],
+    chunk_len: usize,
+    chunk_pos: usize,
+    eof: bool,
+}
+
+impl<R: std::io::Read> LinesReader<R> {
+    fn new(reader: R) -> Self {
+        Self {
+            reader,
+            buf: Vec::new(),
+            chunk: [0u8; 8192],
+            chunk_len: 0,
+            chunk_pos: 0,
+            eof: false,
+        }
+    }
+
+    /// 从底层流读更多字节到 chunk。返回 false 表示 EOF 或读失败。
+    fn fill_chunk(&mut self) -> bool {
+        if self.chunk_pos < self.chunk_len {
+            return true;
+        }
+        if self.eof {
+            return false;
+        }
+        match self.reader.read(&mut self.chunk) {
+            Ok(0) | Err(_) => {
+                self.eof = true;
+                false
+            }
+            Ok(n) => {
+                self.chunk_len = n;
+                self.chunk_pos = 0;
+                true
             }
         }
     }
-    if !buf.is_empty() {
-        out.push(buf);
+}
+
+impl<R: std::io::Read> Iterator for LinesReader<R> {
+    type Item = Vec<u8>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        loop {
+            if !self.fill_chunk() {
+                // EOF：若 buf 还有残留（最后一行无换行）则吐出，否则结束
+                if !self.buf.is_empty() {
+                    let mut line = std::mem::take(&mut self.buf);
+                    if line.last() == Some(&b'\r') {
+                        line.pop();
+                    }
+                    return Some(line);
+                }
+                return None;
+            }
+            let b = self.chunk[self.chunk_pos];
+            self.chunk_pos += 1;
+            if b == b'\n' {
+                if self.buf.last() == Some(&b'\r') {
+                    self.buf.pop();
+                }
+                return Some(std::mem::take(&mut self.buf));
+            }
+            self.buf.push(b);
+        }
     }
-    out
+}
+
+/// 便捷收集版：把整个流读成行数组。仅用于测试与一次性场景；
+/// 需要实时处理输出的调用方应直接用 `LinesReader`（保持流式）。
+#[cfg(test)]
+fn read_lines_bytes<R: std::io::Read>(reader: R) -> Vec<Vec<u8>> {
+    LinesReader::new(reader).collect()
 }
 
 /// 在 Windows 上调用 pnpm 需要走 cmd，否则可能找不到 .cmd
@@ -341,14 +398,16 @@ pub fn install(
     let tx_out = tx.clone();
     let h_out = child.stdout.take().map(move |stdout| {
         std::thread::spawn(move || {
-            for line in read_lines_bytes(stdout) {
+            // 必须用流式 LinesReader（逐行到达就转发），不能 collect 成 Vec——
+            // 否则主线程要等进程 EOF 才收到第一行，进度事件全挤在安装结束时。
+            for line in LinesReader::new(stdout) {
                 let _ = tx_out.send(crate::console_decode::decode_console(&line));
             }
         })
     });
     let h_err = child.stderr.take().map(move |stderr| {
         std::thread::spawn(move || {
-            for line in read_lines_bytes(stderr) {
+            for line in LinesReader::new(stderr) {
                 let _ = tx.send(crate::console_decode::decode_console(&line));
             }
         })
@@ -537,6 +596,55 @@ mod read_lines_bytes_tests {
     fn blank_line_is_kept() {
         let got = read_lines_bytes(&b"a\n\nb"[..]);
         assert_eq!(got, vec![b"a".to_vec(), Vec::new(), b"b".to_vec()]);
+    }
+
+    /// 回归测试（v0.3.6）：必须**流式**——第一行在流尚未结束时就要能取到。
+    ///
+    /// v0.3.0 曾把切行实现成"读到 EOF 返回 Vec"，导致 pnpm 进度事件全挤在
+    /// 安装结束时到达，进度条卡在 step 3 不动（0.2.13/0.2.14 正常）。
+    #[test]
+    fn lines_reader_is_streaming() {
+        use super::LinesReader;
+        use std::io::{Cursor, Read};
+        use std::sync::{Arc, Mutex};
+
+        // 分块 Read：第一次只给 "first\n"，之后才给 "second\n"。
+        // 记录每次 read 的调用，证明取第一行时没有把整个流读完。
+        struct ChunkedRead {
+            chunks: Vec<Vec<u8>>,
+            idx: usize,
+            reads: Arc<Mutex<usize>>,
+        }
+        impl Read for ChunkedRead {
+            fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+                *self.reads.lock().unwrap() += 1;
+                if self.idx >= self.chunks.len() {
+                    return Ok(0);
+                }
+                let c = &self.chunks[self.idx];
+                self.idx += 1;
+                let n = c.len().min(buf.len());
+                buf[..n].copy_from_slice(&c[..n]);
+                Ok(n)
+            }
+        }
+
+        let reads = Arc::new(Mutex::new(0));
+        let src = ChunkedRead {
+            chunks: vec![b"first\n".to_vec(), b"second\n".to_vec()],
+            idx: 0,
+            reads: reads.clone(),
+        };
+        let mut it = LinesReader::new(src);
+        // 取第一行后，底层只应读过 1 次（尚未触及第二块/EOF）
+        assert_eq!(it.next(), Some(b"first".to_vec()));
+        assert_eq!(*reads.lock().unwrap(), 1, "取第一行后不应继续读流");
+        assert_eq!(it.next(), Some(b"second".to_vec()));
+        assert_eq!(it.next(), None);
+
+        // 对照：collect 版本语义不变（一次性收集）
+        let collected = read_lines_bytes(Cursor::new(b"x\ny\n"));
+        assert_eq!(collected, vec![b"x".to_vec(), b"y".to_vec()]);
     }
 }
 

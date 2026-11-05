@@ -48,16 +48,6 @@
 
 **用户可见变化**：安装进度条连续爬升，过程中可见中间百分比，不再从 4% 跳到 90%。
 
-### 内嵌 dsh 窗口标题栏跟随 dsh 主题
-
-内嵌 dsh 窗口使用系统默认标题栏，dsh 切深色主题后标题栏仍是浅色，割裂感明显。
-
-- 注入脚本 `topbar.js` 新增 `MutationObserver`，监听 `<html data-ds-theme-source>` 与 `style`（`color-scheme`）变化，解析实际生效的深浅色后 `invoke('set_window_theme')` 回传。
-- 新增 Tauri 命令 `set_window_theme`，经 `DwmSetWindowAttribute(DWMWA_USE_IMMERSIVE_DARK_MODE)` 设置标题栏深色模式（Windows 10 1903+ / Windows 11；其他平台为空实现）。
-- `system` 模式优先读浏览器已解析的 `color-scheme`，退化到 `prefers-color-scheme`；系统主题变化时经 `matchMedia` change 事件再同步。
-
-**用户可见变化**：在内嵌 dsh 窗口里切换浅色/深色/跟随系统，窗口标题栏即时跟随变化，无需重启窗口。
-
 ### 隐藏系统标题栏（自绘顶栏）
 
 管理器主窗口改为无边框（`decorations: false`），顶栏自绘最小化/最大化↔还原/关闭三键，随主题变色；加载页可拖动、右上角可关闭。
@@ -70,7 +60,7 @@
 
 ### 验证
 
-- Rust 单测 **196 passed / 1 ignored**（新增 catalog 3 条、主题同步 2 条）。
+- Rust 单测 **195 passed / 1 ignored**（新增 catalog 3 条、切行流式回归 1 条）。
 - E2E **59 passed**（新增 `d36-catalog-i18n` 4 条）。
 - `cargo clippy` 0 warning；`cargo fmt --check` 通过；`pnpm build` 通过。
 

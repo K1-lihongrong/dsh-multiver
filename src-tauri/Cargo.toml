@@ -61,8 +61,6 @@ windows = { version = "0.62", features = [
     "Win32_System_Com",
     "Win32_System_Com_StructuredStorage",
     "Win32_System_Variant",
-    # 内嵌 dsh 窗口标题栏跟随 dsh 主题（DwmSetWindowAttribute）
-    "Win32_Graphics_Dwm",
 ] }
 
 # 用于 Unix 进程组管理：killpg / PDEATHSIG（见 jobobj.rs）
