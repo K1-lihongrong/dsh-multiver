@@ -248,6 +248,26 @@ fn read_lines_bytes<R: std::io::Read>(reader: R) -> Vec<Vec<u8>> {
     LinesReader::new(reader).collect()
 }
 
+/// pnpm 的公共参数（目录选项 + reporter + 构建开关）。
+///
+/// 抽成纯函数以便单测锁定两个易回归点：
+///   - 目录选项必须用 `--config.xxx=value`（顶层 `--store-dir` 会报 Unknown option）
+///   - 必须带 `--reporter=append-only`（默认 reporter 只发开始/完成两条 Progress，
+///     阶段内 fraction 无从推进，进度会从 4% 直接跳到 90%）
+fn pnpm_common_args(store_dir: &Path, cache_dir: &Path, state_dir: &Path) -> Vec<String> {
+    vec![
+        // 注意：pnpm add 不接受顶层 --state-dir（报 Unknown option），
+        // 统一改用 --config.xxx=value 形式，既不报错也保持"不污染全局目录"的意图。
+        format!("--config.store-dir={}", store_dir.to_string_lossy()),
+        format!("--config.cache-dir={}", cache_dir.to_string_lossy()),
+        format!("--config.state-dir={}", state_dir.to_string_lossy()),
+        // append-only reporter 比默认多输出下载/写入过程中的中间 Progress 行
+        // （实测 13 行 vs 8 行），让阶段内的 fraction 能真正推进。
+        "--reporter=append-only".to_string(),
+        "--config.confirmModulesPurge=false".to_string(),
+    ]
+}
+
 /// 在 Windows 上调用 pnpm 需要走 cmd，否则可能找不到 .cmd
 #[cfg(windows)]
 fn pnpm_command() -> Command {
@@ -342,25 +362,8 @@ pub fn install(
     cmd.current_dir(&target)
         .arg("add")
         .arg(&spec)
-        // 注意：pnpm add 不接受顶层 --state-dir（报 Unknown option），
-        // 统一改用 --config.xxx=value 形式，既不报错也保持"不污染全局目录"的意图。
-        .arg(format!(
-            "--config.store-dir={}",
-            store_dir.to_string_lossy()
-        ))
-        .arg(format!(
-            "--config.cache-dir={}",
-            cache_dir.to_string_lossy()
-        ))
-        .arg(format!(
-            "--config.state-dir={}",
-            state_dir.to_string_lossy()
-        ))
-        // append-only reporter 比默认多输出下载/写入过程中的中间 Progress 行
-        // （实测 13 行 vs 8 行），让阶段内的 fraction 能真正推进。
-        // 默认 reporter 只发「开始」与「完成」两条，进度会从 4% 直接跳到 90%。
-        .arg("--reporter=append-only")
-        .arg("--config.confirmModulesPurge=false")
+        .args(pnpm_common_args(store_dir, cache_dir, state_dir))
+        // 其余固定参数见 pnpm_common_args（抽出以便单测锁定回归点）
         .arg("--config.dangerouslyAllowAllBuilds=true");
     // 可选：自定义 npm 源（换源重试用）
     if let Some(reg) = registry {
@@ -559,7 +562,7 @@ pub fn exists(versions_dir: &Path, version: &str) -> bool {
 
 #[cfg(test)]
 mod read_lines_bytes_tests {
-    use super::read_lines_bytes;
+    use super::{pnpm_common_args, read_lines_bytes};
 
     #[test]
     fn splits_on_lf() {
@@ -596,6 +599,48 @@ mod read_lines_bytes_tests {
     fn blank_line_is_kept() {
         let got = read_lines_bytes(&b"a\n\nb"[..]);
         assert_eq!(got, vec![b"a".to_vec(), Vec::new(), b"b".to_vec()]);
+    }
+
+    /// 回归测试（v0.3.6）：pnpm 参数必须含 append-only reporter。
+    ///
+    /// 默认 reporter 只发「开始（added 0）」与「完成（added N, done）」两条
+    /// Progress 行，阶段内 fraction 无从推进，进度条会从 4% 直接跳到 90%
+    /// ——这正是 v0.3.0 起进度条卡住的两个根因之一。任何人把它删掉都应被此测试拦住。
+    #[test]
+    fn pnpm_args_include_append_only_reporter() {
+        let dir = std::path::Path::new("/tmp/x");
+        let args = pnpm_common_args(dir, dir, dir);
+        assert!(
+            args.iter().any(|a| a == "--reporter=append-only"),
+            "缺少 append-only reporter，进度条会失去阶段内推进：{:?}",
+            args
+        );
+    }
+
+    /// 回归测试：目录选项必须用 `--config.xxx=value` 形式。
+    ///
+    /// pnpm add 不接受顶层 `--store-dir` 等（报 Unknown option），
+    /// 一旦有人改回顶层形式，安装会直接失败。
+    #[test]
+    fn pnpm_args_use_config_prefix_for_dirs() {
+        let dir = std::path::Path::new("/tmp/x");
+        let args = pnpm_common_args(dir, dir, dir);
+        for key in ["store-dir", "cache-dir", "state-dir"] {
+            let prefix = format!("--config.{}=", key);
+            assert!(
+                args.iter().any(|a| a.starts_with(&prefix)),
+                "缺少 {} 参数（必须用 --config 前缀，不能用顶层选项）：{:?}",
+                key,
+                args
+            );
+        }
+        assert!(
+            !args.iter().any(|a| a.starts_with("--store-dir")
+                || a.starts_with("--cache-dir")
+                || a.starts_with("--state-dir")),
+            "不得使用顶层目录选项（pnpm 会报 Unknown option）：{:?}",
+            args
+        );
     }
 
     /// 回归测试（v0.3.6）：必须**流式**——第一行在流尚未结束时就要能取到。
