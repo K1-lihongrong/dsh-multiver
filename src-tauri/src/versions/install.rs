@@ -299,6 +299,10 @@ pub fn install(
             "--config.state-dir={}",
             state_dir.to_string_lossy()
         ))
+        // append-only reporter 比默认多输出下载/写入过程中的中间 Progress 行
+        // （实测 13 行 vs 8 行），让阶段内的 fraction 能真正推进。
+        // 默认 reporter 只发「开始」与「完成」两条，进度会从 4% 直接跳到 90%。
+        .arg("--reporter=append-only")
         .arg("--config.confirmModulesPurge=false")
         .arg("--config.dangerouslyAllowAllBuilds=true");
     // 可选：自定义 npm 源（换源重试用）

@@ -72,7 +72,9 @@ function stopClimb() {
 }
 
 function startClimb() {
-  stopClimb();
+  // 已有定时器时不重建：事件密集时反复 stop+start 会让定时器永远等不到
+  // 第一个 200ms tick，爬升实际失效。
+  if (climbTimer) return;
   climbTimer = setInterval(() => {
     const target = progressTarget();
     if (displayedPct.value >= target - 0.05) {
