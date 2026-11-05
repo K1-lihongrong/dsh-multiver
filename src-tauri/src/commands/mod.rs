@@ -78,6 +78,60 @@ mod tests {
         assert!(s.contains("http://x/\\'y"), "URL 中单引号应被转义");
     }
 
+    /// topbar 与 Rust 侧的契约：事件名、通道、拖拽属性必须两边一致。
+    ///
+    /// 为什么需要这条：topbar.js 是纯 JS，Rust 编译器检查不到它。
+    /// 改事件名时若只改了 JS（或只改 Rust 监听器），编译与单测全绿，
+    /// 但运行时按钮静默失效——只能靠实机发现。这条断言把"两边名字对不上"
+    /// 提前到 `cargo test`。
+    ///
+    /// 维护方式：改 `topbar.js` 的事件名或 `lib.rs` 的 `listen_any` 时，
+    /// 同步改这里的期望值；三者（JS / 监听器 / 本断言）必须同时更新。
+    #[test]
+    fn topbar_script_emits_events_matching_rust_listeners() {
+        let s = build_topbar_script("0.2.0", "http://127.0.0.1:1/");
+
+        // 通道：remote 上下文只能走插件命令
+        assert!(
+            s.contains("plugin:event|emit"),
+            "topbar 必须用 plugin:event|emit（remote 下应用命令被 ACL 拒）"
+        );
+
+        // 四个事件名：必须与 lib.rs 的 listen_any 一一对应
+        for ev in [
+            "topbar-log",
+            "topbar-restart",
+            "topbar-ctrl",
+            "topbar-theme",
+        ] {
+            assert!(
+                s.contains(ev),
+                "topbar.js 缺少事件 {}（Rust 侧 listen_any 会收不到）",
+                ev
+            );
+        }
+
+        // 拖拽：Tauri 2 只认按下元素自身的属性，标题栏与 URL 空白区都要有
+        let drag_count = s.matches("data-tauri-drag-region").count();
+        assert!(
+            drag_count >= 2,
+            "data-tauri-drag-region 至少 2 处（标题栏 + urlWrap），实际 {}",
+            drag_count
+        );
+
+        // 主题观察点：必须是 body 的属性。
+        // 注意：不能用 s.contains("html[style]") 做反向断言——注释里就写着这句，
+        // 会命中注释而非代码。改查真实的观察调用：documentElement（<html>）。
+        assert!(
+            s.contains("data-ds-dark-theme"),
+            "主题观察必须基于 body[data-ds-dark-theme]"
+        );
+        assert!(
+            !s.contains("documentElement"),
+            "不得触碰 documentElement（观察 <html> 会与 dsh 渲染抢时序导致闪退）"
+        );
+    }
+
     // ── resolve_home：隔离 / 非隔离版本的 DSH_HOME 解析 ──
 
     #[test]
