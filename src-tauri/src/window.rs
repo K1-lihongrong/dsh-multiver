@@ -152,6 +152,41 @@ pub(crate) fn set_window_app_user_model_id(
     Ok(())
 }
 
+/// 设置窗口的 DWM 深色模式（影响窗口边框/阴影颜色）。
+///
+/// Win10 20H1+ / Win11 用属性 20（DWMWA_USE_IMMERSIVE_DARK_MODE），
+/// 更早的 Win10 用 19。先试 20，失败（返回错误码）再试 19。
+#[cfg(windows)]
+pub(crate) fn set_dwm_dark(window: &tauri::WebviewWindow, dark: bool) {
+    use windows::Win32::Foundation::HWND;
+    use windows::Win32::Graphics::Dwm::{DwmSetWindowAttribute, DWMWINDOWATTRIBUTE};
+
+    let Ok(raw) = window.hwnd() else { return };
+    let hwnd = HWND(raw.0);
+    let val: i32 = if dark { 1 } else { 0 };
+    unsafe {
+        let attr20 = DWMWINDOWATTRIBUTE(20);
+        let r = DwmSetWindowAttribute(
+            hwnd,
+            attr20,
+            &val as *const _ as *const _,
+            std::mem::size_of::<i32>() as u32,
+        );
+        if r.is_err() {
+            let attr19 = DWMWINDOWATTRIBUTE(19);
+            let _ = DwmSetWindowAttribute(
+                hwnd,
+                attr19,
+                &val as *const _ as *const _,
+                std::mem::size_of::<i32>() as u32,
+            );
+        }
+    }
+}
+
+#[cfg(not(windows))]
+pub(crate) fn set_dwm_dark(_window: &tauri::WebviewWindow, _dark: bool) {}
+
 /// M2m：确保主窗口存在并聚焦。
 ///
 /// 场景：第二实例被单实例插件转交给已运行实例。
