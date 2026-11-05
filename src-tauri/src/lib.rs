@@ -437,6 +437,7 @@ pub fn run() {
             commands::open_in_browser,
             commands::create_shortcut,
             commands::restart_version,
+            commands::set_window_theme,
             commands::set_root,
             commands::open_dir,
             commands::open_url,

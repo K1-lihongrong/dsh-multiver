@@ -152,6 +152,48 @@ pub(crate) fn set_window_app_user_model_id(
     Ok(())
 }
 
+/// 设置窗口标题栏深浅色（Windows 11 immersive dark mode）。
+///
+/// 用 `DwmSetWindowAttribute(DWMWA_USE_IMMERSIVE_DARK_MODE=20)` 让系统绘制的
+/// 标题栏/边框跟随深色主题。Windows 10 1903 之前用属性 19，此处只处理 20
+/// （Win10 1903+ / Win11，本项目最低支持范围）。
+///
+/// 失败不致命：老系统或不支持时静默返回 Err，由调用方决定是否记日志。
+#[cfg(windows)]
+pub(crate) fn set_window_dark_titlebar(
+    window: &tauri::WebviewWindow,
+    dark: bool,
+) -> Result<(), String> {
+    use windows::Win32::Foundation::HWND;
+    use windows::Win32::Graphics::Dwm::{DwmSetWindowAttribute, DWMWA_USE_IMMERSIVE_DARK_MODE};
+
+    let raw = window
+        .hwnd()
+        .map_err(|e| format!("取窗口句柄失败: {}", e))?;
+    let hwnd = HWND(raw.0);
+
+    let value: i32 = if dark { 1 } else { 0 };
+    let bytes = value.to_le_bytes();
+    unsafe {
+        DwmSetWindowAttribute(
+            hwnd,
+            DWMWA_USE_IMMERSIVE_DARK_MODE,
+            bytes.as_ptr() as *const _,
+            std::mem::size_of::<i32>() as u32,
+        )
+        .map_err(|e| format!("DwmSetWindowAttribute 失败: {}", e))?;
+    }
+    Ok(())
+}
+
+#[cfg(not(windows))]
+pub(crate) fn set_window_dark_titlebar(
+    _window: &tauri::WebviewWindow,
+    _dark: bool,
+) -> Result<(), String> {
+    Ok(())
+}
+
 /// M2m：确保主窗口存在并聚焦。
 ///
 /// 场景：第二实例被单实例插件转交给已运行实例。

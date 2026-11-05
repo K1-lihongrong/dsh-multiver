@@ -71,6 +71,29 @@ mod tests {
     }
 
     #[test]
+    fn topbar_script_includes_theme_sync() {
+        // 内嵌 dsh 窗口标题栏跟随主题：注入脚本必须包含观察器与回传调用，
+        // 否则 Rust 侧 set_window_theme 永远收不到事件。
+        let s = build_topbar_script("0.1.0", "http://127.0.0.1:1/");
+        assert!(s.contains("data-ds-theme-source"), "应监听 dsh 主题属性");
+        assert!(s.contains("MutationObserver"), "应用观察器捕获主题变化");
+        assert!(
+            s.contains("set_window_theme"),
+            "应通过 invoke 回传主题到 Rust"
+        );
+    }
+
+    #[test]
+    fn set_window_theme_rejects_unknown_value() {
+        // 只接受 dark / light（system 已由前端解析为实际值）；
+        // 其他值应显式报错，避免拼写错误被静默吞掉。
+        let err = parse_theme_dark("sepia").unwrap_err();
+        assert!(err.contains("sepia"));
+        assert!(parse_theme_dark("dark").unwrap());
+        assert!(!parse_theme_dark("light").unwrap());
+    }
+
+    #[test]
     fn topbar_script_escapes_quote_and_backslash() {
         // 单引号、反斜杠应被转义，防注入 JS 单引号字符串字面量
         let s = build_topbar_script("v'1", "http://x/'y\\z");

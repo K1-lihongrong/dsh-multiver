@@ -39,11 +39,40 @@
 - **向下探边界 6 个全部「无法判定」**：`0.1.5-rc.2`、`0.1.2-alpha.5`、`0.1.1-rc.2`、`0.1.0-rc.8`、`0.1.0-rc.2`、`0.0.1-rc.5` 均命中同一个 dsh 自身缺陷（`user patch-layer watching requires the Cordis HMR service`），与插件无关。
 - **最低已验证版本维持 `0.1.5-rc.3`**：不是插件不支持更早版本，而是 `0.1.5-rc.2` 及以下都因该缺陷无法启动。该缺陷横跨 `0.0.1-rc.5` ~ `0.1.5-rc.2`，在 `0.1.5-rc.3` 修复，向下已到头。
 
+### 安装进度条中途不推进（真因修复）
+
+前次"进度平滑化"只压低了节流阈值，实机验收发现进度条仍长时间不动、再跳格。追查后确认是另外两个独立缺陷，与解析逻辑无关（曾误判为 pnpm 输出带路径前缀）：
+
+- **后端未用 append-only reporter**：pnpm 默认 reporter 只发「开始（added 0）」与「完成（added N, done）」两条 Progress 行，阶段内 fraction 无从推进，进度从 4% 直接跳到 90%。改用 `--reporter=append-only`，实测输出 13 行（含下载/写入中间态），阶段内能真正递进。
+- **前端爬升定时器反复重建**：`startClimb()` 每次进度事件都先 `stopClimb()` 再 `setInterval`，事件密集时定时器永远等不到第一个 200ms tick，插值实际失效。改为已有定时器时直接返回。
+
+**用户可见变化**：安装进度条连续爬升，过程中可见中间百分比，不再从 4% 跳到 90%。
+
+### 内嵌 dsh 窗口标题栏跟随 dsh 主题
+
+内嵌 dsh 窗口使用系统默认标题栏，dsh 切深色主题后标题栏仍是浅色，割裂感明显。
+
+- 注入脚本 `topbar.js` 新增 `MutationObserver`，监听 `<html data-ds-theme-source>` 与 `style`（`color-scheme`）变化，解析实际生效的深浅色后 `invoke('set_window_theme')` 回传。
+- 新增 Tauri 命令 `set_window_theme`，经 `DwmSetWindowAttribute(DWMWA_USE_IMMERSIVE_DARK_MODE)` 设置标题栏深色模式（Windows 10 1903+ / Windows 11；其他平台为空实现）。
+- `system` 模式优先读浏览器已解析的 `color-scheme`，退化到 `prefers-color-scheme`；系统主题变化时经 `matchMedia` change 事件再同步。
+
+**用户可见变化**：在内嵌 dsh 窗口里切换浅色/深色/跟随系统，窗口标题栏即时跟随变化，无需重启窗口。
+
+### 隐藏系统标题栏（自绘顶栏）
+
+管理器主窗口改为无边框（`decorations: false`），顶栏自绘最小化/最大化↔还原/关闭三键，随主题变色；加载页可拖动、右上角可关闭。
+
+- 顶栏 `mousedown` 设 4px 拖动阈值后才调 `startDragging()`，避免吞掉双击最大化。
+- Tauri 2 的窗口操作需显式权限，`capabilities/default.json` 补 7 条 `core:window:allow-*`；此前缺失导致三键点击完全无反应（异常又被 `catch` 静默吞掉），现已改为失败写 `logs/frontend.log`。
+- 任务栏图标（AUMID）不受影响。
+
+**用户可见变化**：主窗口无系统标题栏，顶部为应用自绘三键；最小化、最大化/还原、关闭均可用。
+
 ### 验证
 
-- Rust 单测 **191 passed / 1 ignored**（新增 catalog 3 条）。
+- Rust 单测 **196 passed / 1 ignored**（新增 catalog 3 条、主题同步 2 条）。
 - E2E **59 passed**（新增 `d36-catalog-i18n` 4 条）。
-- `pnpm build` 通过。
+- `cargo clippy` 0 warning；`cargo fmt --check` 通过；`pnpm build` 通过。
 
 ---
 

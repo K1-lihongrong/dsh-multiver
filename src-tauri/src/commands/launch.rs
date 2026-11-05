@@ -373,6 +373,36 @@ pub(crate) async fn open_in_browser(
     })
 }
 
+/// 让内嵌 dsh 窗口的标题栏跟随 dsh 自身的主题（浅色/深色）。
+///
+/// 由注入脚本 topbar.js 的 MutationObserver 调用：监听 dsh 页面
+/// `<html data-ds-theme-source>` 与 `style`（color-scheme）变化，
+/// 解析出实际生效的深浅色后 invoke 本命令。
+///
+/// `theme` 只接受 "dark" / "light"（system 已由前端解析为实际值）。
+/// 找不到窗口或系统不支持时返回 Err，由前端静默忽略（不影响用户操作）。
+/// 把主题字符串解析为「是否深色」。只接受 dark / light
+/// （system 已由 topbar.js 解析为实际值）；其他值显式报错，
+/// 避免拼写错误被静默吞掉。抽成纯函数便于单测。
+pub(crate) fn parse_theme_dark(theme: &str) -> Result<bool, String> {
+    match theme {
+        "dark" => Ok(true),
+        "light" => Ok(false),
+        other => Err(format!("不支持的主题值: {}（只接受 dark / light）", other)),
+    }
+}
+
+#[tauri::command]
+pub(crate) fn set_window_theme(
+    app: tauri::AppHandle,
+    window: tauri::WebviewWindow,
+    theme: String,
+) -> Result<(), String> {
+    let _ = &app;
+    let dark = parse_theme_dark(&theme)?;
+    crate::window::set_window_dark_titlebar(&window, dark)
+}
+
 /// 重启某版本窗口对应的 dsh web 进程：
 /// kill 旧进程 → 用同版本起新进程（端口重分配）→ 窗口导航到新 URL。
 #[tauri::command]
