@@ -3,6 +3,10 @@
 export default {
     "app.title": "DSH 버전 관리자",
     "app.rootDir": "루트 디렉터리",
+    "window.minimize": "최소화",
+    "window.maximize": "최대화",
+    "window.restore": "이전 크기로",
+    "window.close": "닫기",
     "app.toastHint": "클릭하여 전체 내용 보기",
     "app.openLinkFailed": "링크를 열지 못했습니다",
     "root.unwritable": "데이터 루트에 쓸 수 없습니다: {path} ({err}). 설치·제거가 실패하므로 쓰기 가능한 디렉터리로 변경하세요.",

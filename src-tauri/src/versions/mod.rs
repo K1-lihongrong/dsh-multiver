@@ -192,4 +192,47 @@ mod tests {
         assert!(msg.contains("不存在"), "msg={}", msg);
         let _ = std::fs::remove_dir_all(&base);
     }
+
+    #[test]
+    fn progress_parsed_with_path_prefix() {
+        // 实测 pnpm 输出形如：
+        //   .../Temp/compat-x/profiles/web  | Progress: resolved 1, reused 0, downloaded 1, added 1, done
+        // 关键词不在行首，旧实现用 starts_with / strip_prefix 会全部漏匹配，
+        // 导致 total_packages 恒为 None、fraction 恒为 0，进度条只能按阶段起点跳。
+        let mut p = ProgressParser::new();
+        assert!(
+            p.parse(".../profiles/web  | Packages: +445").is_none(),
+            "Packages 行只记总数，不产生事件"
+        );
+        let got = p.parse(
+            ".../profiles/web  | Progress: resolved 1, reused 0, downloaded 1, added 1, done",
+        );
+        let (step, detail, frac) = got.expect("带路径前缀的 Progress 行应能解析");
+        assert_eq!(step, 6);
+        assert!(detail.contains('1'), "detail={}", detail);
+        assert!(frac > 0.0, "总数已知时 fraction 应大于 0，实际 {}", frac);
+    }
+
+    #[test]
+    fn progress_without_prefix_still_works() {
+        let mut p = ProgressParser::new();
+        p.parse("Packages: +10");
+        let (step, _, frac) = p
+            .parse("Progress: resolved 5, reused 0, downloaded 5, added 0")
+            .expect("无路径前缀的行仍应能解析");
+        assert_eq!(step, 5);
+        assert!((frac - 0.5).abs() < 0.01, "frac={}", frac);
+    }
+
+    #[test]
+    fn progress_added_takes_priority_over_downloaded() {
+        let mut p = ProgressParser::new();
+        p.parse("Packages: +10");
+        // added 与 downloaded 同时为正时，应归到「写入文件」（step 6）
+        let (step, detail, _) = p
+            .parse("x | Progress: resolved 10, reused 0, downloaded 10, added 3")
+            .unwrap();
+        assert_eq!(step, 6);
+        assert!(detail.contains('3'));
+    }
 }

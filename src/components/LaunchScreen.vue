@@ -39,6 +39,38 @@ watch(
 );
 onBeforeUnmount(() => { if (glitchTimer) window.clearTimeout(glitchTimer); });
 
+// 零.1 无边框窗口：启动页也能拖动；顶栏被本页覆盖，给个关闭按钮避免「启动卡住时无法关窗」。
+async function closeWindow() {
+  try {
+    const { getCurrentWindow } = await import("@tauri-apps/api/window");
+    await getCurrentWindow().close();
+  } catch (_) {}
+}
+function onSplashMousedown(e) {
+  if (e.button !== 0) return;
+  if (e.target.closest("button, a, input")) return;
+  const sx = e.screenX, sy = e.screenY;
+  let dragging = false;
+  const onMove = (ev) => {
+    if (dragging) return;
+    if (Math.abs(ev.screenX - sx) > 4 || Math.abs(ev.screenY - sy) > 4) {
+      dragging = true;
+      cleanup();
+      import("@tauri-apps/api/window").then(({ getCurrentWindow }) => {
+        // 失败要留痕迹：权限缺失时静默吞错会让「拖不动」无从排查
+        getCurrentWindow().startDragging().catch((e) => console.error("[window] startDragging 失败:", e));
+      }).catch((e) => console.error("[window] 加载 window API 失败:", e));
+    }
+  };
+  const onUp = () => cleanup();
+  const cleanup = () => {
+    window.removeEventListener("mousemove", onMove);
+    window.removeEventListener("mouseup", onUp);
+  };
+  window.addEventListener("mousemove", onMove);
+  window.addEventListener("mouseup", onUp);
+}
+
 // 干扰期间仍显示正常加载页背景，结束后才换故障页。
 const bgSrc = computed(() => {
   if (props.stage === "error" && !glitching.value) return bgError;
@@ -52,7 +84,13 @@ const statusText = computed(() => {
 </script>
 
 <template>
-  <div class="splash" :class="{ dark: isDark(), glitching }">
+  <div class="splash" :class="{ dark: isDark(), glitching }" @mousedown="onSplashMousedown">
+    <button class="splash-close" @click="closeWindow" :title="t('window.close')" :aria-label="t('window.close')">
+      <svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true">
+        <line x1="2" y1="2" x2="10" y2="10" stroke="currentColor" stroke-width="1.5"/>
+        <line x1="10" y1="2" x2="2" y2="10" stroke="currentColor" stroke-width="1.5"/>
+      </svg>
+    </button>
     <div class="splash-bg" aria-hidden="true">
       <img class="splash-bg-img" :src="bgSrc" :class="{ 'bg-enter': stage === 'error' && !glitching }" alt="" />
       <div class="splash-scrim"></div>
@@ -104,6 +142,17 @@ const statusText = computed(() => {
   font-family: Inter, "Noto Sans SC", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
 }
 .splash-bg, .splash-bg-img, .splash-scrim { position: absolute; inset: 0; }
+.splash-close {
+  position: absolute; top: 12px; right: 12px; z-index: 10;
+  width: 32px; height: 32px;
+  border: none; background: rgba(0, 0, 0, 0.35); color: rgba(255, 255, 255, 0.85);
+  border-radius: 6px; cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+  transition: background-color 0.12s ease, color 0.12s ease;
+}
+.splash-close:hover { background: rgba(229, 72, 77, 0.85); color: #fff; }
+.splash-close:active { background: rgba(184, 59, 63, 0.9); }
+.splash-close:focus-visible { outline: 2px solid #5a9bff; outline-offset: 2px; }
 .splash-bg-img { width: 100%; height: 100%; object-fit: cover; object-position: center; }
 .splash-scrim {
   background: linear-gradient(180deg, rgba(9,20,40,0) 0%, rgba(9,20,40,0) 38%, rgba(9,20,40,.46) 100%);

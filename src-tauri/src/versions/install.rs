@@ -86,15 +86,19 @@ impl ProgressParser {
         // 先算出本行的「原始 step 与 detail」，最后统一 clamp。
         let raw: Option<(usize, String, f32)> = 'p: {
             // Packages: +445  → 记下总数（本身不推进阶段，只更新总数）
-            if line.starts_with("Packages:") {
-                if let Some(n) = extract_num(line, "+") {
+            // 注意：pnpm 的输出可能带路径前缀
+            // （.../profiles/web  | Progress: resolved 0, ...），
+            // 故不能要求关键词在行首，必须用 contains / find。
+            if let Some(idx) = line.find("Packages:") {
+                if let Some(n) = extract_num(&line[idx..], "+") {
                     self.total_packages = Some(n);
                 }
                 // 不产生事件，避免与 Progress 行交错导致 step 回退
                 break 'p None;
             }
             // Progress: resolved 234, reused 222, downloaded 5, added 0
-            if let Some(rest) = line.strip_prefix("Progress:") {
+            if let Some(idx) = line.find("Progress:") {
+                let rest = &line[idx + "Progress:".len()..];
                 let resolved = extract_num(rest, "resolved");
                 let downloaded = extract_num(rest, "downloaded");
                 let added = extract_num(rest, "added");

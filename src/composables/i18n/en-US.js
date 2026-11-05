@@ -3,6 +3,10 @@
 export default {
     "app.title": "DSH Version Manager",
     "app.rootDir": "Root",
+    "window.minimize": "Minimize",
+    "window.maximize": "Maximize",
+    "window.restore": "Restore",
+    "window.close": "Close",
     "app.toastHint": "Click to view full content",
     "app.openLinkFailed": "Failed to open link",
     "root.unwritable": "Data root is not writable: {path} ({err}). Install/uninstall will fail; please switch to a writable directory.",

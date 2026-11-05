@@ -137,8 +137,7 @@ pub fn load_local(root: &Path) -> Result<Catalog, String> {
         // 缓存损坏或比内置旧：用内置，下次 check 会重写缓存
     }
 
-    let raw = parse_raw(BUILTIN)
-        .map_err(|e| format!("内置推荐列表解析失败（打包异常）：{}", e))?;
+    let raw = parse_raw(BUILTIN).map_err(|e| format!("内置推荐列表解析失败（打包异常）：{}", e))?;
     Ok(Catalog {
         category_i18n: raw.category_i18n,
         plugins: raw.plugins,
@@ -287,6 +286,7 @@ fn fetch_remote() -> Result<Vec<u8>, String> {
     crate::net::fetch(CATALOG_URL, &chain, crate::net::Shape::Json).map(|got| got.bytes)
 }
 
+#[cfg(test)]
 fn parse_builtin() -> Result<Vec<CatalogPlugin>, String> {
     parse_catalog(BUILTIN).map_err(|e| format!("内置推荐列表解析失败（打包异常）：{}", e))
 }
@@ -304,6 +304,7 @@ fn parse_raw(text: &str) -> Result<RawCatalog, String> {
     Ok(raw)
 }
 
+#[cfg(test)]
 fn parse_catalog(text: &str) -> Result<Vec<CatalogPlugin>, String> {
     Ok(parse_raw(text)?.plugins)
 }
@@ -393,7 +394,10 @@ mod tests {
         let raw = parse_raw(text).unwrap();
         let map = raw.category_i18n.as_ref().unwrap();
         let entry = map.get("版本管理").unwrap();
-        assert_eq!(entry.get("en-US").map(String::as_str), Some("Version management"));
+        assert_eq!(
+            entry.get("en-US").map(String::as_str),
+            Some("Version management")
+        );
         assert_eq!(entry.get("ko-KR").map(String::as_str), Some("버전 관리"));
     }
 
