@@ -9,6 +9,17 @@
 
 ## [未发布]
 
+### 内嵌 dsh 窗口标题栏重做
+
+内嵌 dsh 窗口原本由系统绘制标题栏，与 dsh 页面主题不协调；原 `topbar.js` 仅在页面左上角显示一个小圆点，信息量弱。本次改为自绘整条标题栏。
+
+- 窗口设 `decorations: false`，由 `topbar.js` 自绘：版本号 + URL（可点击选中复制）+ 重启 + 最小化/最大化/关闭。
+- 配色跟随 dsh 页面深浅色（观察 `body[data-ds-dark-theme]`，250ms 防抖），同步设置 DWM 深色模式（属性 20 失败回退 19）。
+- **通道改造**：内嵌窗口是 remote 上下文，Tauri 2 默认拒绝应用自有命令（`Command not allowed by ACL`）。改为统一 emit 事件（`topbar-log` / `topbar-restart` / `topbar-ctrl` / `topbar-theme`），Rust 侧 `listen_any` 接收。顺带修正了旧「重启」按钮一直静默失败的隐患（之前 catch 兜底 `location.reload()`，从未真正重启过进程）。
+- 不修改 `build.rs` 的 `AppManifest::commands()`（白名单模式会连带失效主界面命令）。
+
+**用户可见变化**：内嵌 dsh 窗口只有一层标题栏（不再与系统标题栏叠两层）；标题栏显示完整版本号与 URL，并随 dsh 主题切换深浅色；「重启」按钮真正重启 dsh 进程。
+
 ### 安装进度平滑化
 
 安装 dsh 版本时进度条长时间停在同一百分比后跳格，观感卡顿。原因是后端事件节流阈值过粗（fraction 变化 ≥ 0.01 才推送），而 pnpm 在写入文件阶段输出不均匀，大量硬链接写入时可能几百毫秒无输出，一旦输出就跳多个包；前端进度条也无插值。
