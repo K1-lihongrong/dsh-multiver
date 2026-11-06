@@ -1,0 +1,19 @@
+# Git 作者身份映射
+#
+# 作用：让 `git log` / `git shortlog` / `git blame` 等本地命令把多个作者身份
+# 归并到规范身份，显示更干净。
+#
+# 注意：**GitHub 的 Contributors 页面不读取 .mailmap**。
+# 它统计的是提交对象里的 author / Co-authored-by 原始字节，本文件对网页显示无效。
+# 移除网页上的 traeagent / PyGuy2 需要 GitHub Support 处理或重写历史。
+#
+# 格式：<规范名> <规范邮箱> <别名邮箱>
+
+# 统一到 GitHub noreply 邮箱（贡献统计归属主账号）
+K1-lihongrong <59650049+K1-lihongrong@users.noreply.github.com> <K1-lihongrong@users.noreply.github.com>
+
+# 初始提交用的占位邮箱（GitHub 网页上会映射到无关账号 PyGuy2）
+K1-lihongrong <59650049+K1-lihongrong@users.noreply.github.com> <noreply@example.com>
+
+# AI 工具自动附加的 co-author trailer（非真实人类贡献）
+K1-lihongrong <59650049+K1-lihongrong@users.noreply.github.com> traeagent <traeagent@users.noreply.github.com>
