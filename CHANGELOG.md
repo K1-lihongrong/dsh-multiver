@@ -7,7 +7,7 @@
 
 ---
 
-## [未发布]
+## [0.3.6] - 2026-11-06
 
 ### 内嵌 dsh 窗口标题栏重做
 
@@ -71,9 +71,10 @@
 
 ### 验证
 
-- Rust 单测 **195 passed / 1 ignored**（新增 catalog 3 条、切行流式回归 1 条）。
+- Rust 单测 **198 passed / 1 ignored**（新增 catalog 3 条、切行流式回归 1 条、topbar 前后端契约断言 1 条）。
 - E2E **59 passed**（新增 `d36-catalog-i18n` 4 条）。
 - `cargo clippy` 0 warning；`cargo fmt --check` 通过；`pnpm build` 通过。
+- 内嵌 dsh 窗口实机验证：浅色/深色渲染、重启（窗口原地刷新）、拖拽、三键、关闭（单窗口退出 + 多窗口主界面存活）全部通过。
 
 ---
 
