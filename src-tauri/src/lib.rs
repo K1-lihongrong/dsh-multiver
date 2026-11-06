@@ -490,6 +490,99 @@ pub fn run() {
             }
             // 注册各 AUMID 的任务栏图标（IconUri）。进程级 AUMID 已在 run() 开头设过。
             window::register_aumid_icons();
+
+            // ── topbar 事件通道 ────────────────────────────────────────
+            // 背景：内嵌 dsh 窗口是 remote 上下文（http://127.0.0.1:*），
+            // 应用自有命令（log_frontend / restart_version）在 remote 下被 ACL 默认拒绝，
+            // 而插件命令（plugin:event|emit，由 core:default 授权）可用。
+            // 故 topbar 的通知统一走事件，由这里在 Rust 侧接收并落地。
+            {
+                use tauri::Listener;
+                let app_for_log = app.handle().clone();
+                app.listen_any("topbar-log", move |event| {
+                    let payload = event.payload().to_string();
+                    if let Ok(v) = serde_json::from_str::<serde_json::Value>(&payload) {
+                        if let Some(msg) = v.get("msg").and_then(|m| m.as_str()) {
+                            let mdir = manager_dir(&app_for_log);
+                            let root = Config::load(&mdir).resolve_root(&mdir);
+                            logging::write_line(
+                                &root.join("logs"),
+                                "frontend.log",
+                                &format!("[topbar] {}", msg),
+                            );
+                        }
+                    }
+                });
+
+                let app_for_restart = app.handle().clone();
+                let procs_for_restart = procs_setup.clone();
+                app.listen_any("topbar-restart", move |event| {
+                    let payload = event.payload().to_string();
+                    let app2 = app_for_restart.clone();
+                    let procs2 = procs_for_restart.clone();
+                    tauri::async_runtime::spawn(async move {
+                        let Ok(v) = serde_json::from_str::<serde_json::Value>(&payload) else { return };
+                        let Some(ver) = v.get("version").and_then(|x| x.as_str()) else { return };
+                        let ver = ver.to_string();
+                        // 复用 restart_version 的实现：kill 旧进程 → 起新进程 → 窗口 navigate。
+                        // 不销毁窗口（否则 --launch-version 模式下会触发"所有窗口已关闭"而退出）。
+                        if let Err(e) = commands::restart_version_impl(&app2, &procs2, &ver).await {
+                            let mdir = manager_dir(&app2);
+                            let root = Config::load(&mdir).resolve_root(&mdir);
+                            logging::log_app_error(&root, "topbar-restart", &format!("{}: {}", ver, e));
+                        }
+                    });
+                });
+
+                // 窗口控制（最小化/最大化/关闭）：由 topbar 按钮 emit
+                let app_for_ctrl = app.handle().clone();
+                let procs_for_ctrl = procs_setup.clone();
+                app.listen_any("topbar-ctrl", move |event| {
+                    use tauri::Manager;
+                    let payload = event.payload().to_string();
+                    let Ok(v) = serde_json::from_str::<serde_json::Value>(&payload) else { return };
+                    let action = v.get("action").and_then(|a| a.as_str()).unwrap_or("");
+                    let version = v.get("version").and_then(|a| a.as_str()).unwrap_or("");
+                    let label = {
+                        let map = lock_procs(&procs_for_ctrl);
+                        map.get(version).map(|(l, _, _, _)| l.clone())
+                    };
+                    let Some(label) = label else { return };
+                    let Some(win) = app_for_ctrl.get_webview_window(&label) else { return };
+                    match action {
+                        "minimize" => { let _ = win.minimize(); }
+                        "toggle-maximize" => {
+                            if win.is_maximized().unwrap_or(false) {
+                                let _ = win.unmaximize();
+                            } else {
+                                let _ = win.maximize();
+                            }
+                        }
+                        "close" => { let _ = win.close(); }
+                        _ => {}
+                    }
+                });
+
+                // 深浅色跟随：topbar 监听 body[data-ds-dark-theme] 后 emit
+                let app_for_theme = app.handle().clone();
+                let procs_for_theme = procs_setup.clone();
+                app.listen_any("topbar-theme", move |event| {
+                    use tauri::Manager;
+                    let payload = event.payload().to_string();
+                    let Ok(v) = serde_json::from_str::<serde_json::Value>(&payload) else { return };
+                    let dark = v.get("dark").and_then(|d| d.as_bool()).unwrap_or(false);
+                    let version = v.get("version").and_then(|a| a.as_str()).unwrap_or("");
+                    let label = {
+                        let map = lock_procs(&procs_for_theme);
+                        map.get(version).map(|(l, _, _, _)| l.clone())
+                    };
+                    let Some(label) = label else { return };
+                    if let Some(win) = app_for_theme.get_webview_window(&label) {
+                        window::set_dwm_dark(&win, dark);
+                    }
+                });
+            }
+            // ──────────────────────────────────────────────────────────
             // 主窗口（管理器）显式使用管理器自己的图标（exe 内嵌图标 = bundle.icon 的 icon.ico），
             // 避免被任务栏缓存或其它窗口/快捷方式图标影响而显示错误图标。
             #[cfg(windows)]

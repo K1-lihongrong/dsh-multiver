@@ -53,11 +53,42 @@ const STAGE_START = [0, 1, 2, 4, 10, 35, 90, 97];
 const STAGE_WEIGHT = [1, 1, 2, 6, 25, 55, 7, 3];
 
 /// 进度百分比（0-100），按加权阶段推进 + 阶段内 fraction 细分。
-function progressPct() {
+///
+/// 两次事件之间用 displayedFraction 线性爬升：pnpm 在写入文件阶段输出不均匀，
+/// 直接跟随 fraction 会让进度条长时间静止再跳一格。爬升只追不改——到达目标后停下，
+/// 下一事件把目标推高再继续追，因此不会越过真实进度。
+function progressTarget() {
   const i = installStep.value - 1;
   if (i < 0 || i >= STAGE_START.length) return 0;
   const frac = Math.min(1, Math.max(0, installFraction.value));
-  return Math.round(STAGE_START[i] + STAGE_WEIGHT[i] * frac);
+  return STAGE_START[i] + STAGE_WEIGHT[i] * frac;
+}
+
+const displayedPct = ref(0);
+let climbTimer = null;
+
+function stopClimb() {
+  if (climbTimer) { clearInterval(climbTimer); climbTimer = null; }
+}
+
+function startClimb() {
+  // 已有定时器时不重建：事件密集时反复 stop+start 会让定时器永远等不到
+  // 第一个 200ms tick，爬升实际失效。
+  if (climbTimer) return;
+  climbTimer = setInterval(() => {
+    const target = progressTarget();
+    if (displayedPct.value >= target - 0.05) {
+      displayedPct.value = target;
+      stopClimb();
+      return;
+    }
+    // 每 200ms 走剩余差距的 12%，慢速逼近
+    displayedPct.value += (target - displayedPct.value) * 0.12;
+  }, 200);
+}
+
+function progressPct() {
+  return Math.round(displayedPct.value);
 }
 
 /// 可用版本：按搜索词过滤 + 按排序方向排列。
@@ -196,11 +227,15 @@ onMounted(async () => {
     installTotal.value = p.total || 0;
     installDetail.value = p.detail || "";
     installFraction.value = p.fraction || 0;
+    // 阶段回退时（step 变小）直接把显示值拉到目标，不做反向爬升
+    if (progressTarget() < displayedPct.value) displayedPct.value = progressTarget();
+    startClimb();
   });
 });
 
 onUnmounted(() => {
   if (unlistenProgress) unlistenProgress();
+  stopClimb();
 });
 </script>
 
@@ -351,7 +386,7 @@ pnpm install &amp;&amp; pnpm build</pre>
 .prog-detail { font-size: 12px; color: var(--text-3); }
 .prog-count { font-size: 12px; color: var(--text-muted); margin-left: auto; font-variant-numeric: tabular-nums; }
 .prog-bar { height: 6px; background: var(--accent-weak-3); border-radius: 3px; overflow: hidden; }
-.prog-fill { height: 100%; background: var(--accent); border-radius: 3px; transition: width .3s ease; }
+.prog-fill { height: 100%; background: var(--accent); border-radius: 3px; transition: width .2s ease-out; }
 .spinner {
   width: 15px; height: 15px; flex-shrink: 0;
   border: 2px solid var(--accent-border-2); border-top-color: var(--accent);

@@ -3,6 +3,10 @@
 export default {
     "app.title": "DSH バージョンマネージャー",
     "app.rootDir": "ルート",
+    "window.minimize": "最小化",
+    "window.maximize": "最大化",
+    "window.restore": "元に戻す",
+    "window.close": "閉じる",
     "app.toastHint": "クリックで全文を表示",
     "app.openLinkFailed": "リンクを開けませんでした",
     "root.unwritable": "データルートに書き込めません：{path}（{err}）。インストール・アンインストールが失敗します。書き込み可能なディレクトリに変更してください。",

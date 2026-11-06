@@ -108,6 +108,9 @@ pub(crate) async fn launch_window(
         // 先隐藏：任务栏项在窗口**显示时**按 AUMID 建图标，
         // 必须等设好窗口级 AUMID / 图标（下面）后再 show()。
         .visible(false)
+        // 自定义标题栏：由 topbar.js 在页面内绘制（版本号/URL/窗口控制），
+        // 去掉系统标题栏以免出现双标题栏。
+        .decorations(false)
         .build();
     let window = match built {
         Ok(w) => w,
@@ -381,20 +384,34 @@ pub(crate) async fn restart_version(
     procs: tauri::State<'_, ProcMap>,
     version: String,
 ) -> Result<(), String> {
+    restart_version_impl(&app, procs.inner(), &version).await
+}
+
+/// restart_version 的实现体：接受裸 &ProcMap 而非 tauri::State，
+/// 以便事件监听器（topbar-restart）在非命令上下文里复用同一份逻辑。
+///
+/// 关键：**不销毁窗口**，只 kill 旧进程 → 起新进程 → window.navigate(新 URL)。
+/// 若销毁后重建，在 --launch-version 模式（主窗口已 close）下会因
+/// "所有窗口已关闭" 触发 Tauri 退出事件循环——表现为点「重启」程序直接关闭。
+pub(crate) async fn restart_version_impl(
+    app: &tauri::AppHandle,
+    procs: &ProcMap,
+    version: &str,
+) -> Result<(), String> {
     use tauri::Manager;
 
-    let mdir = manager_dir(&app);
+    let mdir = manager_dir(app);
     let cfg = Config::load(&mdir);
     let dirs = Dirs::new(cfg.resolve_root(&mdir));
-    let vdir = dirs.versions.join(&version);
+    let vdir = dirs.versions.join(version);
     if !vdir.join("node_modules").exists() {
         return Err(format!("版本 {} 未安装", version));
     }
-    let home = crate::paths::resolve_home(&cfg, &dirs, &version);
+    let home = crate::paths::resolve_home(&cfg, &dirs, version);
 
     // 找到该版本当前的窗口（label 带代次，从 map 里取）
-    let (label, _old_gen, mut old_child, _old_job) = lock_procs(procs.inner())
-        .remove(&version)
+    let (label, _old_gen, mut old_child, _old_job) = lock_procs(procs)
+        .remove(version)
         .ok_or_else(|| format!("版本 {} 的窗口不存在", version))?;
     let window = app
         .get_webview_window(&label)
@@ -433,7 +450,7 @@ pub(crate) async fn restart_version(
 
     // 记录新进程（同一 label，代次更新）
     let generation = NEXT_GEN.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    lock_procs(procs.inner()).insert(version.clone(), (label.clone(), generation, child, job));
+    lock_procs(procs).insert(version.to_string(), (label.clone(), generation, child, job));
 
     window
         .navigate(url.parse().map_err(|e| format!("URL 解析失败: {}", e))?)

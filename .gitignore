@@ -36,6 +36,9 @@ Thumbs.db
 # AI 助手项目说明（本地辅助文件）
 .cuckoo/
 
+# 开发期临时产物（日志/调试脚本/截图，一次性，规则见 .cuckoo/rules/00-协作约定 §9）
+.tmp/
+
 # 临时脚本 / 截图（开发过程产物，不进仓库）
 .ci-poll*.ps1
 .ci-poll*.log

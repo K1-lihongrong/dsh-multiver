@@ -3,6 +3,10 @@
 export default {
     "app.title": "DSH 版本管理器",
     "app.rootDir": "根目录",
+    "window.minimize": "最小化",
+    "window.maximize": "最大化",
+    "window.restore": "还原",
+    "window.close": "关闭",
     "app.toastHint": "点击查看完整内容",
     "app.openLinkFailed": "打开链接失败",
     "root.unwritable": "数据根不可写：{path}（{err}）。安装、卸载等功能会失败，请改到可写目录。",

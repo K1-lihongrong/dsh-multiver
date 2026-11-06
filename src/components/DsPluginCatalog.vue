@@ -69,16 +69,32 @@ function activate() {
 /// 当前选中的分类标签。"__all__" 表示「全部」。
 const activeCatalogCat = ref("__all__");
 
+/// 插件描述：按当前语言取 descriptionI18n，缺项回退到 description（中文原文）。
+/// 语言跟随 langMode；"system" 时用浏览器语言判定。
+const currentLang = computed(() => {
+  const mode = langMode.value;
+  if (mode && mode !== "system") return mode;
+  const l = (navigator.language || "zh-CN").toLowerCase();
+  if (l.startsWith("zh")) return l.includes("tw") || l.includes("hk") || l.includes("mo") ? "zh-TW" : "zh-CN";
+  if (l.startsWith("ja")) return "ja-JP";
+  if (l.startsWith("ko")) return "ko-KR";
+  return "en-US";
+});
+
 /// 分类列表（按首次出现顺序去重），首项是「全部」。
+///
+/// key 保持中文原值不变——catalogItems 用它做相等匹配，改 key 会破坏筛选。
+/// label 按当前语言取 categoryI18n，缺项回退中文原值。
 const catalogCategories = computed(() => {
   const list = catalog.value?.plugins || [];
+  const i18n = catalog.value?.categoryI18n || {};
   const seen = [];
   for (const p of list) {
     const c = (p.category || "").trim();
     if (c && !seen.includes(c)) seen.push(c);
   }
   return [{ key: "__all__", label: t("dsplugins.catalogAll") }].concat(
-    seen.map((c) => ({ key: c, label: c })),
+    seen.map((c) => ({ key: c, label: i18n[c]?.[currentLang.value] || c })),
   );
 });
 
@@ -184,17 +200,6 @@ async function openExternal(url) {
     notify(String(e));
   }
 }
-
-/// 插件描述：按当前语言取 descriptionI18n，缺项回退到 description（中文原文）。
-/// 语言跟随 langMode；"system" 时用浏览器语言判定。
-const currentLang = computed(() => {
-  const mode = langMode.value;
-  if (mode && mode !== "system") return mode;
-  const l = (navigator.language || "zh-CN").toLowerCase();
-  if (l.startsWith("zh")) return l.includes("tw") || l.includes("hk") || l.includes("mo") ? "zh-TW" : "zh-CN";
-  if (l.startsWith("ja")) return "ja-JP";
-  return "en-US";
-});
 
 function descOf(p) {
   return p.descriptionI18n?.[currentLang.value] || p.description || "";

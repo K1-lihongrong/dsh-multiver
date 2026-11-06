@@ -7,7 +7,80 @@
 
 ---
 
-## [未发布]
+## [0.3.6] - 2026-11-06
+
+### 内嵌 dsh 窗口标题栏重做
+
+内嵌 dsh 窗口原本由系统绘制标题栏，与 dsh 页面主题不协调；原 `topbar.js` 仅在页面左上角显示一个小圆点，信息量弱。本次改为自绘整条标题栏。
+
+- 窗口设 `decorations: false`，由 `topbar.js` 自绘：版本号 + URL（可点击选中复制）+ 重启 + 最小化/最大化/关闭。
+- 配色跟随 dsh 页面深浅色（观察 `body[data-ds-dark-theme]`，250ms 防抖），同步设置 DWM 深色模式（属性 20 失败回退 19）。
+- **通道改造**：内嵌窗口是 remote 上下文，Tauri 2 默认拒绝应用自有命令（`Command not allowed by ACL`）。改为统一 emit 事件（`topbar-log` / `topbar-restart` / `topbar-ctrl` / `topbar-theme`），Rust 侧 `listen_any` 接收。顺带修正了旧「重启」按钮一直静默失败的隐患（之前 catch 兜底 `location.reload()`，从未真正重启过进程）。
+- 不修改 `build.rs` 的 `AppManifest::commands()`（白名单模式会连带失效主界面命令）。
+
+**用户可见变化**：内嵌 dsh 窗口只有一层标题栏（不再与系统标题栏叠两层）；标题栏显示完整版本号与 URL，并随 dsh 主题切换深浅色；「重启」按钮真正重启 dsh 进程。
+
+### 安装进度平滑化
+
+安装 dsh 版本时进度条长时间停在同一百分比后跳格，观感卡顿。原因是后端事件节流阈值过粗（fraction 变化 ≥ 0.01 才推送），而 pnpm 在写入文件阶段输出不均匀，大量硬链接写入时可能几百毫秒无输出，一旦输出就跳多个包；前端进度条也无插值。
+
+- 后端 `install.rs` 节流阈值 `0.01` → `0.003`，事件更密。
+- 前端 `RemoteList.vue` 在两次事件之间按 200ms 步长线性插值爬升，只追不改——到达目标即停，下一事件把目标推高再继续，不越过真实进度。
+- 进度条过渡改为 `.2s ease-out`，与爬升步长对齐。
+- 阶段权重表（`STAGE_START` / `STAGE_WEIGHT`）未动，整体节奏不变。
+
+**用户可见变化**：安装进度条推进更连续，不再长时间停在同一百分比后跳格。
+
+### 推荐页分类标签多语言
+
+切到韩语（或英、日、繁中）后，插件推荐页的分类标签仍显示中文。
+
+- `docs/plugins.json` 新增 `categoryI18n`（8 个分类 × 4 语言），9 个插件补 `ko-KR` 描述，`updatedAt` 更新为 2026-11-04。
+- `catalog.rs` 的 `RawCatalog` 与 `Catalog` 新增 `category_i18n`，透传给前端；旧 catalog 无该字段时 `serde(default)` 为 `None`，行为与现在一致。
+- `DsPluginCatalog.vue` 分类 label 按当前语言取 `categoryI18n`，缺项回退中文；**key 保持中文原值不变**（`catalogItems` 用它做相等匹配，改 key 会破坏筛选）。
+- `currentLang` 补 `ko-KR` 分支并上移到 `catalogCategories` 之前，消除 TDZ 隐患。
+
+**用户可见变化**：韩语 / 英语 / 日语 / 繁中界面下，插件推荐页的分类标签跟随界面语言显示。
+
+### dsh 版本兼容矩阵补测（GAP-018 闭环）
+
+补测 10 个 dsh 版本，`verifiedDshVersions` 从 5 个扩到 9 个。
+
+- **向上补测 4 个全部完全支持**：`0.2.1-rc.4`、`0.2.1-rc.5`、`0.2.2-alpha.2`、`0.2.2-alpha.3`。
+- **向下探边界 6 个全部「无法判定」**：`0.1.5-rc.2`、`0.1.2-alpha.5`、`0.1.1-rc.2`、`0.1.0-rc.8`、`0.1.0-rc.2`、`0.0.1-rc.5` 均命中同一个 dsh 自身缺陷（`user patch-layer watching requires the Cordis HMR service`），与插件无关。
+- **最低已验证版本维持 `0.1.5-rc.3`**：不是插件不支持更早版本，而是 `0.1.5-rc.2` 及以下都因该缺陷无法启动。该缺陷横跨 `0.0.1-rc.5` ~ `0.1.5-rc.2`，在 `0.1.5-rc.3` 修复，向下已到头。
+
+### 安装进度条中途不推进（真因修复）
+
+前次"进度平滑化"只压低了节流阈值，实机验收发现进度条仍长时间不动、再跳格。追查后确认是另外两个独立缺陷，与解析逻辑无关（曾误判为 pnpm 输出带路径前缀）：
+
+- **后端未用 append-only reporter**：pnpm 默认 reporter 只发「开始（added 0）」与「完成（added N, done）」两条 Progress 行，阶段内 fraction 无从推进，进度从 4% 直接跳到 90%。改用 `--reporter=append-only`，实测输出 13 行（含下载/写入中间态），阶段内能真正递进。
+- **前端爬升定时器反复重建**：`startClimb()` 每次进度事件都先 `stopClimb()` 再 `setInterval`，事件密集时定时器永远等不到第一个 200ms tick，插值实际失效。改为已有定时器时直接返回。
+
+**用户可见变化**：安装进度条连续爬升，过程中可见中间百分比，不再从 4% 跳到 90%。
+
+### 隐藏系统标题栏（自绘顶栏）
+
+管理器主窗口改为无边框（`decorations: false`），顶栏自绘最小化/最大化↔还原/关闭三键，随主题变色；加载页可拖动、右上角可关闭。
+
+- 顶栏 `mousedown` 设 4px 拖动阈值后才调 `startDragging()`，避免吞掉双击最大化。
+- Tauri 2 的窗口操作需显式权限，`capabilities/default.json` 补 7 条 `core:window:allow-*`；此前缺失导致三键点击完全无反应（异常又被 `catch` 静默吞掉），现已改为失败写 `logs/frontend.log`。
+- 任务栏图标（AUMID）不受影响。
+
+**用户可见变化**：主窗口无系统标题栏，顶部为应用自绘三键；最小化、最大化/还原、关闭均可用。
+
+### 验证
+
+- Rust 单测 **198 passed / 1 ignored**（新增 catalog 3 条、切行流式回归 1 条、topbar 前后端契约断言 1 条）。
+- E2E **59 passed**（新增 `d36-catalog-i18n` 4 条）。
+- `cargo clippy` 0 warning；`cargo fmt --check` 通过；`pnpm build` 通过。
+- 内嵌 dsh 窗口实机验证：浅色/深色渲染、重启（窗口原地刷新）、拖拽、三键、关闭（单窗口退出 + 多窗口主界面存活）全部通过。
+
+---
+
+---
+
+## [0.3.5] - 2026-11-04
 
 ### 韩语词条包（ko-KR）
 
@@ -19,22 +92,22 @@
 
 **用户可见变化**：界面语言多一个「한국어」选项，韩语系统用户首次启动自动使用韩语。
 
-### 手册配图改为 GIF（12 张）
+### 手册配图改为动态 WebP
 
-使用手册的 12 张插图原本是 v0.2.8 时拍的静态截图，跨了 9 个版本未更新，界面已明显不符（缺插件按钮、缺启动加载页、按钮动效未体现）。改为 Playwright 录屏生成的 GIF，同时解决"静态图看不到交互反馈"的问题。
+使用手册的插图原本是 v0.2.8 时拍的静态截图，跨了 9 个版本未更新，界面已明显不符（缺插件按钮、缺启动加载页、按钮动效未体现）。改为 Playwright 录屏转码的动态 WebP（当前 16 张），同时解决"静态图看不到交互反馈"的问题。
 
 - **录屏管线**：新增 `playwright.record.config.js`（1280×800、workers=1、video on）与 `e2e/record/_rec.js`（假光标、平滑移动、按元素点击、就绪等待）。Playwright 的 `recordVideo` 不录系统鼠标指针，观众看不到点了哪里，故注入一个跟随 `page.mouse` 的 div。
-- **12 个录屏 spec**：`e2e/record/01-main.spec.js` ~ `12-paths.spec.js`，复用 `e2e/helpers.js` 的 `mockTauri`。全部在纯前端（`vite preview`）下跑，不需要 Tauri 后端。
+- **录屏 spec**：`e2e/record/` 下的场景脚本（01 主界面 ~ 12 路径设置，后续补入 13~16 插件与外观），复用 `e2e/helpers.js` 的 `mockTauri`。全部在纯前端（`vite preview`）下跑，不需要 Tauri 后端。
 - **补事件通道**：`helpers.js` 原先只 mock 了 `invoke`，没有 mock 事件。`listen()` 走 `invoke('plugin:event|listen')`，故补上登记表并暴露 `window.__mockEmit(event, payload)`，供安装进度图推送 `install-progress` 事件。
 - **补默认假数据**：`list_remote`（13 个版本号）、`scan_usage` / `scan_version_size`（占用数字）。
-- **转码脚本**：`e2e/record/build-gifs.mjs`，`-ss 0.8` 裁掉启动白屏与启动页，`fps=10`，宽度 960，输出到 `docs/screenshots/manual/`。
+- **转码脚本**：`e2e/record/` 下的转码脚本，`-ss 0.8` 裁掉启动白屏与启动页，宽度 960，输出到 `docs/screenshots/manual/`。后续统一转 WebP（GIF 体积大且色深受限）。
 - **顶栏圆点（10）**：`topbar.js` 是注入到内嵌窗口的纯 DOM 脚本，不依赖 dsh 后端。直接注入到空白页并模拟悬停/点击，录出 dot → pill → 面板三态，无需实机录屏。
-- **删除 12 张旧图**（11 个 `.jpg` + 1 个 `.png`），手册引用同步改为 `.gif`。
-- **新增 `docs/screenshots/manual/README.md`**：说明为什么用 GIF、如何重新生成、两个坑（ffmpeg 9.0 的 `palettegen` 对单帧序列统计异常会输出全白；Playwright 自带的 ffmpeg 是极简构建，没有 GIF 编码器）。
+- **删除 12 张旧图**（11 个 `.jpg` + 1 个 `.png`），手册引用同步改为动态图。
+- **新增 `docs/screenshots/manual/README.md`**：说明重新生成的步骤与已知坑。
 
-**验证**：12 个录屏 spec 全通过（1.4 分钟）；11 张 GIF 批量转码成功，体积 100~503 KB；抽帧核对 01/02/05/06/07/08/10 内容与预期一致；07/08 首版因等待时机过早未弹出对话框，改为等 `.modal-mask .modal` 可见后重录通过。
+**验证**：录屏 spec 全通过；动态图转码成功，体积 100~503 KB；抽帧核对 01/02/05/06/07/08/10 内容与预期一致；07/08 首版因等待时机过早未弹出对话框，改为等 `.modal-mask .modal` 可见后重录通过。
 
-**用户可见变化**：使用手册的 12 张插图从静态截图换成动态 GIF，可看到悬停、点击、进度推进等交互反馈。
+**用户可见变化**：使用手册的插图从静态截图换成动态图，可看到悬停、点击、进度推进等交互反馈。
 
 ### 文档与规划
 
@@ -43,10 +116,6 @@
 - **`docs/技术债.md`**：D7/D8 实测数据更新至 v0.3.4 基线。
 - **`README.md` / `docs/使用手册.md`**：修正过期描述，补插件入口与 Linux 验收范围说明。
 - **`docs/开发缺口.md`**：新增 GAP-019（手册动态配图未做界面语种适配）。
-
----
-
-## [0.3.5] - 2026-11-04
 
 ### 按钮交互动效全站统一（技术债 D22）
 

@@ -2,6 +2,7 @@
 import { ref, computed, onMounted, onUnmounted } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import EnvCheck from "./components/EnvCheck.vue";
 import { useToast } from "./composables/useToast.js";
 import { t } from "./composables/useI18n.js";
@@ -31,6 +32,62 @@ const rootWritableError = computed(() => state.value?.root_writable_error || "")
 function goToRootSettings() {
   const el = document.querySelector("#path-settings");
   if (el) el.scrollIntoView({ behavior: "smooth", block: "center" });
+}
+
+// ── 零.1 无边框窗口控制 ──
+// decorations:false 后系统标题栏消失，需自绘最小化 / 最大化 / 关闭，
+// 并自行处理拖动（带 4px 阈值，让双击仍然可用）。
+const isMaximized = ref(false);
+let appWin = null;
+let appWinBroken = false;
+let unlistenWindowResize = null;
+
+function getAppWin() {
+  if (appWinBroken) return null;
+  if (appWin) return appWin;
+  try { appWin = getCurrentWindow(); } catch (_) { appWinBroken = true; return null; }
+  return appWin;
+}
+/// 窗口操作失败必须留下痕迹：权限缺失时静默吞错会让「按钮完全没反应」
+/// 变成无从排查的现象（v0.3.6 踩过：capabilities 少声明 core:window:* 权限）。
+function reportWindowError(action, e) {
+  const msg = "窗口操作失败（" + action + "）: " + (e?.message || e);
+  try { invoke("log_frontend", { msg: "[window] " + msg }).catch(() => {}); } catch (_) {}
+  console.error(msg);
+}
+async function minimizeWindow() {
+  try { await getAppWin()?.minimize(); } catch (e) { reportWindowError("minimize", e); }
+}
+async function toggleMaxWindow() {
+  try { await getAppWin()?.toggleMaximize(); } catch (e) { reportWindowError("toggleMaximize", e); }
+}
+async function closeWindow() {
+  try { await getAppWin()?.close(); } catch (e) { reportWindowError("close", e); }
+}
+
+/// 顶栏拖动：按下后位移超过 4px 才发起系统拖动，未超阈值则放行双击 / 单击。
+function onTopbarMousedown(e) {
+  if (e.button !== 0) return;
+  if (e.target.closest(".window-controls, button, a, input, textarea, select")) return;
+  const win = getAppWin();
+  if (!win) return;
+  const sx = e.screenX, sy = e.screenY;
+  let dragging = false;
+  const onMove = (ev) => {
+    if (dragging) return;
+    if (Math.abs(ev.screenX - sx) > 4 || Math.abs(ev.screenY - sy) > 4) {
+      dragging = true;
+      cleanup();
+      win.startDragging().catch((e) => reportWindowError("startDragging", e));
+    }
+  };
+  const onUp = () => cleanup();
+  const cleanup = () => {
+    window.removeEventListener("mousemove", onMove);
+    window.removeEventListener("mouseup", onUp);
+  };
+  window.addEventListener("mousemove", onMove);
+  window.addEventListener("mouseup", onUp);
 }
 
 // ── v0.2.14 启动态（快捷方式启动 / 运行按钮共用）──
@@ -221,6 +278,15 @@ onMounted(async () => {
   window.addEventListener("focus", scheduleFocusRefresh);
   document.addEventListener("visibilitychange", onAppVisibility);
 
+  // 零.1：无边框窗口——初始化最大化状态并跟随窗口尺寸变化
+  const win = getAppWin();
+  if (win) {
+    win.isMaximized().then((v) => { isMaximized.value = !!v; }).catch(() => {});
+    win.onResized(() => {
+      win.isMaximized().then((v) => { isMaximized.value = !!v; }).catch(() => {});
+    }).then((u) => { unlistenWindowResize = u; }).catch(() => {});
+  }
+
   // 启动模式：用户看的是加载页，不需要版本列表——跳过 refresh（省 ~1s）。
   // 非启动模式：正常加载主界面数据。
   if (!props.launchMode) {
@@ -283,6 +349,7 @@ onUnmounted(() => {
   if (unlistenModeStart) unlistenModeStart();
   if (unlistenProgress) unlistenProgress();
   if (unlistenOpenSettings) unlistenOpenSettings();
+  if (unlistenWindowResize) unlistenWindowResize();
   // M3b：移除焦点/可见性监听并清掉未触发的去抖 timer
   window.removeEventListener("focus", scheduleFocusRefresh);
   document.removeEventListener("visibilitychange", onAppVisibility);
@@ -302,15 +369,35 @@ onUnmounted(() => {
     @view-logs="openLaunchLogs"
   />
 
-  <header class="topbar">
+  <header class="topbar" @mousedown="onTopbarMousedown" @dblclick="toggleMaxWindow">
     <div class="brand">
       <span class="dot"></span>
       <h1>{{ t("app.title") }}</h1>
       <span class="app-version" v-if="state && state.version">v{{ state.version }}</span>
     </div>
-    <div class="root-line" v-if="state">
-      <span class="label">{{ t("app.rootDir") }}</span>
-      <code>{{ state.root_dir }}</code>
+    <div class="topbar-right">
+      <div class="root-line" v-if="state">
+        <span class="label">{{ t("app.rootDir") }}</span>
+        <code>{{ state.root_dir }}</code>
+      </div>
+      <div class="window-controls">
+        <button class="wc-btn" @click="minimizeWindow" :title="t('window.minimize')" :aria-label="t('window.minimize')">
+          <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true"><rect x="1" y="4.5" width="8" height="1" fill="currentColor"/></svg>
+        </button>
+        <button class="wc-btn" @click="toggleMaxWindow" :title="isMaximized ? t('window.restore') : t('window.maximize')" :aria-label="isMaximized ? t('window.restore') : t('window.maximize')">
+          <svg v-if="!isMaximized" width="10" height="10" viewBox="0 0 10 10" aria-hidden="true"><rect x="1.5" y="1.5" width="7" height="7" fill="none" stroke="currentColor" stroke-width="1"/></svg>
+          <svg v-else width="10" height="10" viewBox="0 0 10 10" aria-hidden="true">
+            <rect x="1" y="3" width="6" height="6" fill="none" stroke="currentColor" stroke-width="1"/>
+            <rect x="3" y="1" width="6" height="6" fill="none" stroke="currentColor" stroke-width="1"/>
+          </svg>
+        </button>
+        <button class="wc-btn wc-close" @click="closeWindow" :title="t('window.close')" :aria-label="t('window.close')">
+          <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true">
+            <line x1="1.5" y1="1.5" x2="8.5" y2="8.5" stroke="currentColor" stroke-width="1.2"/>
+            <line x1="8.5" y1="1.5" x2="1.5" y2="8.5" stroke="currentColor" stroke-width="1.2"/>
+          </svg>
+        </button>
+      </div>
     </div>
   </header>
 
@@ -412,7 +499,7 @@ onUnmounted(() => {
 .app { height: 100%; display: flex; flex-direction: column; position: relative; }
 
 .topbar {
-  padding: 16px 22px;
+  padding: 12px 22px;
   background: var(--panel-bg);
   border-bottom: 1px solid var(--panel-border);
   display: flex;
@@ -420,7 +507,43 @@ onUnmounted(() => {
   justify-content: space-between;
   gap: 16px;
   flex-wrap: wrap;
+  -webkit-user-select: none;
+  user-select: none;
+  cursor: default;
 }
+.topbar-right {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+.window-controls {
+  display: flex;
+  gap: 2px;
+  align-items: center;
+}
+.wc-btn {
+  width: 32px;
+  height: 26px;
+  border: none;
+  background: transparent;
+  color: var(--text-2);
+  cursor: pointer;
+  border-radius: 4px;
+  font-family: inherit;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background-color var(--motion-fast) var(--ease-standard),
+              color var(--motion-fast) var(--ease-standard),
+              transform var(--motion-fast) var(--ease-standard);
+}
+.wc-btn:hover { background: var(--surface-3); }
+.wc-btn:active { background: var(--surface-4); transform: scale(0.96); }
+.wc-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.wc-close:hover { background: var(--danger, #e5484d); color: #fff; }
+.wc-close:active { background: #b83b3f; color: #fff; }
 .brand { display: flex; align-items: center; gap: 10px; }
 .dot {
   width: 10px; height: 10px; border-radius: 50%;

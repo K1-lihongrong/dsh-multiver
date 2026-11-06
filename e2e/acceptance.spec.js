@@ -18,7 +18,8 @@ test("浏览器打开返回失败结构时展示 URL（前端兜底能力）", a
   await expect(page.locator(".browser-url")).toHaveValue(
     "http://127.0.0.1:3080/?token=test-token",
   );
-  await page.getByRole("button", { name: "关闭", exact: true }).click();
+  // 零.1 之后顶栏也有一个「关闭」窗口按钮，故限定在模态框内查找
+  await page.locator(".browser-modal").getByRole("button", { name: "关闭", exact: true }).click();
   await expect(page.locator(".browser-modal")).toHaveCount(0);
 });
 

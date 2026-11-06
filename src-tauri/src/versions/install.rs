@@ -86,15 +86,19 @@ impl ProgressParser {
         // 先算出本行的「原始 step 与 detail」，最后统一 clamp。
         let raw: Option<(usize, String, f32)> = 'p: {
             // Packages: +445  → 记下总数（本身不推进阶段，只更新总数）
-            if line.starts_with("Packages:") {
-                if let Some(n) = extract_num(line, "+") {
+            // 注意：pnpm 的输出可能带路径前缀
+            // （.../profiles/web  | Progress: resolved 0, ...），
+            // 故不能要求关键词在行首，必须用 contains / find。
+            if let Some(idx) = line.find("Packages:") {
+                if let Some(n) = extract_num(&line[idx..], "+") {
                     self.total_packages = Some(n);
                 }
                 // 不产生事件，避免与 Progress 行交错导致 step 回退
                 break 'p None;
             }
             // Progress: resolved 234, reused 222, downloaded 5, added 0
-            if let Some(rest) = line.strip_prefix("Progress:") {
+            if let Some(idx) = line.find("Progress:") {
+                let rest = &line[idx + "Progress:".len()..];
                 let resolved = extract_num(rest, "resolved");
                 let downloaded = extract_num(rest, "downloaded");
                 let added = extract_num(rest, "added");
@@ -156,35 +160,112 @@ pub(crate) fn extract_num(s: &str, key: &str) -> Option<u64> {
     digits.parse().ok()
 }
 
-/// 按字节把流切成行（保留不含换行符的原始字节）。
+/// 按字节把流切成行的**流式**迭代器（保留不含换行符的原始字节）。
 ///
 /// D16：不能用 `BufRead::lines()`——它按 UTF-8 解析，遇非法字节会**整行丢弃**，
 /// 中文 Windows 下 pnpm 的报错行会直接消失。这里只按 \n 切分，解码交给调用方。
-fn read_lines_bytes<R: std::io::Read>(mut reader: R) -> Vec<Vec<u8>> {
-    let mut buf = Vec::new();
-    let mut out = Vec::new();
-    let mut chunk = [0u8; 8192];
-    loop {
-        let n = match reader.read(&mut chunk) {
-            Ok(0) => break,
-            Ok(n) => n,
-            Err(_) => break,
-        };
-        for &b in &chunk[..n] {
-            if b == b'\n' {
-                if buf.last() == Some(&b'\r') {
-                    buf.pop();
-                }
-                out.push(std::mem::take(&mut buf));
-            } else {
-                buf.push(b);
+///
+/// 回归教训（v0.3.6）：曾把本函数写成返回 `Vec<Vec<u8>>`——必须读到 EOF 才返回
+/// 整个数组，调用方的 `for` 循环才开始，pnpm 的进度行全挤在进程结束时到达，
+/// 进度条从 0.3.0 起卡在 step 3 不动（v0.2.14 用 `BufReader::lines()` 是流式的）。
+/// 本类型每次 `read` 到换行就 yield 一行，恢复实时性。
+struct LinesReader<R: std::io::Read> {
+    reader: R,
+    buf: Vec<u8>,
+    chunk: [u8; 8192],
+    chunk_len: usize,
+    chunk_pos: usize,
+    eof: bool,
+}
+
+impl<R: std::io::Read> LinesReader<R> {
+    fn new(reader: R) -> Self {
+        Self {
+            reader,
+            buf: Vec::new(),
+            chunk: [0u8; 8192],
+            chunk_len: 0,
+            chunk_pos: 0,
+            eof: false,
+        }
+    }
+
+    /// 从底层流读更多字节到 chunk。返回 false 表示 EOF 或读失败。
+    fn fill_chunk(&mut self) -> bool {
+        if self.chunk_pos < self.chunk_len {
+            return true;
+        }
+        if self.eof {
+            return false;
+        }
+        match self.reader.read(&mut self.chunk) {
+            Ok(0) | Err(_) => {
+                self.eof = true;
+                false
+            }
+            Ok(n) => {
+                self.chunk_len = n;
+                self.chunk_pos = 0;
+                true
             }
         }
     }
-    if !buf.is_empty() {
-        out.push(buf);
+}
+
+impl<R: std::io::Read> Iterator for LinesReader<R> {
+    type Item = Vec<u8>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        loop {
+            if !self.fill_chunk() {
+                // EOF：若 buf 还有残留（最后一行无换行）则吐出，否则结束
+                if !self.buf.is_empty() {
+                    let mut line = std::mem::take(&mut self.buf);
+                    if line.last() == Some(&b'\r') {
+                        line.pop();
+                    }
+                    return Some(line);
+                }
+                return None;
+            }
+            let b = self.chunk[self.chunk_pos];
+            self.chunk_pos += 1;
+            if b == b'\n' {
+                if self.buf.last() == Some(&b'\r') {
+                    self.buf.pop();
+                }
+                return Some(std::mem::take(&mut self.buf));
+            }
+            self.buf.push(b);
+        }
     }
-    out
+}
+
+/// 便捷收集版：把整个流读成行数组。仅用于测试与一次性场景；
+/// 需要实时处理输出的调用方应直接用 `LinesReader`（保持流式）。
+#[cfg(test)]
+fn read_lines_bytes<R: std::io::Read>(reader: R) -> Vec<Vec<u8>> {
+    LinesReader::new(reader).collect()
+}
+
+/// pnpm 的公共参数（目录选项 + reporter + 构建开关）。
+///
+/// 抽成纯函数以便单测锁定两个易回归点：
+///   - 目录选项必须用 `--config.xxx=value`（顶层 `--store-dir` 会报 Unknown option）
+///   - 必须带 `--reporter=append-only`（默认 reporter 只发开始/完成两条 Progress，
+///     阶段内 fraction 无从推进，进度会从 4% 直接跳到 90%）
+fn pnpm_common_args(store_dir: &Path, cache_dir: &Path, state_dir: &Path) -> Vec<String> {
+    vec![
+        // 注意：pnpm add 不接受顶层 --state-dir（报 Unknown option），
+        // 统一改用 --config.xxx=value 形式，既不报错也保持"不污染全局目录"的意图。
+        format!("--config.store-dir={}", store_dir.to_string_lossy()),
+        format!("--config.cache-dir={}", cache_dir.to_string_lossy()),
+        format!("--config.state-dir={}", state_dir.to_string_lossy()),
+        // append-only reporter 比默认多输出下载/写入过程中的中间 Progress 行
+        // （实测 13 行 vs 8 行），让阶段内的 fraction 能真正推进。
+        "--reporter=append-only".to_string(),
+        "--config.confirmModulesPurge=false".to_string(),
+    ]
 }
 
 /// 在 Windows 上调用 pnpm 需要走 cmd，否则可能找不到 .cmd
@@ -281,21 +362,8 @@ pub fn install(
     cmd.current_dir(&target)
         .arg("add")
         .arg(&spec)
-        // 注意：pnpm add 不接受顶层 --state-dir（报 Unknown option），
-        // 统一改用 --config.xxx=value 形式，既不报错也保持"不污染全局目录"的意图。
-        .arg(format!(
-            "--config.store-dir={}",
-            store_dir.to_string_lossy()
-        ))
-        .arg(format!(
-            "--config.cache-dir={}",
-            cache_dir.to_string_lossy()
-        ))
-        .arg(format!(
-            "--config.state-dir={}",
-            state_dir.to_string_lossy()
-        ))
-        .arg("--config.confirmModulesPurge=false")
+        .args(pnpm_common_args(store_dir, cache_dir, state_dir))
+        // 其余固定参数见 pnpm_common_args（抽出以便单测锁定回归点）
         .arg("--config.dangerouslyAllowAllBuilds=true");
     // 可选：自定义 npm 源（换源重试用）
     if let Some(reg) = registry {
@@ -333,14 +401,16 @@ pub fn install(
     let tx_out = tx.clone();
     let h_out = child.stdout.take().map(move |stdout| {
         std::thread::spawn(move || {
-            for line in read_lines_bytes(stdout) {
+            // 必须用流式 LinesReader（逐行到达就转发），不能 collect 成 Vec——
+            // 否则主线程要等进程 EOF 才收到第一行，进度事件全挤在安装结束时。
+            for line in LinesReader::new(stdout) {
                 let _ = tx_out.send(crate::console_decode::decode_console(&line));
             }
         })
     });
     let h_err = child.stderr.take().map(move |stderr| {
         std::thread::spawn(move || {
-            for line in read_lines_bytes(stderr) {
+            for line in LinesReader::new(stderr) {
                 let _ = tx.send(crate::console_decode::decode_console(&line));
             }
         })
@@ -358,7 +428,7 @@ pub fn install(
         if let Some((step, detail, frac)) = parser.parse(&line) {
             let advanced = step > last_step;
             let detail_changed = detail != last_detail;
-            let frac_moved = (frac - last_frac).abs() >= 0.01;
+            let frac_moved = (frac - last_frac).abs() >= 0.003;
             if advanced || detail_changed || frac_moved {
                 last_step = step;
                 last_detail = detail.clone();
@@ -492,7 +562,7 @@ pub fn exists(versions_dir: &Path, version: &str) -> bool {
 
 #[cfg(test)]
 mod read_lines_bytes_tests {
-    use super::read_lines_bytes;
+    use super::{pnpm_common_args, read_lines_bytes};
 
     #[test]
     fn splits_on_lf() {
@@ -529,6 +599,97 @@ mod read_lines_bytes_tests {
     fn blank_line_is_kept() {
         let got = read_lines_bytes(&b"a\n\nb"[..]);
         assert_eq!(got, vec![b"a".to_vec(), Vec::new(), b"b".to_vec()]);
+    }
+
+    /// 回归测试（v0.3.6）：pnpm 参数必须含 append-only reporter。
+    ///
+    /// 默认 reporter 只发「开始（added 0）」与「完成（added N, done）」两条
+    /// Progress 行，阶段内 fraction 无从推进，进度条会从 4% 直接跳到 90%
+    /// ——这正是 v0.3.0 起进度条卡住的两个根因之一。任何人把它删掉都应被此测试拦住。
+    #[test]
+    fn pnpm_args_include_append_only_reporter() {
+        let dir = std::path::Path::new("/tmp/x");
+        let args = pnpm_common_args(dir, dir, dir);
+        assert!(
+            args.iter().any(|a| a == "--reporter=append-only"),
+            "缺少 append-only reporter，进度条会失去阶段内推进：{:?}",
+            args
+        );
+    }
+
+    /// 回归测试：目录选项必须用 `--config.xxx=value` 形式。
+    ///
+    /// pnpm add 不接受顶层 `--store-dir` 等（报 Unknown option），
+    /// 一旦有人改回顶层形式，安装会直接失败。
+    #[test]
+    fn pnpm_args_use_config_prefix_for_dirs() {
+        let dir = std::path::Path::new("/tmp/x");
+        let args = pnpm_common_args(dir, dir, dir);
+        for key in ["store-dir", "cache-dir", "state-dir"] {
+            let prefix = format!("--config.{}=", key);
+            assert!(
+                args.iter().any(|a| a.starts_with(&prefix)),
+                "缺少 {} 参数（必须用 --config 前缀，不能用顶层选项）：{:?}",
+                key,
+                args
+            );
+        }
+        assert!(
+            !args.iter().any(|a| a.starts_with("--store-dir")
+                || a.starts_with("--cache-dir")
+                || a.starts_with("--state-dir")),
+            "不得使用顶层目录选项（pnpm 会报 Unknown option）：{:?}",
+            args
+        );
+    }
+
+    /// 回归测试（v0.3.6）：必须**流式**——第一行在流尚未结束时就要能取到。
+    ///
+    /// v0.3.0 曾把切行实现成"读到 EOF 返回 Vec"，导致 pnpm 进度事件全挤在
+    /// 安装结束时到达，进度条卡在 step 3 不动（0.2.13/0.2.14 正常）。
+    #[test]
+    fn lines_reader_is_streaming() {
+        use super::LinesReader;
+        use std::io::{Cursor, Read};
+        use std::sync::{Arc, Mutex};
+
+        // 分块 Read：第一次只给 "first\n"，之后才给 "second\n"。
+        // 记录每次 read 的调用，证明取第一行时没有把整个流读完。
+        struct ChunkedRead {
+            chunks: Vec<Vec<u8>>,
+            idx: usize,
+            reads: Arc<Mutex<usize>>,
+        }
+        impl Read for ChunkedRead {
+            fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+                *self.reads.lock().unwrap() += 1;
+                if self.idx >= self.chunks.len() {
+                    return Ok(0);
+                }
+                let c = &self.chunks[self.idx];
+                self.idx += 1;
+                let n = c.len().min(buf.len());
+                buf[..n].copy_from_slice(&c[..n]);
+                Ok(n)
+            }
+        }
+
+        let reads = Arc::new(Mutex::new(0));
+        let src = ChunkedRead {
+            chunks: vec![b"first\n".to_vec(), b"second\n".to_vec()],
+            idx: 0,
+            reads: reads.clone(),
+        };
+        let mut it = LinesReader::new(src);
+        // 取第一行后，底层只应读过 1 次（尚未触及第二块/EOF）
+        assert_eq!(it.next(), Some(b"first".to_vec()));
+        assert_eq!(*reads.lock().unwrap(), 1, "取第一行后不应继续读流");
+        assert_eq!(it.next(), Some(b"second".to_vec()));
+        assert_eq!(it.next(), None);
+
+        // 对照：collect 版本语义不变（一次性收集）
+        let collected = read_lines_bytes(Cursor::new(b"x\ny\n"));
+        assert_eq!(collected, vec![b"x".to_vec(), b"y".to_vec()]);
     }
 }
 
