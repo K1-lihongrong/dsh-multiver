@@ -56,6 +56,11 @@ jobs:
       - name: Frontend build
         run: pnpm build
 
+      # i18n 词条一致性（A4，v0.3.7）：以 zh-CN 为基准，检查其余 4 种语言的 key 是否齐全。
+      # 缺 key 时运行期静默回退中文，构建不报错——故必须在 CI 拦。
+      - name: i18n key check
+        run: node scripts/check-i18n.mjs
+
       # 代码规范门禁（v0.2.12）：rustfmt 格式 + clippy 零警告。
       # 防止代码质量欠账累积（此前无门禁，曾累积 10 条 clippy 警告 + 全仓未格式化）。
       - name: Rust fmt check
@@ -68,4 +73,46 @@ jobs:
       # Linux runner 会**真正编译** #[cfg(unix)] 分支——这正是本地 Windows 无法覆盖的
       # （历史上这些 cfg(unix) 分支仅在本机 Windows 无法覆盖，故用 Linux runner 兜底验证）。
       - name: Rust tests
-        run: cargo test --manifest-path src-tauri/Cargo.toml --lib
+        run: |
+          cargo test --manifest-path src-tauri/Cargo.toml --lib
+          cargo test --manifest-path src-tauri/Cargo.toml --test staged_failures
+
+  # A5：外部契约测试（独立 job，不污染主测试矩阵）。
+  # fake 输出用例不联网；--ignored 用例真实调用 pnpm，需要网络。
+  contracts:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 11
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: 'pnpm'
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      # 干净 checkout 没有 dist；tauri::generate_context! 需要 frontendDist 存在。
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Frontend build
+        run: pnpm build
+
+      - name: Contract tests (fake / deterministic)
+        run: cargo test --manifest-path src-tauri/Cargo.toml --test contracts
+
+      - name: Real pnpm contract test (ignored)
+        run: cargo test --manifest-path src-tauri/Cargo.toml --test contracts -- --ignored

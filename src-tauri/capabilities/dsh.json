@@ -1,0 +1,18 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "dsh",
+  "description": "Capability for embedded dsh windows",
+  "windows": [
+    "dsh-*"
+  ],
+  "remote": {
+    "urls": [
+      "http://127.0.0.1:*",
+      "http://localhost:*"
+    ]
+  },
+  "permissions": [
+    "core:event:allow-emit-to",
+    "core:window:allow-start-dragging"
+  ]
+}

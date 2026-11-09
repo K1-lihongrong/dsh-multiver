@@ -177,6 +177,17 @@ pub fn take_over_pending(root: &Path) -> Option<String> {
         }
     };
 
+    take_over_pending_at(root, &p, &target)
+}
+
+/// `take_over_pending` 的实现体，把「被替换的 exe 路径」显式传入。
+///
+/// 为什么要拆：生产路径里 target 恒为 `current_exe()`，但测试需要模拟
+/// 「目标被占用 / 磁盘满 / 杀软拦截」等失败场景——那些场景无法用测试二进制本身复现
+/// （测试进程不能重命名自己）。拆分后测试可指向一个临时文件，验证失败分支
+/// 不破坏原文件、保留暂存待重试。
+pub fn take_over_pending_at(root: &Path, p: &Pending, target: &Path) -> Option<String> {
+    let staged = staged_exe(root);
     let backup = target.with_extension("exe.old");
 
     // 安全前提：当前 exe 必须存在。
@@ -201,7 +212,7 @@ pub fn take_over_pending(root: &Path) -> Option<String> {
     // 1) 重命名运行中的 exe（Windows 允许）
     // 失败时**保留暂存**：多半是文件被短暂锁定（杀软扫描、另一个实例启动中），
     // 下次启动再试即可，没必要让用户重新下载 10 MB。
-    if let Err(e) = std::fs::rename(&target, &backup) {
+    if let Err(e) = std::fs::rename(target, &backup) {
         crate::logging::write_line(
             &root.join("logs"),
             "maintenance.log",
@@ -214,9 +225,9 @@ pub fn take_over_pending(root: &Path) -> Option<String> {
     }
 
     // 2) 放入新 exe
-    if let Err(e) = std::fs::rename(&staged, &target) {
+    if let Err(e) = std::fs::rename(&staged, target) {
         // 回滚：把旧的改回来
-        let rolled = std::fs::rename(&backup, &target).is_ok();
+        let rolled = std::fs::rename(&backup, target).is_ok();
         crate::logging::write_line(
             &root.join("logs"),
             "maintenance.log",
@@ -253,7 +264,7 @@ pub fn take_over_pending(root: &Path) -> Option<String> {
         ),
     );
 
-    Some(p.version)
+    Some(p.version.clone())
 }
 
 #[cfg(test)]

@@ -63,6 +63,18 @@ pub fn list_remote(
         };
         return (false, Vec::new(), msg);
     }
+    (true, parse_remote_versions(&stdout), String::new())
+}
+
+/// 解析 `pnpm view @deepseek-ai/dsh versions --json` 的 stdout。
+///
+/// 真实 pnpm 在不同版本/配置下可能输出：
+/// - 字符串数组：`["0.1.0","0.2.0"]`
+/// - 仅一个元素的嵌套数组：`[["0.1.0","0.2.0"]]`
+/// - 非 JSON 的逐行输出（极老版本或参数被改写时）
+///
+/// 返回值保持原有语义：**倒序**，最新版本在前。
+pub fn parse_remote_versions(stdout: &str) -> Vec<String> {
     let trimmed = stdout.trim();
     let mut versions: Vec<String> = Vec::new();
     if let Ok(v) = serde_json::from_str::<Vec<String>>(trimmed) {
@@ -86,7 +98,7 @@ pub fn list_remote(
             .collect();
     }
     versions.reverse();
-    (true, versions, String::new())
+    versions
 }
 
 /// 管理器生成的转发脚本的标记（用于识别"这是管理器写的，不是官方 dsh"）。

@@ -53,41 +53,54 @@ pub(crate) static PROC_START: std::sync::OnceLock<std::time::Instant> = std::syn
 /// 窗口就绪耗时（毫秒）：进程启动 → Tauri setup 进入（含 WebView2 初始化 + 窗口创建）。
 pub(crate) static WIN_READY_MS: std::sync::OnceLock<u128> = std::sync::OnceLock::new();
 
-/// 启动模式（v0.2.14）：命令行带 --launch-version 时，记录待启动的版本号。
-/// 前端 onMounted 主动查（比事件可靠——setup 里 emit 时前端可能还没监听）。
+/// 启动意图（A3，v0.3.7）：把原先三个独立 static 合并成一个结构。
 ///
-/// M2m（B1）：由 `OnceLock` 改为 `Mutex<Option>`。原因：launch-version 流程启动成功后
-/// 会 close 主窗口；用户再双击图标触发 `ensure_main_window` 重建主窗口时，
-/// 新窗口前端仍会读到旧值 → 卡在「正在启动」。重建前需要能**清除**它。
-pub(crate) static LAUNCH_MODE: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
-
-/// 启动失败原因（供前端首帧查询）。
+/// 合并理由：三者语义同属「本次启动携带的一次性意图」，原先三个锁 + 三个 lock 函数
+/// 只是机械重复；合并后写入/读取点从「挑哪个锁」变成「挑哪个字段」，行为完全不变。
 ///
-/// 为什么需要它：单实例转发路径里，`launch_window` 可能在主窗口前端挂载**之前**
-/// 就返回错误（例如「版本未安装」是同步检查）。此时 `launch-progress:error` 事件
-/// 发出时前端还没 `listen`，事件丢失 → 加载页永远停在「正在启动」。
-/// 故额外用一个可查询的状态兜底，与 `LAUNCH_MODE` 同一套路。
-pub(crate) static LAUNCH_ERROR: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
-
-/// 待滚动到的设置区块（v0.3.2）：命令行带 `--open-settings=<section>` 时记录。
-///
-/// 与 `LAUNCH_MODE` 同一套路——setup 早于前端挂载，事件会丢失，
-/// 故存成可查询的状态，前端首帧主动取。
-pub(crate) static OPEN_SETTINGS: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
-
-/// 锁定 `OPEN_SETTINGS`；中毒时继续用内部数据。
-pub(crate) fn lock_open_settings() -> std::sync::MutexGuard<'static, Option<String>> {
-    OPEN_SETTINGS.lock().unwrap_or_else(|e| e.into_inner())
+/// 字段：
+/// - `mode`：命令行带 `--launch-version` 时的待启动版本号。
+///   前端 onMounted 主动查（比事件可靠——setup 里 emit 时前端可能还没监听）。
+///   M2m（B1）：由 `OnceLock` 改为可清除状态。原因：launch-version 流程启动成功后会
+///   close 主窗口；用户再双击图标触发 `ensure_main_window` 重建主窗口时，新窗口前端
+///   仍会读到旧值 → 卡在「正在启动」。重建前需要能清除它。
+/// - `error`：启动失败原因（供前端首帧查询）。
+///   为什么需要它：单实例转发路径里 `launch_window` 可能在主窗口前端挂载之前就返回错误
+///   （例如「版本未安装」是同步检查）。此时 `launch-progress:error` 事件发出时前端还没
+///   `listen`，事件丢失 → 加载页永远停在「正在启动」。故额外用一个可查询的状态兜底。
+/// - `open_settings`：待滚动到的设置区块（v0.3.2），命令行带 `--open-settings=<section>` 时记录。
+///   与 `mode` 同一套路——setup 早于前端挂载，事件会丢失，故存成可查询的状态。
+pub(crate) struct LaunchIntent {
+    pub mode: Option<String>,
+    pub error: Option<String>,
+    pub open_settings: Option<String>,
 }
 
-/// 锁定 `LAUNCH_MODE`；中毒时继续用内部数据（同 `lock_procs` 的理由）。
-pub(crate) fn lock_launch_mode() -> std::sync::MutexGuard<'static, Option<String>> {
-    LAUNCH_MODE.lock().unwrap_or_else(|e| e.into_inner())
+pub(crate) static LAUNCH_INTENT: std::sync::Mutex<LaunchIntent> =
+    std::sync::Mutex::new(LaunchIntent {
+        mode: None,
+        error: None,
+        open_settings: None,
+    });
+
+/// 锁定 `LAUNCH_INTENT`；中毒时继续用内部数据（同 `lock_procs` 的理由）。
+pub(crate) fn lock_launch_intent() -> std::sync::MutexGuard<'static, LaunchIntent> {
+    LAUNCH_INTENT.lock().unwrap_or_else(|e| e.into_inner())
 }
 
-/// 锁定 `LAUNCH_ERROR`；中毒时继续用内部数据。
-pub(crate) fn lock_launch_error() -> std::sync::MutexGuard<'static, Option<String>> {
-    LAUNCH_ERROR.lock().unwrap_or_else(|e| e.into_inner())
+/// 集成测试使用的窄公开门面（doc(hidden)，不构成稳定 API）。
+///
+/// 为什么要这个门面：契约测试必须调用生产代码，而不是复制一份解析器；
+/// 但 Tauri 应用的内部模块默认私有，集成测试无法访问。这里只重新导出
+/// 需要跨 crate 边界验证的纯函数/状态，避免为了测试把整个模块树公开。
+#[doc(hidden)]
+pub mod contract_api {
+    pub use crate::actions::{list_remote, parse_remote_versions};
+    pub use crate::console_decode::decode_console;
+    pub use crate::staged::{
+        pending_path, save_pending, stage_dir, staged_exe, take_over_pending_at, Pending,
+    };
+    pub use crate::versions::install::{classify_error, ProgressParser};
 }
 
 /// M2m（B5）：判断第二实例与当前实例是否为同一份可执行文件。
@@ -209,15 +222,16 @@ pub fn run() {
     // Tauri 在 setup 前就建了主窗口、前端可能早于 setup 完成 onMounted，
     // 故在此（run 开头）就 set，确保前端 get_launch_mode 一定查得到。
     if let Some(version) = window::parse_launch_version(&std::env::args().collect::<Vec<_>>()) {
-        *lock_launch_mode() = Some(version);
+        let mut intent = lock_launch_intent();
+        intent.mode = Some(version);
         // 新一次启动，清掉上一轮可能残留的错误
-        *lock_launch_error() = None;
+        intent.error = None;
     }
 
     // v0.3.2：--open-settings=<section> 同样必须在窗口创建前记录
     // （前端可能早于 setup 完成 onMounted，事件靠不住）。
     if let Some(section) = window::parse_open_settings(&std::env::args().collect::<Vec<_>>()) {
-        *lock_open_settings() = Some(section);
+        lock_launch_intent().open_settings = Some(section);
     }
 
     // 进程级 AUMID 必须在任何窗口创建之前设置（Tauri 在 setup 回调前就建了主窗口）。
@@ -293,7 +307,7 @@ pub fn run() {
                     // 此时第二次从快捷方式启动走单实例转发，若直接 launch_window，
                     // 进程里没有任何 UI 载体 → 用户看到的是「无加载页、黑屏数秒、dsh 窗口突然出现」。
                     //
-                    // 顺序要紧：ensure_main_window 在重建分支里会清空 LAUNCH_MODE（B1 修复，
+                    // 顺序要紧：ensure_main_window 在重建分支里会清空 LaunchIntent.mode（B1 修复，
                     // 防止重建窗口卡在「正在启动」），所以必须先 ensure、后设值。
                     let app_handle = app.clone();
                     let procs_for_launch = procs_for_si.clone();
@@ -316,8 +330,11 @@ pub fn run() {
                     }
 
                     // 设启动态 + 通知前端进加载页（前端 main.js 首帧读 prop，事件作兜底）
-                    *lock_launch_mode() = Some(version_for_launch.clone());
-                    *lock_launch_error() = None;
+                    {
+                        let mut intent = lock_launch_intent();
+                        intent.mode = Some(version_for_launch.clone());
+                        intent.error = None;
+                    }
                     {
                         use tauri::Emitter;
                         let _ = app.emit(
@@ -370,10 +387,10 @@ pub fn run() {
                                     e
                                 );
                                 // R-13：与 setup 路径一致——通知前端进错误态。
-                                // 同时写入 LAUNCH_ERROR：本路径下 launch_window 可能在前端挂载
+                                // 同时写入 LaunchIntent.error：本路径下 launch_window 可能在前端挂载
                                 // 之前就失败（「版本未安装」是同步检查），事件会丢失，
                                 // 前端首帧靠 get_launch_error() 兜底。
-                                *lock_launch_error() = Some(e.to_string());
+                                lock_launch_intent().error = Some(e.to_string());
                                 {
                                     use tauri::Emitter;
                                     let _ = app_handle.emit(
@@ -402,7 +419,7 @@ pub fn run() {
                             log_app("single-instance", &format!("open-settings 前重建主窗口失败: {}", e));
                         }
                     }
-                    *lock_open_settings() = Some(section.clone());
+                    lock_launch_intent().open_settings = Some(section.clone());
                     {
                         use tauri::Emitter;
                         let _ = app.emit(
@@ -491,97 +508,18 @@ pub fn run() {
             // 注册各 AUMID 的任务栏图标（IconUri）。进程级 AUMID 已在 run() 开头设过。
             window::register_aumid_icons();
 
-            // ── topbar 事件通道 ────────────────────────────────────────
-            // 背景：内嵌 dsh 窗口是 remote 上下文（http://127.0.0.1:*），
-            // 应用自有命令（log_frontend / restart_version）在 remote 下被 ACL 默认拒绝，
-            // 而插件命令（plugin:event|emit，由 core:default 授权）可用。
-            // 故 topbar 的通知统一走事件，由这里在 Rust 侧接收并落地。
-            {
-                use tauri::Listener;
-                let app_for_log = app.handle().clone();
-                app.listen_any("topbar-log", move |event| {
-                    let payload = event.payload().to_string();
-                    if let Ok(v) = serde_json::from_str::<serde_json::Value>(&payload) {
-                        if let Some(msg) = v.get("msg").and_then(|m| m.as_str()) {
-                            let mdir = manager_dir(&app_for_log);
-                            let root = Config::load(&mdir).resolve_root(&mdir);
-                            logging::write_line(
-                                &root.join("logs"),
-                                "frontend.log",
-                                &format!("[topbar] {}", msg),
-                            );
-                        }
-                    }
-                });
-
-                let app_for_restart = app.handle().clone();
-                let procs_for_restart = procs_setup.clone();
-                app.listen_any("topbar-restart", move |event| {
-                    let payload = event.payload().to_string();
-                    let app2 = app_for_restart.clone();
-                    let procs2 = procs_for_restart.clone();
-                    tauri::async_runtime::spawn(async move {
-                        let Ok(v) = serde_json::from_str::<serde_json::Value>(&payload) else { return };
-                        let Some(ver) = v.get("version").and_then(|x| x.as_str()) else { return };
-                        let ver = ver.to_string();
-                        // 复用 restart_version 的实现：kill 旧进程 → 起新进程 → 窗口 navigate。
-                        // 不销毁窗口（否则 --launch-version 模式下会触发"所有窗口已关闭"而退出）。
-                        if let Err(e) = commands::restart_version_impl(&app2, &procs2, &ver).await {
-                            let mdir = manager_dir(&app2);
-                            let root = Config::load(&mdir).resolve_root(&mdir);
-                            logging::log_app_error(&root, "topbar-restart", &format!("{}: {}", ver, e));
-                        }
-                    });
-                });
-
-                // 窗口控制（最小化/最大化/关闭）：由 topbar 按钮 emit
-                let app_for_ctrl = app.handle().clone();
-                let procs_for_ctrl = procs_setup.clone();
-                app.listen_any("topbar-ctrl", move |event| {
-                    use tauri::Manager;
-                    let payload = event.payload().to_string();
-                    let Ok(v) = serde_json::from_str::<serde_json::Value>(&payload) else { return };
-                    let action = v.get("action").and_then(|a| a.as_str()).unwrap_or("");
-                    let version = v.get("version").and_then(|a| a.as_str()).unwrap_or("");
-                    let label = {
-                        let map = lock_procs(&procs_for_ctrl);
-                        map.get(version).map(|(l, _, _, _)| l.clone())
-                    };
-                    let Some(label) = label else { return };
-                    let Some(win) = app_for_ctrl.get_webview_window(&label) else { return };
-                    match action {
-                        "minimize" => { let _ = win.minimize(); }
-                        "toggle-maximize" => {
-                            if win.is_maximized().unwrap_or(false) {
-                                let _ = win.unmaximize();
-                            } else {
-                                let _ = win.maximize();
-                            }
-                        }
-                        "close" => { let _ = win.close(); }
-                        _ => {}
-                    }
-                });
-
-                // 深浅色跟随：topbar 监听 body[data-ds-dark-theme] 后 emit
-                let app_for_theme = app.handle().clone();
-                let procs_for_theme = procs_setup.clone();
-                app.listen_any("topbar-theme", move |event| {
-                    use tauri::Manager;
-                    let payload = event.payload().to_string();
-                    let Ok(v) = serde_json::from_str::<serde_json::Value>(&payload) else { return };
-                    let dark = v.get("dark").and_then(|d| d.as_bool()).unwrap_or(false);
-                    let version = v.get("version").and_then(|a| a.as_str()).unwrap_or("");
-                    let label = {
-                        let map = lock_procs(&procs_for_theme);
-                        map.get(version).map(|(l, _, _, _)| l.clone())
-                    };
-                    let Some(label) = label else { return };
-                    if let Some(win) = app_for_theme.get_webview_window(&label) {
-                        window::set_dwm_dark(&win, dark);
-                    }
-                });
-            }
+            // ── topbar 事件通道（A1，v0.3.7）────────────────────────────
+            // 背景：内嵌 dsh 窗口是 remote 上下文（http://127.0.0.1:*），应用自有命令
+            // 在 remote 下被 ACL 默认拒绝，而插件命令（plugin:event|emit）可用。
+            // 故 topbar 的通知统一走事件。
+            //
+            // 安全要点：不能用 app.listen_any。全局监听会让任意 dsh 页面
+            // （含用户安装的第三方插件代码）通过伪造 payload 里的 version 字段，
+            // 关掉/重启别的版本的窗口（越权）。
+            // 监听器改为在 launch_window 建窗时用 window.listen 绑定，
+            // 版本号由闭包捕获，payload 中的 version 不再被采信。
+            // 见 docs/v0.3.7规划.md §3.2。
+            // ──────────────────────────────────────────────────────────
             // ──────────────────────────────────────────────────────────
             // 主窗口（管理器）显式使用管理器自己的图标（exe 内嵌图标 = bundle.icon 的 icon.ico），
             // 避免被任务栏缓存或其它窗口/快捷方式图标影响而显示错误图标。
@@ -600,7 +538,7 @@ pub fn run() {
                 // 前端首帧即"启动态"（main.js 挂载前先查 get_launch_mode，作为初始 prop），不闪主界面。
                 // 注意：不能 close 主窗口——若此时尚无其他窗口，Tauri 会认为
                 // "所有窗口已关闭" 而直接退出事件循环，导致异步创建 dsh 窗口来不及执行。
-                // 启动模式已在 run() 开头记录（LAUNCH_MODE），此处只需通知前端
+                // 启动模式已在 run() 开头记录（LaunchIntent.mode），此处只需通知前端
                 // 通知前端进入启动态（若前端已就绪，立即响应；未就绪则靠 get_launch_mode 兜底）
                 {
                     use tauri::Emitter;

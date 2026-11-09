@@ -1,54 +1,87 @@
-# v0.3.6
+# v0.3.7
 
-本次为**体验收口版**：修复三项 v0.3.5 验收中发现的既有缺陷，重做内嵌 dsh 窗口标题栏，并完成 dsh 版本兼容矩阵补测。
+本次为**安全与契约加固版**：修复 v0.3.6 内嵌 dsh 窗口事件桥的来源校验缺失，拆分 capability，合并启动意图状态，并补上 i18n、外部契约与自更新失败路径测试。无用户可见交互变化。
 
 ---
 
-## 内嵌 dsh 窗口标题栏重做
+## 内嵌窗口事件监听按窗口绑定
 
-内嵌 dsh 窗口原本由系统绘制标题栏，与 dsh 页面主题不协调；原 `topbar.js` 仅在页面左上角显示一个小圆点，信息量弱。本次改为自绘整条标题栏。
+v0.3.6 用全局 `app.listen_any` 接收 topbar 事件，并信任 payload 里的 `version` 字段。任意 dsh 页面（含第三方插件代码）都能伪造版本号，关闭或重启其他版本的窗口。
 
-- 窗口设 `decorations: false`，由 `topbar.js` 自绘：版本号 + 可折叠 URL（点击展开可复制）+ 重启 + 最小化/最大化/关闭。
-- 配色跟随 dsh 页面深浅色（观察 `body[data-ds-dark-theme]`，250ms 防抖），同步设置 DWM 深色模式。
-- **通道改造**：内嵌窗口是 remote 上下文，Tauri 2 默认拒绝应用自有命令（`Command not allowed by ACL`）。改为统一 emit 事件，Rust 侧接收处理。顺带修正了旧「重启」按钮一直静默失败的隐患（此前靠 `location.reload()` 兜底，从未真正重启过进程）。
-- 不修改 `build.rs` 的 `AppManifest::commands()`（白名单模式会连带失效主界面命令）。
+- 删除 4 个全局 topbar 监听器，改到 `launch_window` 内用 `window.listen` 绑定当前窗口。
+- 版本号与进程映射由闭包捕获，payload 里的 `version` 不再被采信。
+- topbar 从全局 `emit` 改为 `emit_to` 当前窗口 label，避免广播到所有窗口。
+- 每个窗口注入随机 128-bit token；四个监听器都校验 token，页面内代码无法读取其他窗口的闭包 token，跨窗口伪造事件被拒绝。
+- 监听器在窗口显示前注册，避免页面首帧事件早于监听。
 
-**用户可见变化**：内嵌 dsh 窗口只有一层标题栏；显示版本号与 URL，随 dsh 主题切换深浅色；「重启」按钮真正重启 dsh 进程。
+**用户可见变化**：无。两版本并行时，关闭/重启/主题切换只作用于当前窗口。
 
-## 安装进度条修复
+## capability 拆两份
 
-前次"进度平滑化"只压低了节流阈值，实机验收发现进度条仍长时间不动、再跳格。追查后确认是两个独立缺陷：
+原 `default.json` 同时覆盖主窗口和 `dsh-*`，把 `core:default`、`opener`、`dialog` 与窗口三键全部授给加载第三方内容的窗口。
 
-- **后端未用 append-only reporter**：pnpm 默认 reporter 只发「开始」与「完成」两条 Progress 行，进度从 4% 直接跳到 90%。改用 `--reporter=append-only`，阶段内能真正递进。
-- **前端爬升定时器反复重建**：每次进度事件都先停再起，事件密集时定时器永远等不到第一个 tick。改为已有定时器时直接返回。
+- 拆为 `capabilities/main.json`（主窗口）与 `capabilities/dsh.json`（内嵌窗口），删除合并版。
+- 内嵌窗口只保留 `core:event:allow-emit-to` 与 `core:window:allow-start-dragging`。
+- 三键/重启/主题由 Rust 侧处理，不需要给 dsh 页面 JS 窗口权限；`opener` / `dialog` / `core:default` 已移除。
 
-**用户可见变化**：安装进度条连续爬升，过程中可见中间百分比。
+**用户可见变化**：无。内嵌窗口拖拽、三键、重启、主题跟随保持可用。
 
-## 隐藏系统标题栏（管理器主窗口）
+## LaunchIntent 合并启动状态
 
-主窗口改为无边框，顶栏自绘最小化/最大化↔还原/关闭三键，随主题变色；加载页可拖动、右上角可关闭。
+把 `LAUNCH_MODE` / `LAUNCH_ERROR` / `OPEN_SETTINGS` 三个 static 合并为 `LaunchIntent`，由一把锁管理三个字段。
 
-- 顶栏 `mousedown` 设 4px 拖动阈值后才调 `startDragging()`，避免吞掉双击最大化。
-- Tauri 2 的窗口操作需显式权限，补 7 条 `core:window:allow-*`；此前缺失导致三键完全无反应。
-- 任务栏图标（AUMID）不受影响。
+- 写入/读取时机与语义不变，只减少重复状态与 lock 函数。
+- `window.rs` 重建主窗口时同时清空 `mode` 与 `error`。
 
-**用户可见变化**：主窗口无系统标题栏，顶部为应用自绘三键。
+**用户可见变化**：无。
 
-## 推荐页分类标签多语言
+## i18n key 校验
 
-切到韩语（或英、日、繁中）后，插件推荐页的分类标签仍显示中文。本次补全 `categoryI18n`（8 个分类 × 4 语言）与 9 个插件的韩语描述。
+新增 `scripts/check-i18n.mjs`，以 zh-CN 为基准检查其余 4 种语言 key 是否齐全；CI 在 frontend build 后执行。
 
-**用户可见变化**：韩语 / 英语 / 日语 / 繁中界面下，分类标签跟随界面语言显示。
+- 当前 5 种语言均为 361 key。
+- 缺 key 时运行期会静默回退中文，构建不会报错，因此必须由 CI 拦截。
 
-## dsh 版本兼容矩阵补测（GAP-018 闭环）
+**用户可见变化**：无。
 
-补测 10 个 dsh 版本，已验证列表从 5 个扩到 9 个。向下探边界 6 个均命中 dsh 自身缺陷（`user patch-layer watching requires the Cordis HMR service`），与插件无关。
+## 契约测试（A5）
+
+新增 `src-tauri/tests/contracts.rs` 与独立 CI job：
+
+- fake pnpm 输出驱动生产 `ProgressParser`，锁住阶段、明细与 fraction。
+- pnpm 错误文本分类对拍。
+- `pnpm view --json` 三种输出形态解析对拍。
+- 真实 GBK 字节解码。
+- 真实 pnpm view 联网对拍（`#[ignore]`，独立 job 显式运行）。
+
+**用户可见变化**：无。
+
+## staged 自更新失败路径测试（A6）
+
+抽出 `take_over_pending_at` 以注入被替换 exe 路径，新增 `src-tauri/tests/staged_failures.rs`：
+
+- 目标 exe 缺失时中止并保留唯一可用的 `.old`。
+- target rename 失败时保留原 exe、暂存与 pending 标记。
+- 放入新 exe 失败时回滚旧 exe。
+- 成功路径消费暂存与 pending 标记。
+
+**用户可见变化**：无。
 
 ---
 
 ## 验证
 
-- Rust 单测 **198 passed / 1 ignored**
-- E2E **59 passed**
-- `cargo clippy` 0 warning；`cargo fmt --check` 通过；`pnpm build` 通过
-- 内嵌 dsh 窗口实机验证：浅色/深色、重启、拖拽、三键、关闭（单/多窗口）全部通过
+- Rust 单测 **202 passed / 1 ignored**
+- staged 失败路径 **4 passed**
+- 契约测试 **4 passed / 1 ignored**；真实 pnpm 对拍 **1 passed**
+- `cargo clippy --all-targets -- -D warnings` 0 warning；`cargo fmt --check` 通过
+- `pnpm build` 通过；5 语 i18n 各 361 key 全绿
+- `pnpm tauri build --no-bundle` 本地打包通过
+- 实机并行两个版本（0.2.2-rc.1 / 0.2.2-alpha.3）：
+  - 最小化 rc.1 后 alpha.3 仍正常；
+  - 关闭 alpha.3 后 rc.1 窗口仍在、进程未退出；
+  - 「重启」后窗口不消失、dsh node PID 更换、topbar 重新注入；
+  - 最小化 / 最大化 / 还原 / 关闭三键均实测可用；
+  - 标题栏拖拽实测可用；
+  - 主题切换实测：标题栏背景 `rgb(247,247,248)` ↔ `rgb(31,35,40)`，DWM 深色属性 20 在 0/1 间同步。
+- 主题跟随建议验收时切换 dsh 深浅色再确认一次（事件通道与窗口权限已随三键/重启一并验证）。

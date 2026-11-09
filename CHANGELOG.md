@@ -7,6 +7,32 @@
 
 ---
 
+## [0.3.7] - 2026-11-09
+
+### 安全与契约加固
+
+修复 v0.3.6 引入的内嵌 dsh 窗口事件桥越权路径，并补齐 v0.3.7 的验证保险。
+
+- **A1 窗口级事件监听**：删除全局 `app.listen_any`，四个 topbar 监听器改到 `launch_window` 内用 `window.listen` 绑定；版本号由闭包捕获，payload 的 `version` 不再被采信。
+- **A1 来源认证加强**：topbar 改用 `emit_to` 当前窗口 label；每窗口注入随机 128-bit token，四个监听器校验 token，跨窗口伪造事件被拒绝。
+- **A2 capability 拆分**：删除合并版 `default.json`，新增 `main.json` 与 `dsh.json`；内嵌窗口只保留 `core:event:allow-emit-to` + `core:window:allow-start-dragging`，移除 `core:default` / `opener` / `dialog`。
+- **A3 LaunchIntent**：三个启动状态 static 合并为 `LaunchIntent`；写入/读取时机与语义不变。
+- **A4 i18n 校验**：新增 `scripts/check-i18n.mjs` 并接入 CI；5 语各 361 key。
+- **A5 契约测试**：新增 `src-tauri/tests/contracts.rs` 与独立 CI job，覆盖 fake pnpm 输出、错误分类、版本 JSON 解析、真实 GBK 解码与真实 pnpm 对拍。
+- **A6 staged 失败路径**：新增 `src-tauri/tests/staged_failures.rs`，覆盖目标缺失、rename 失败、放入失败回滚与成功路径。
+
+**用户可见变化**：无。两版本并行时，topbar 操作只作用于当前窗口。
+
+### 验证
+
+- Rust 单测 **202 passed / 1 ignored**
+- staged 失败路径 **4 passed**
+- 契约测试 **4 passed / 1 ignored**；真实 pnpm 对拍 **1 passed**
+- clippy 0 warning；fmt 通过；`pnpm build` 通过；i18n 5 语 × 361 key 通过
+- `pnpm tauri build --no-bundle` 本地打包通过
+
+---
+
 ## [0.3.6] - 2026-11-06
 
 ### 内嵌 dsh 窗口标题栏重做
