@@ -5,19 +5,19 @@ use super::*;
 #[tauri::command]
 pub(crate) async fn scan_versions(
     app: tauri::AppHandle,
+    ctx: tauri::State<'_, crate::AppCtx>,
     versions: Vec<String>,
 ) -> Result<(), String> {
     use tauri::Emitter;
-    let mdir = manager_dir(&app);
-    let cfg = Config::load(&mdir);
-    let root = cfg.resolve_root(&mdir);
-    let dirs = Dirs::new(root.clone());
+    let dirs = ctx.dirs_snapshot();
+    let root = dirs.root.clone();
     let versions_dir = dirs.versions.clone();
     let store = dirs.store.clone();
     let app2 = app.clone();
 
     // 清除上次的取消标志
-    SCAN_CANCEL.store(false, std::sync::atomic::Ordering::SeqCst);
+    let cancel_flag = ctx.scan_cancel_handle();
+    cancel_flag.store(false, std::sync::atomic::Ordering::SeqCst);
 
     tauri::async_runtime::spawn_blocking(move || {
         let names: Vec<String> = versions;
@@ -29,7 +29,7 @@ pub(crate) async fn scan_versions(
 
         for (i, n) in names.iter().enumerate() {
             // 取消检查（每个版本开始前）
-            if SCAN_CANCEL.load(std::sync::atomic::Ordering::SeqCst) {
+            if cancel_flag.load(std::sync::atomic::Ordering::SeqCst) {
                 break;
             }
             let idx = i + 1;
@@ -74,7 +74,8 @@ pub(crate) async fn scan_versions(
             );
 
             // 取消检查闭包
-            let cancel = || SCAN_CANCEL.load(std::sync::atomic::Ordering::SeqCst);
+            let cancel_flag = cancel_flag.clone();
+            let cancel = move || cancel_flag.load(std::sync::atomic::Ordering::SeqCst);
 
             // 第一段（合并遍历）：收集文件列表 + 总量。带进度与取消。
             let app_c = app2.clone();
@@ -170,20 +171,22 @@ pub(crate) async fn scan_versions(
 
 /// v0.2.13：请求取消正在进行的扫描。置位全局标志，扫描循环会在当前版本中断后停止。
 #[tauri::command]
-pub(crate) fn cancel_scan() -> Result<(), String> {
-    SCAN_CANCEL.store(true, std::sync::atomic::Ordering::SeqCst);
+pub(crate) fn cancel_scan(ctx: tauri::State<'_, crate::AppCtx>) -> Result<(), String> {
+    ctx.scan_cancel()
+        .store(true, std::sync::atomic::Ordering::SeqCst);
     Ok(())
 }
 
 #[tauri::command]
 pub(crate) async fn scan_isolated_size(
-    app: tauri::AppHandle,
+    _app: tauri::AppHandle,
+    ctx: tauri::State<'_, crate::AppCtx>,
     version: String,
 ) -> Result<u64, String> {
-    let mdir = manager_dir(&app);
+    let mdir = ctx.manager_dir().clone();
     let cfg = Config::load(&mdir);
-    let dirs = Dirs::new(cfg.resolve_root(&mdir));
-    let home = versions::isolated_home(&dirs.versions, &version);
+    let dirs = ctx.dirs_snapshot();
+    let home = crate::paths::resolve_home(&cfg, &dirs, &version);
     // 目录扫描可能很慢，放到后台线程
     let size = tauri::async_runtime::spawn_blocking(move || versions::dir_size(&home))
         .await

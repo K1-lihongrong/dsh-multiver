@@ -3,7 +3,11 @@
 use super::*;
 
 #[tauri::command]
-pub(crate) fn set_root(app: tauri::AppHandle, root: Option<String>) -> Result<String, String> {
+pub(crate) fn set_root(
+    app: tauri::AppHandle,
+    ctx: tauri::State<'_, crate::AppCtx>,
+    root: Option<String>,
+) -> Result<String, String> {
     let mdir = manager_dir(&app);
     let mut cfg = Config::load(&mdir);
 
@@ -29,6 +33,7 @@ pub(crate) fn set_root(app: tauri::AppHandle, root: Option<String>) -> Result<St
     cfg.save(&mdir).map_err(|e| e.to_string())?;
     let dirs = Dirs::new(cfg.resolve_root(&mdir));
     dirs.ensure().map_err(|e| e.to_string())?;
+    ctx.set_dirs(dirs.clone());
     // 根目录变了，重生成转发脚本（含新的 DSH_HOME）
     crate::paths::regenerate_forward_script(&mdir, &cfg);
     Ok(format!("根目录已设为 {}", dirs.root.to_string_lossy()))

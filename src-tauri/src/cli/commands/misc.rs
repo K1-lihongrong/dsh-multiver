@@ -104,7 +104,7 @@ pub fn cmd_copy_shared(version: &str, dry_run: bool, json: bool) -> i32 {
         );
     }
     let shared = ctx.dirs.home.clone();
-    let isolated = versions::isolated_home(&ctx.dirs.versions, version);
+    let isolated = crate::paths::resolve_home(&ctx.cfg, &ctx.dirs, version);
     if dry_run {
         if json {
             println!(
@@ -140,7 +140,7 @@ pub fn cmd_clear_isolated(version: &str, dry_run: bool, json: bool) -> i32 {
         return info_fail(json, &format!("版本 {} 未安装", version));
     }
     if dry_run {
-        let home = versions::isolated_home(&ctx.dirs.versions, version);
+        let home = crate::paths::resolve_home(&ctx.cfg, &ctx.dirs, version);
         if json {
             println!(
                 "{}",
@@ -155,7 +155,8 @@ pub fn cmd_clear_isolated(version: &str, dry_run: bool, json: bool) -> i32 {
         }
         return 0;
     }
-    let (ok, msg) = versions::clear_isolated(&ctx.dirs.versions, version);
+    let home = crate::paths::resolve_home(&ctx.cfg, &ctx.dirs, version);
+    let (ok, msg) = versions::clear_home_dir(&home, version);
     out_result(json, ok, &msg);
     if ok {
         0
@@ -195,10 +196,14 @@ pub fn cmd_isolate(version: &str, on: bool, dry_run: bool, json: bool) -> i32 {
     if !versions::exists(&ctx.dirs.versions, version) {
         return info_fail(json, &format!("版本 {} 未安装", version));
     }
-    ctx.cfg.isolated_versions.retain(|v| v != version);
+    let vid = crate::domain::VersionId::new(version)
+        .unwrap_or_else(|_| crate::domain::VersionId::new("invalid").unwrap());
     if on {
-        ctx.cfg.isolated_versions.push(version.to_string());
-        let _ = std::fs::create_dir_all(ctx.dirs.versions.join(version).join("home"));
+        if let Err(e) = ctx.cfg.ensure_default_instance(&vid, &ctx.dirs.root) {
+            return info_fail(json, &format!("开启隔离失败：{}", e));
+        }
+    } else {
+        ctx.cfg.detach_version(&vid);
     }
     if let Err(e) = ctx.cfg.save(&ctx.mdir) {
         return info_fail(json, &format!("保存配置失败：{}", e));

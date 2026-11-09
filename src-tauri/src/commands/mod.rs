@@ -47,12 +47,9 @@ use crate::config::{Config, Dirs};
 use crate::logging;
 use crate::window;
 use crate::{actions, cli, config, envcheck, launcher, maintenance, runtime, sizecache, versions};
-use crate::{lock_procs, manager_dir, ProcMap, NEXT_GEN};
+#[allow(unused_imports)]
+use crate::{lock_procs, manager_dir, AppCtx, ProcMap};
 use serde::Serialize;
-use std::sync::atomic::AtomicBool;
-
-/// v0.2.13：扫描取消标志。scan_versions 开头清零，cancel_scan 置位。
-pub(crate) static SCAN_CANCEL: AtomicBool = AtomicBool::new(false);
 
 #[cfg(test)]
 mod tests {
@@ -248,17 +245,15 @@ mod tests {
 
     #[test]
     fn resolve_home_isolated_uses_version_subdir() {
-        let cfg = Config {
-            isolated_versions: vec!["0.1.0".to_string()],
-            ..Default::default()
-        };
+        let mut cfg = Config::default();
         let base = std::env::temp_dir().join(format!("dsh-rh-iso-{}", crate::logging::now_secs()));
         let _ = std::fs::remove_dir_all(&base);
         let dirs = Dirs::new(base.clone());
+        cfg.ensure_default_instance(&crate::domain::VersionId::new("0.1.0").unwrap(), &base)
+            .unwrap();
         let h = crate::paths::resolve_home(&cfg, &dirs, "0.1.0");
-        // 隔离版本 → <root>/versions/<ver>/home
-        assert_eq!(h, dirs.versions.join("0.1.0").join("home"));
-        // 该目录应被创建
+        // 隔离版本 → <root>/homes/<实例 id>
+        assert_eq!(h, dirs.homes.join("i1"));
         assert!(h.exists(), "隔离 home 应被创建");
         let _ = std::fs::remove_dir_all(&base);
     }
@@ -292,16 +287,17 @@ mod tests {
     #[test]
     fn resolve_home_isolated_beats_official_flag() {
         // 隔离优先级高于"复用官方"：即使全局开了复用，隔离版本仍用版本目录
-        let cfg = Config {
+        let mut cfg = Config {
             use_official_dsh_home: true,
-            isolated_versions: vec!["0.1.0".to_string()],
             ..Default::default()
         };
         let base = std::env::temp_dir().join(format!("dsh-rh-prio-{}", crate::logging::now_secs()));
         let _ = std::fs::remove_dir_all(&base);
         let dirs = Dirs::new(base.clone());
+        cfg.ensure_default_instance(&crate::domain::VersionId::new("0.1.0").unwrap(), &base)
+            .unwrap();
         let h = crate::paths::resolve_home(&cfg, &dirs, "0.1.0");
-        assert_eq!(h, dirs.versions.join("0.1.0").join("home"));
+        assert_eq!(h, dirs.homes.join("i1"));
         let _ = std::fs::remove_dir_all(&base);
     }
 }

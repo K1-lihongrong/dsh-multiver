@@ -14,7 +14,7 @@ pub(crate) async fn copy_shared_to_isolated(
         return Err(format!("{} 未开启隔离", version));
     }
     let shared = dirs.home.clone();
-    let isolated = versions::isolated_home(&dirs.versions, &version);
+    let isolated = crate::paths::resolve_home(&cfg, &dirs, &version);
     let (ok, msg, _) = tauri::async_runtime::spawn_blocking(move || {
         versions::copy_shared_to_isolated(&shared, &isolated)
     })
@@ -35,11 +35,11 @@ pub(crate) async fn clear_isolated_data(
     let mdir = manager_dir(&app);
     let cfg = Config::load(&mdir);
     let dirs = Dirs::new(cfg.resolve_root(&mdir));
-    let (ok, msg) = tauri::async_runtime::spawn_blocking(move || {
-        versions::clear_isolated(&dirs.versions, &version)
-    })
-    .await
-    .map_err(|e| format!("清理任务失败: {}", e))?;
+    let home = crate::paths::resolve_home(&cfg, &dirs, &version);
+    let (ok, msg) =
+        tauri::async_runtime::spawn_blocking(move || versions::clear_home_dir(&home, &version))
+            .await
+            .map_err(|e| format!("清理任务失败: {}", e))?;
     if ok {
         Ok(msg)
     } else {
@@ -52,7 +52,7 @@ pub(crate) fn open_isolated_dir(app: tauri::AppHandle, version: String) -> Resul
     let mdir = manager_dir(&app);
     let cfg = Config::load(&mdir);
     let dirs = Dirs::new(cfg.resolve_root(&mdir));
-    let home = versions::isolated_home(&dirs.versions, &version);
+    let home = crate::paths::resolve_home(&cfg, &dirs, &version);
     let _ = std::fs::create_dir_all(&home);
     let (ok, msg) = actions::open_folder(&home);
     if ok {

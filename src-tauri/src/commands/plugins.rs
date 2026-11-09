@@ -663,6 +663,213 @@ pub(crate) async fn ds_check_updates(
     }
 }
 
+/// 批量更新插件：逐项事务，add 失败时按原依赖 spec 回滚。
+///
+/// 只处理当前 version + profile 的可更新项；官方随附 bundle、缺失包、
+/// 目标版本与当前版本相同等情况在预检阶段直接返回 Failed，不发生写入。
+#[tauri::command]
+pub(crate) async fn ds_plugin_update_batch(
+    app: tauri::AppHandle,
+    version: String,
+    profile: String,
+    targets: Vec<crate::dsplugins::PluginUpdateTarget>,
+) -> Result<Vec<crate::dsplugins::PluginUpdateResult>, String> {
+    crate::dsplugins::validate_profile_name(&profile)?;
+    if targets.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mdir = manager_dir(&app);
+    let cfg = Config::load(&mdir);
+    let dirs = Dirs::new(cfg.resolve_root(&mdir));
+    let (cli, home) = resolve_dsh(&app, &version)?;
+    let version_dir = dirs.versions.join(&version);
+    let official = crate::dsplugins::official_bundles(&version_dir);
+    let profiles = crate::dsplugins::list_profiles(&home, &official);
+    let Some(profile_info) = profiles.iter().find(|p| p.name == profile) else {
+        return Err(format!("profile 不存在：{}", profile));
+    };
+    let pdir = crate::dsplugins::profiles_dir(&home).join(&profile);
+
+    let mut seen = std::collections::HashSet::new();
+    let mut plans: Vec<(usize, crate::dsplugins::PluginUpdatePlan)> = Vec::new();
+    let mut results: Vec<Option<crate::dsplugins::PluginUpdateResult>> =
+        (0..targets.len()).map(|_| None).collect();
+
+    for (idx, target) in targets.iter().enumerate() {
+        let fail = |msg: String| crate::dsplugins::PluginUpdateResult {
+            name: target.name.clone(),
+            current: String::new(),
+            latest: target.latest.clone(),
+            status: crate::dsplugins::PluginUpdateStatus::Failed,
+            message: Some(msg),
+            rollback_error: None,
+        };
+        if !seen.insert(target.name.clone()) {
+            results[idx] = Some(fail(format!("批量更新包含重复插件：{}", target.name)));
+            continue;
+        }
+        if target.name.trim().is_empty() || target.latest.trim().is_empty() {
+            results[idx] = Some(fail("插件名或目标版本为空".into()));
+            continue;
+        }
+        let Some(plugin) = profile_info.plugins.iter().find(|p| p.name == target.name) else {
+            results[idx] = Some(fail(format!("当前 profile 中未找到插件：{}", target.name)));
+            continue;
+        };
+        if plugin.official {
+            results[idx] = Some(fail(format!(
+                "官方随附 bundle 不参与批量更新：{}",
+                target.name
+            )));
+            continue;
+        }
+        if plugin.version == target.latest {
+            results[idx] = Some(fail(format!("插件已经是最新版本：{}", target.name)));
+            continue;
+        }
+        let Some(original_spec) = crate::dsplugins::rollback_add_spec(
+            &plugin.name,
+            plugin.spec.as_deref(),
+            &plugin.version,
+        ) else {
+            results[idx] = Some(fail(format!(
+                "无法确定原依赖 spec，拒绝更新以避免无法回滚：{}",
+                target.name
+            )));
+            continue;
+        };
+        if crate::dsplugins::validate_package_spec(&format!("{}@{}", target.name, target.latest))
+            .is_err()
+        {
+            results[idx] = Some(fail(format!("目标版本格式非法：{}", target.latest)));
+            continue;
+        }
+        plans.push((
+            idx,
+            crate::dsplugins::PluginUpdatePlan {
+                name: plugin.name.clone(),
+                current: plugin.version.clone(),
+                latest: target.latest.clone(),
+                original_spec,
+            },
+        ));
+    }
+
+    let total = plans.len();
+    if total == 0 {
+        return Ok(results.into_iter().map(|r| r.unwrap()).collect());
+    }
+
+    let app2 = app.clone();
+    let version2 = version.clone();
+    let profile2 = profile.clone();
+    let cli2 = cli;
+    let home2 = home;
+    let pdir2 = pdir;
+    let outcome = tauri::async_runtime::spawn_blocking(move || {
+        use tauri::Emitter;
+        let mut out = results;
+        for (pos, (idx, plan)) in plans.into_iter().enumerate() {
+            let index = pos + 1;
+            let app3 = app2.clone();
+            let version3 = version2.clone();
+            let profile3 = profile2.clone();
+            let name3 = plan.name.clone();
+            let latest3 = plan.latest.clone();
+            let current3 = plan.current.clone();
+            let mut run = |step: crate::dsplugins::PluginUpdateStep, args: &[&str]| {
+                let phase = match step {
+                    crate::dsplugins::PluginUpdateStep::Remove => "removing",
+                    crate::dsplugins::PluginUpdateStep::Install => "installing",
+                    crate::dsplugins::PluginUpdateStep::Rollback => "rolling_back",
+                };
+                let _ = app3.emit(
+                    "plugin-update-progress",
+                    serde_json::json!({
+                        "version": version3,
+                        "profile": profile3,
+                        "name": name3,
+                        "current": current3,
+                        "latest": latest3,
+                        "index": index,
+                        "total": total,
+                        "phase": phase,
+                    }),
+                );
+                let res = crate::dsplugins::run_dsh_plugin(
+                    &cli2.bin,
+                    cli2.js.as_deref(),
+                    &home2,
+                    &profile3,
+                    args,
+                    crate::dsplugins::PLUGIN_TIMEOUT,
+                    |line| {
+                        let _ = app3.emit(
+                            "ds-plugin-progress",
+                            serde_json::json!({
+                                "version": version3,
+                                "profile": profile3,
+                                "line": line,
+                            }),
+                        );
+                    },
+                );
+                if res.timed_out {
+                    Err(format!(
+                        "插件操作超时（{} 秒），已中止",
+                        crate::dsplugins::PLUGIN_TIMEOUT.as_secs()
+                    ))
+                } else if res.ok {
+                    Ok(res.output)
+                } else {
+                    Err(res.output)
+                }
+            };
+            let verify_pdir = pdir2.clone();
+            let verify_name = plan.name.clone();
+            let verify = move || {
+                if read_dep_map(&verify_pdir).contains_key(&verify_name) {
+                    Ok(())
+                } else {
+                    Err(format!("依赖表中缺少 {}", verify_name))
+                }
+            };
+            let result = crate::dsplugins::execute_plugin_update(&plan, &mut run, verify);
+            let _ = app2.emit(
+                "plugin-update-progress",
+                serde_json::json!({
+                    "version": version2,
+                    "profile": profile2,
+                    "name": result.name,
+                    "index": index,
+                    "total": total,
+                    "phase": "done",
+                    "status": result.status,
+                    "message": result.message,
+                }),
+            );
+            out[idx] = Some(result);
+        }
+        out
+    })
+    .await
+    .map_err(|e| format!("批量更新任务失败：{e}"))?;
+
+    Ok(outcome
+        .into_iter()
+        .map(|r| {
+            r.unwrap_or_else(|| crate::dsplugins::PluginUpdateResult {
+                name: String::new(),
+                current: String::new(),
+                latest: String::new(),
+                status: crate::dsplugins::PluginUpdateStatus::Failed,
+                message: Some("内部错误：缺少更新结果".into()),
+                rollback_error: None,
+            })
+        })
+        .collect())
+}
+
 /// 读本地推荐列表（磁盘缓存优先，缺失回退内置副本）。不联网，立即返回。
 #[tauri::command]
 pub(crate) fn ds_plugin_catalog(app: tauri::AppHandle) -> Result<crate::catalog::Catalog, String> {

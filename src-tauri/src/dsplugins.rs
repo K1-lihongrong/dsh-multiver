@@ -9,7 +9,7 @@
 //! - dsh CLI 在 `<版本>/node_modules/.bin/dsh`。
 //! - DSH_HOME 由调用方（commands）解析后传入（隔离/共享/官方）。
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
@@ -627,6 +627,150 @@ pub fn parse_outdated_json(text: &str) -> Vec<DsUpdate> {
     out
 }
 
+/// 生成失败回滚时要执行的 `add` 参数。
+///
+/// package.json 的依赖值可能是：
+/// - semver / range：`^1.2.3` → 需要拼成 `pkg@^1.2.3`
+/// - git / URL / 本地路径：`github:user/repo` / `file:../p` → 原样作为 add 参数
+/// - 缺失：退回 `pkg@current_version`
+pub fn rollback_add_spec(
+    name: &str,
+    original_dependency_spec: Option<&str>,
+    current_version: &str,
+) -> Option<String> {
+    let declared = original_dependency_spec
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+    match declared {
+        Some(s) => {
+            let first = s.chars().next().unwrap_or_default();
+            let semver_like =
+                first.is_ascii_digit() || matches!(first, '^' | '~' | '*' | '>' | '<' | '=');
+            if semver_like {
+                Some(format!("{name}@{s}"))
+            } else {
+                Some(s.to_string())
+            }
+        }
+        None if !current_version.trim().is_empty() => {
+            Some(format!("{name}@{}", current_version.trim()))
+        }
+        None => None,
+    }
+}
+
+/// 前端提交的单个更新目标。只信任包名与目标版本，原版本/原 spec 由后端现场读取。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PluginUpdateTarget {
+    pub name: String,
+    pub latest: String,
+}
+
+/// 更新事务的计划（后端从当前 profile 现场生成）。
+#[derive(Debug, Clone)]
+pub struct PluginUpdatePlan {
+    pub name: String,
+    pub current: String,
+    pub latest: String,
+    pub original_spec: String,
+}
+
+/// 更新事务的阶段，供调用方生成进度事件。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PluginUpdateStep {
+    Remove,
+    Install,
+    Rollback,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PluginUpdateStatus {
+    Updated,
+    RolledBack,
+    RollbackFailed,
+    Failed,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct PluginUpdateResult {
+    pub name: String,
+    pub current: String,
+    pub latest: String,
+    pub status: PluginUpdateStatus,
+    pub message: Option<String>,
+    pub rollback_error: Option<String>,
+}
+
+/// 执行单个插件的更新事务。
+///
+/// - remove 失败：未产生变更，返回 Failed；
+/// - add 成功但 verify 失败：按原 spec 回滚；
+/// - add 失败：按原 spec 回滚；
+/// - 回滚失败：返回原错误与回滚错误，前端给人工恢复命令。
+pub fn execute_plugin_update<F, V>(
+    plan: &PluginUpdatePlan,
+    mut run: F,
+    mut verify: V,
+) -> PluginUpdateResult
+where
+    F: FnMut(PluginUpdateStep, &[&str]) -> Result<String, String>,
+    V: FnMut() -> Result<(), String>,
+{
+    let result =
+        |status, message: Option<String>, rollback_error: Option<String>| PluginUpdateResult {
+            name: plan.name.clone(),
+            current: plan.current.clone(),
+            latest: plan.latest.clone(),
+            status,
+            message,
+            rollback_error,
+        };
+
+    if let Err(e) = run(PluginUpdateStep::Remove, &["remove", plan.name.as_str()]) {
+        return result(
+            PluginUpdateStatus::Failed,
+            Some(format!("卸载旧版本失败：{e}")),
+            None,
+        );
+    }
+
+    let target = format!("{}@{}", plan.name, plan.latest);
+    let install_err = match run(PluginUpdateStep::Install, &["add", target.as_str()]) {
+        Ok(_) => match verify() {
+            Ok(()) => return result(PluginUpdateStatus::Updated, None, None),
+            Err(e) => format!("安装后校验失败：{e}"),
+        },
+        Err(e) => e,
+    };
+
+    match run(
+        PluginUpdateStep::Rollback,
+        &["add", plan.original_spec.as_str()],
+    ) {
+        Ok(_) => match verify() {
+            Ok(()) => result(
+                PluginUpdateStatus::RolledBack,
+                Some(format!(
+                    "更新失败，已回滚到 {}：{install_err}",
+                    plan.current
+                )),
+                None,
+            ),
+            Err(e) => result(
+                PluginUpdateStatus::RollbackFailed,
+                Some(format!("更新失败：{install_err}；回滚后校验失败：{e}")),
+                Some(e),
+            ),
+        },
+        Err(e) => result(
+            PluginUpdateStatus::RollbackFailed,
+            Some(format!("更新失败：{install_err}；回滚失败：{e}")),
+            Some(e),
+        ),
+    }
+}
+
 /// 校验 profile 名（dsh 会用它作目录名）：字母/数字/`.`/`-`/`_`，且不能以 `-` 开头。
 pub fn validate_profile_name(name: &str) -> Result<(), String> {
     let s = name.trim();
@@ -1162,6 +1306,103 @@ mod tests {
         ] {
             assert!(validate_registry_url(bad).is_err(), "应拒绝：{bad:?}");
         }
+    }
+
+    fn update_plan() -> PluginUpdatePlan {
+        PluginUpdatePlan {
+            name: "pkg".into(),
+            current: "1.0.0".into(),
+            latest: "2.0.0".into(),
+            original_spec: "pkg@^1.0.0".into(),
+        }
+    }
+
+    #[test]
+    fn plugin_update_success_runs_remove_then_install() {
+        use std::cell::RefCell;
+        let calls = RefCell::new(Vec::new());
+        let mut run = |step, args: &[&str]| {
+            calls
+                .borrow_mut()
+                .push((step, args.iter().map(|s| s.to_string()).collect::<Vec<_>>()));
+            Ok(String::new())
+        };
+        let out = execute_plugin_update(&update_plan(), &mut run, || Ok(()));
+        assert_eq!(out.status, PluginUpdateStatus::Updated);
+        let calls = calls.borrow();
+        assert_eq!(calls.len(), 2);
+        assert_eq!(calls[0].0, PluginUpdateStep::Remove);
+        assert_eq!(calls[0].1, vec!["remove", "pkg"]);
+        assert_eq!(calls[1].0, PluginUpdateStep::Install);
+        assert_eq!(calls[1].1, vec!["add", "pkg@2.0.0"]);
+    }
+
+    #[test]
+    fn install_failure_rolls_back_original_spec() {
+        use std::cell::RefCell;
+        let calls = RefCell::new(Vec::new());
+        let mut run = |step, args: &[&str]| {
+            calls
+                .borrow_mut()
+                .push((step, args.iter().map(|s| s.to_string()).collect::<Vec<_>>()));
+            if step == PluginUpdateStep::Install {
+                Err("network down".into())
+            } else {
+                Ok(String::new())
+            }
+        };
+        let out = execute_plugin_update(&update_plan(), &mut run, || Ok(()));
+        assert_eq!(out.status, PluginUpdateStatus::RolledBack);
+        assert!(out.message.as_deref().unwrap().contains("network down"));
+        let calls = calls.borrow();
+        assert_eq!(calls[2].0, PluginUpdateStep::Rollback);
+        assert_eq!(calls[2].1, vec!["add", "pkg@^1.0.0"]);
+    }
+
+    #[test]
+    fn rollback_failure_reports_both_errors() {
+        let mut run = |step: PluginUpdateStep, _args: &[&str]| match step {
+            PluginUpdateStep::Remove | PluginUpdateStep::Install => Ok(String::new()),
+            PluginUpdateStep::Rollback => Err("rollback denied".into()),
+        };
+        let out = execute_plugin_update(&update_plan(), &mut run, || Err("verify failed".into()));
+        assert_eq!(out.status, PluginUpdateStatus::RollbackFailed);
+        assert_eq!(out.rollback_error.as_deref(), Some("rollback denied"));
+        assert!(out.message.as_deref().unwrap().contains("verify failed"));
+    }
+
+    #[test]
+    fn remove_failure_is_reported_without_rollback() {
+        use std::cell::RefCell;
+        let calls = RefCell::new(0usize);
+        let mut run = |_step, _args: &[&str]| {
+            *calls.borrow_mut() += 1;
+            Err("remove blocked".into())
+        };
+        let out = execute_plugin_update(&update_plan(), &mut run, || Ok(()));
+        assert_eq!(out.status, PluginUpdateStatus::Failed);
+        assert_eq!(*calls.borrow(), 1, "remove 失败不应再尝试回滚");
+    }
+
+    #[test]
+    fn rollback_spec_preserves_semver_and_non_registry_sources() {
+        assert_eq!(
+            rollback_add_spec("pkg", Some("^1.2.3"), "1.2.4").as_deref(),
+            Some("pkg@^1.2.3")
+        );
+        assert_eq!(
+            rollback_add_spec("pkg", Some("github:user/repo"), "1.2.3").as_deref(),
+            Some("github:user/repo")
+        );
+        assert_eq!(
+            rollback_add_spec("pkg", Some("file:../pkg"), "1.2.3").as_deref(),
+            Some("file:../pkg")
+        );
+        assert_eq!(
+            rollback_add_spec("pkg", None, "1.2.3").as_deref(),
+            Some("pkg@1.2.3")
+        );
+        assert_eq!(rollback_add_spec("pkg", None, ""), None);
     }
 
     #[test]

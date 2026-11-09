@@ -2,7 +2,7 @@ use std::path::Path;
 use std::process::Command;
 
 #[cfg(windows)]
-fn pnpm_command() -> Command {
+pub(crate) fn pnpm_command() -> Command {
     use std::os::windows::process::CommandExt;
     const CREATE_NO_WINDOW: u32 = 0x08000000;
     let mut c = Command::new("cmd");
@@ -13,19 +13,8 @@ fn pnpm_command() -> Command {
 }
 
 #[cfg(not(windows))]
-fn pnpm_command() -> Command {
+pub(crate) fn pnpm_command() -> Command {
     Command::new("pnpm")
-}
-
-fn run(cmd: &mut Command) -> (bool, String, String) {
-    match cmd.output() {
-        Ok(out) => {
-            let stdout = crate::console_decode::decode_console(&out.stdout);
-            let stderr = crate::console_decode::decode_console(&out.stderr);
-            (out.status.success(), stdout, stderr)
-        }
-        Err(e) => (false, String::new(), e.to_string()),
-    }
 }
 
 /// 从 npm 查询所有可安装的版本号，倒序返回。
@@ -35,35 +24,45 @@ pub fn list_remote(
     cache_dir: &Path,
     state_dir: &Path,
 ) -> (bool, Vec<String>, String) {
-    let mut cmd = pnpm_command();
+    list_remote_with_runner(
+        &crate::ports::ProcessPnpmRunner,
+        store_dir,
+        cache_dir,
+        state_dir,
+    )
+}
+
+/// PnpmRunner 端口的可测试入口。生产路径使用 ProcessPnpmRunner，测试注入 fake。
+pub(crate) fn list_remote_with_runner<R: crate::ports::PnpmRunner>(
+    runner: &R,
+    store_dir: &Path,
+    cache_dir: &Path,
+    state_dir: &Path,
+) -> (bool, Vec<String>, String) {
     // 注意：pnpm view 不接受顶层 --store-dir/--cache-dir/--state-dir（会报 Unknown option），
     // 要用 --config.xxx=value 形式传，既不报错也保持"不污染全局目录"的意图。
-    cmd.arg("view")
-        .arg("@deepseek-ai/dsh")
-        .arg("versions")
-        .arg("--json")
-        .arg(format!(
-            "--config.store-dir={}",
-            store_dir.to_string_lossy()
-        ))
-        .arg(format!(
-            "--config.cache-dir={}",
-            cache_dir.to_string_lossy()
-        ))
-        .arg(format!(
-            "--config.state-dir={}",
-            state_dir.to_string_lossy()
-        ));
-    let (ok, stdout, stderr) = run(&mut cmd);
-    if !ok {
-        let msg = if stderr.trim().is_empty() {
-            stdout
+    let args = vec![
+        "view".to_string(),
+        "@deepseek-ai/dsh".to_string(),
+        "versions".to_string(),
+        "--json".to_string(),
+        format!("--config.store-dir={}", store_dir.to_string_lossy()),
+        format!("--config.cache-dir={}", cache_dir.to_string_lossy()),
+        format!("--config.state-dir={}", state_dir.to_string_lossy()),
+    ];
+    let out = match runner.run(&args) {
+        Ok(out) => out,
+        Err(e) => return (false, Vec::new(), e),
+    };
+    if !out.success {
+        let msg = if out.stderr.trim().is_empty() {
+            out.stdout
         } else {
-            stderr
+            out.stderr
         };
         return (false, Vec::new(), msg);
     }
-    (true, parse_remote_versions(&stdout), String::new())
+    (true, parse_remote_versions(&out.stdout), String::new())
 }
 
 /// 解析 `pnpm view @deepseek-ai/dsh versions --json` 的 stdout。
@@ -369,6 +368,35 @@ mod tests {
         let s = build_forward_script("1.0.0", "D:\\data\\", "D:\\data\\home");
         assert!(s.contains("set \"DSH_HOME_CANDIDATE=D:\\data\\home\""));
         assert!(!s.contains("D:\\data\\\\home"));
+    }
+
+    struct FakePnpmRunner {
+        out: crate::ports::CommandOutput,
+    }
+
+    impl crate::ports::PnpmRunner for FakePnpmRunner {
+        fn run(&self, _args: &[String]) -> Result<crate::ports::CommandOutput, String> {
+            Ok(self.out.clone())
+        }
+    }
+
+    #[test]
+    fn list_remote_uses_pnpm_runner_port() {
+        let runner = FakePnpmRunner {
+            out: crate::ports::CommandOutput {
+                success: true,
+                stdout: r#"["0.1.0","0.2.0"]"#.to_string(),
+                stderr: String::new(),
+            },
+        };
+        let (ok, versions, err) = list_remote_with_runner(
+            &runner,
+            Path::new("/tmp/store"),
+            Path::new("/tmp/cache"),
+            Path::new("/tmp/state"),
+        );
+        assert!(ok, "err={err}");
+        assert_eq!(versions, vec!["0.2.0", "0.1.0"]);
     }
 
     #[test]

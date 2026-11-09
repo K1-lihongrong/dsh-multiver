@@ -21,7 +21,7 @@ pub use install::{
     INSTALL_TOTAL_STEPS,
 };
 #[allow(unused_imports)]
-pub use isolated::{clear_isolated, copy_shared_to_isolated, isolated_home};
+pub use isolated::{clear_home_dir, copy_shared_to_isolated};
 #[allow(unused_imports)]
 pub use list::{list, VersionInfo};
 #[allow(unused_imports)]

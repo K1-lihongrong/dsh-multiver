@@ -292,7 +292,8 @@ test("检查更新 → 显示新版本并可更新（B1-13）", async ({ page })
     extra: {
       ds_list_plugins: { dsh_home: "D:/dsh", home_kind: "shared", profiles: [PROFILE] },
       ds_check_updates: [{ name: "my-plugin", current: "1.0.0", latest: "2.0.0" }],
-      ds_plugin_action: "(args) => { window.__recordUpdate(args); return Promise.resolve('ok'); }",
+      ds_plugin_update_batch:
+        "(args) => { window.__recordUpdate(args); return Promise.resolve([{name:'my-plugin',current:'1.0.0',latest:'2.0.0',status:'updated',message:null,rollback_error:null}]); }",
       "plugin:dialog|message": "Yes",
     },
   });
@@ -302,9 +303,64 @@ test("检查更新 → 显示新版本并可更新（B1-13）", async ({ page })
   await expect(page.locator(".dp-badge-update")).toContainText("2.0.0");
   await page.getByRole("button", { name: "更新", exact: true }).click();
   await page.waitForTimeout(500);
-  const flat = JSON.stringify(calls);
-  expect(flat).toContain('"action":"remove"');
-  expect(flat).toContain("my-plugin@2.0.0");
+  expect(calls).toHaveLength(1);
+  expect(calls[0].targets).toEqual([{ name: "my-plugin", latest: "2.0.0" }]);
+});
+
+test("批量更新 → 一次提交全部目标并回显失败回滚", async ({ page }) => {
+  const calls = [];
+  const batchProfile = {
+    name: "web",
+    path: "D:/dsh/profiles/web",
+    plugins: [
+      {
+        name: "p1",
+        version: "1.0.0",
+        is_bundle: true,
+        source: "user",
+        origin: "third_party",
+        official: false,
+        declares_bundle: true,
+        description: "p1",
+      },
+      {
+        name: "p2",
+        version: "1.0.0",
+        is_bundle: false,
+        source: "user",
+        origin: "third_party",
+        official: false,
+        declares_bundle: false,
+        description: "p2",
+      },
+    ],
+  };
+  await page.exposeFunction("__recordBatchUpdate", (x) => calls.push(x));
+  await mockTauri(page, {
+    installed: [makeVersion("0.2.0-rc.1", { isolated: true })],
+    extra: {
+      ds_list_plugins: { dsh_home: "D:/dsh", home_kind: "shared", profiles: [batchProfile] },
+      ds_check_updates: [
+        { name: "p1", current: "1.0.0", latest: "2.0.0" },
+        { name: "p2", current: "1.0.0", latest: "2.0.0" },
+      ],
+      ds_plugin_update_batch:
+        "(args) => { window.__recordBatchUpdate(args); return Promise.resolve([{name:'p1',current:'1.0.0',latest:'2.0.0',status:'updated',message:null,rollback_error:null},{name:'p2',current:'1.0.0',latest:'2.0.0',status:'rolled_back',message:'更新失败，已回滚到 1.0.0：boom',rollback_error:null}]); }",
+      "plugin:dialog|message": "Yes",
+    },
+  });
+  await page.goto("/");
+  await page.getByRole("button", { name: "插件", exact: true }).click();
+  await page.getByRole("button", { name: "检查更新", exact: true }).click();
+  await expect(page.getByRole("button", { name: /全部更新/ })).toContainText("2");
+  await page.getByRole("button", { name: /全部更新/ }).click();
+  await page.waitForTimeout(800);
+  expect(calls).toHaveLength(1);
+  expect(calls[0].targets).toEqual([
+    { name: "p1", latest: "2.0.0" },
+    { name: "p2", latest: "2.0.0" },
+  ]);
+  await expect(page.locator(".dp-log-body")).toContainText("已回滚到 1.0.0");
 });
 
 test("安装前 inspect 拒绝非组合包（B1-16）", async ({ page }) => {

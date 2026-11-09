@@ -77,8 +77,9 @@ pub fn save_pending(root: &Path, p: &Pending) -> Result<(), String> {
 /// 清理暂存（安装完成或取消后调用）。
 pub fn clear_stage(root: &Path) {
     let dir = stage_dir(root);
-    let _ = std::fs::remove_file(pending_path(root));
-    let _ = std::fs::remove_file(staged_exe(root));
+    use crate::ports::FileSystem;
+    let _ = crate::ports::SystemFs.remove_file(&pending_path(root));
+    let _ = crate::ports::SystemFs.remove_file(&staged_exe(root));
     // 目录空了就删掉，避免数据根里长期留一个空目录
     let _ = std::fs::remove_dir(&dir);
 }

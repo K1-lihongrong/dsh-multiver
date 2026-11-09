@@ -1,6 +1,6 @@
 [package]
 name = "dsh-multiver"
-version = "0.3.7"
+version = "0.4.0-alpha.1"
 description = "Lightweight portable version manager for DeepSeek Harness"
 authors = ["K1-lihongrong"]
 edition = "2021"

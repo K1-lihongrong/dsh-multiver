@@ -7,6 +7,32 @@
 
 ---
 
+## [0.4.0-alpha.1] - 2026-11-09（开发中）
+
+### 类型与状态收口
+
+- 引入 `VersionId` / `InstanceId` / `HomeRef` / `ProcKey` / `LaunchTicket`，接入配置、路径、进程表与窗口 label。
+- `config.json` 新增 `schema_version`、实例表、挂载表、主按钮目标与实例序号；旧 `isolated_versions` 自动迁移到 `homes/iN`，保留兼容镜像。
+- `AppCtx` 统一持有进程表、启动意图、目录快照、扫描取消标志与窗口代次；状态敏感命令已迁移。
+- 新增 `Clock` / `FileSystem` / `PnpmRunner` / `DshLauncher` 端口与生产 adapter；前三个已接入生产路径。
+
+### 插件批量更新与失败回滚
+
+- 新增 `ds_plugin_update_batch`：当前版本 + 当前 profile 的可更新插件可一键逐项更新。
+- 单插件更新改为 `remove → add → verify` 事务；add 或校验失败时按原依赖 spec 回滚。
+- 回滚失败返回原错误、回滚错误与人工恢复线索，不再让插件静默停留在已卸载状态。
+- 前端新增「全部更新」按钮、批量进度、成功/失败汇总；官方随附 bundle 不参与批量更新。
+- 单插件「更新」也复用事务命令，不再走前端裸 remove+add。
+
+### 验证
+
+- Rust 单测 **221 passed / 1 ignored**
+- E2E **60 passed**
+- i18n 5 语 × 375 key
+- `cargo fmt --check`、`cargo clippy -D warnings`、`pnpm build`、`pnpm tauri build --no-bundle` 通过
+
+---
+
 ## [0.3.7] - 2026-11-09
 
 ### 安全与契约加固

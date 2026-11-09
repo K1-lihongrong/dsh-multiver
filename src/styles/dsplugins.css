@@ -462,6 +462,8 @@
 }
 .dp-filter-icon { font-size: 11px; opacity: .6; flex: none; }
 .dp-search { min-width: 160px; max-width: 260px; flex: 1; font-size: 11.5px; }
+.dp-filter-action { margin-left: auto; flex: none; }
+.dp-batch-progress { padding: 0 16px 8px; color: var(--text-muted); font-size: 11.5px; }
 
 /* B1-11/B1-12：官方信息（构建脚本 / 版本豁免） */
 .dp-meta { border-top: 1px dashed var(--panel-border); padding: 8px 16px 12px; display: flex; flex-direction: column; gap: 8px; }

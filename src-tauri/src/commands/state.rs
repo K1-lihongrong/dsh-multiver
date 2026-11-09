@@ -102,15 +102,16 @@ pub(crate) fn set_isolated(
 ) -> Result<String, String> {
     let mdir = manager_dir(&app);
     let mut cfg = Config::load(&mdir);
-    let dirs = Dirs::new(cfg.resolve_root(&mdir));
+    let root = cfg.resolve_root(&mdir);
+    let dirs = Dirs::new(root.clone());
     if !versions::exists(&dirs.versions, &version) {
         return Err(format!("版本 {} 未安装", version));
     }
-    cfg.isolated_versions.retain(|v| v != &version);
+    let vid = crate::domain::VersionId::new(&version)?;
     if isolated {
-        cfg.isolated_versions.push(version.clone());
-        // 预创建隔离目录
-        let _ = std::fs::create_dir_all(dirs.versions.join(&version).join("home"));
+        cfg.ensure_default_instance(&vid, &root)?;
+    } else {
+        cfg.detach_version(&vid);
     }
     cfg.save(&mdir).map_err(|e| e.to_string())?;
     // 隔离状态变了：若改的是当前默认版本，重生成转发脚本（DSH_HOME 会变）
