@@ -631,6 +631,9 @@ pub(crate) fn ds_open_profile_dir(
 }
 
 /// 检查可更新插件（B1-13）：`dsh plugin --profile <p> outdated --json`。
+///
+/// `pnpm outdated` 在部分 hoisted / bundle 组合 profile 上会漏报范围内的新版本
+///（例如 dsh-ops 0.5.1 到 0.5.2），因此再对非官方插件逐个 `view <pkg> version --json` 兜底。
 #[tauri::command]
 pub(crate) async fn ds_check_updates(
     app: tauri::AppHandle,
@@ -638,10 +641,14 @@ pub(crate) async fn ds_check_updates(
     profile: String,
 ) -> Result<Vec<crate::dsplugins::DsUpdate>, String> {
     crate::dsplugins::validate_profile_name(&profile)?;
+    let mdir = manager_dir(&app);
+    let cfg = Config::load(&mdir);
+    let dirs = Dirs::new(cfg.resolve_root(&mdir));
+    let version_dir = dirs.versions.join(&version);
     let (cli, home) = resolve_dsh(&app, &version)?;
     let profile2 = profile.clone();
-    let res = tauri::async_runtime::spawn_blocking(move || {
-        crate::dsplugins::run_dsh_plugin(
+    tauri::async_runtime::spawn_blocking(move || {
+        let res = crate::dsplugins::run_dsh_plugin(
             &cli.bin,
             cli.js.as_deref(),
             &home,
@@ -649,20 +656,64 @@ pub(crate) async fn ds_check_updates(
             &["outdated", "--json"],
             crate::dsplugins::PLUGIN_TIMEOUT,
             |_| {},
-        )
+        );
+        if res.timed_out {
+            return Err("检查更新超时".into());
+        }
+        let outdated_json_ok = serde_json::from_str::<serde_json::Value>(res.output.trim()).is_ok();
+        let mut updates = if outdated_json_ok {
+            crate::dsplugins::parse_outdated_json(&res.output)
+        } else {
+            Vec::new()
+        };
+
+        let official = crate::dsplugins::official_bundles(&version_dir);
+        if let Some(profile_info) = crate::dsplugins::list_profiles(&home, &official)
+            .into_iter()
+            .find(|p| p.name == profile2)
+        {
+            let mut known: std::collections::HashSet<String> =
+                updates.iter().map(|u| u.name.clone()).collect();
+            for plugin in profile_info
+                .plugins
+                .iter()
+                .filter(|p| p.origin != "official")
+            {
+                if plugin.version.trim().is_empty() || !known.insert(plugin.name.clone()) {
+                    continue;
+                }
+                let view = crate::dsplugins::run_dsh_plugin(
+                    &cli.bin,
+                    cli.js.as_deref(),
+                    &home,
+                    &profile2,
+                    &["view", &plugin.name, "version", "--json"],
+                    std::time::Duration::from_secs(20),
+                    |_| {},
+                );
+                if view.timed_out || !view.ok {
+                    continue;
+                }
+                if let Some(latest) = crate::dsplugins::parse_view_version(&view.output) {
+                    if crate::dsplugins::version_is_newer(&plugin.version, &latest) {
+                        updates.push(crate::dsplugins::DsUpdate {
+                            name: plugin.name.clone(),
+                            current: plugin.version.clone(),
+                            latest,
+                        });
+                    }
+                }
+            }
+        }
+        updates.sort_by(|a, b| a.name.cmp(&b.name));
+        if !outdated_json_ok && updates.is_empty() {
+            return Err(res.output);
+        }
+        Ok(updates)
     })
     .await
-    .map_err(|e| format!("检查更新失败：{e}"))?;
-    if res.timed_out {
-        return Err("检查更新超时".into());
-    }
-    if serde_json::from_str::<serde_json::Value>(res.output.trim()).is_ok() {
-        Ok(crate::dsplugins::parse_outdated_json(&res.output))
-    } else {
-        Err(res.output)
-    }
+    .map_err(|e| format!("检查更新失败：{e}"))?
 }
-
 /// 批量更新插件：逐项事务，add 失败时按原依赖 spec 回滚。
 ///
 /// 只处理当前 version + profile 的可更新项；官方随附 bundle、缺失包、

@@ -771,6 +771,85 @@ where
     }
 }
 
+/// 简单 semver 比较：只用于判断注册表 latest 是否比已安装版本新。
+/// 解析失败时返回 false，避免把 prerelease / git / 本地版本误报成可更新。
+fn parse_semver(v: &str) -> Option<(u64, u64, u64, Vec<String>)> {
+    let s = v.trim().trim_start_matches('v');
+    let s = s.split('+').next().unwrap_or(s);
+    let (core, pre) = s.split_once('-').unwrap_or((s, ""));
+    let mut nums = core.split('.');
+    let major = nums.next()?.parse::<u64>().ok()?;
+    let minor = nums.next()?.parse::<u64>().ok()?;
+    let patch = nums.next()?.parse::<u64>().ok()?;
+    if nums.next().is_some() {
+        return None;
+    }
+    let pre = if pre.is_empty() {
+        Vec::new()
+    } else {
+        pre.split('.').map(|x| x.to_string()).collect()
+    };
+    Some((major, minor, patch, pre))
+}
+
+pub fn version_is_newer(current: &str, latest: &str) -> bool {
+    let Some((cmaj, cmin, cpat, cpre)) = parse_semver(current) else {
+        return false;
+    };
+    let Some((lmaj, lmin, lpat, lpre)) = parse_semver(latest) else {
+        return false;
+    };
+    if (lmaj, lmin, lpat) != (cmaj, cmin, cpat) {
+        return (lmaj, lmin, lpat) > (cmaj, cmin, cpat);
+    }
+    if cpre.is_empty() != lpre.is_empty() {
+        return lpre.is_empty();
+    }
+    for (c, l) in cpre.iter().zip(lpre.iter()) {
+        let cn = c.parse::<u64>().ok();
+        let ln = l.parse::<u64>().ok();
+        match (cn, ln) {
+            (Some(a), Some(b)) if a != b => return b > a,
+            (Some(_), None) => return false,
+            (None, Some(_)) => return true,
+            _ => {
+                if c != l {
+                    return l > c;
+                }
+            }
+        }
+    }
+    lpre.len() > cpre.len()
+}
+
+/// 解析 `pnpm view <pkg> version --json` 的输出。
+///
+/// 正常输出是 JSON 字符串（`"0.5.2"`），也可能被 dsh 的告警行包住；
+/// 因此先按 JSON 字符串解析，失败时取最后一条像版本号的行。
+pub fn parse_view_version(text: &str) -> Option<String> {
+    let trimmed = text.trim();
+    if let Ok(serde_json::Value::String(v)) = serde_json::from_str::<serde_json::Value>(trimmed) {
+        let v = v.trim().to_string();
+        if !v.is_empty() {
+            return Some(v);
+        }
+    }
+    for line in trimmed.lines().rev() {
+        let s = line.trim().trim_matches('"').trim();
+        if s.is_empty() || s.contains(' ') || s.contains(':') {
+            continue;
+        }
+        let first = s.chars().next().unwrap_or_default();
+        if first.is_ascii_digit()
+            && s.chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '+'))
+        {
+            return Some(s.to_string());
+        }
+    }
+    None
+}
+
 /// 校验 profile 名（dsh 会用它作目录名）：字母/数字/`.`/`-`/`_`，且不能以 `-` 开头。
 pub fn validate_profile_name(name: &str) -> Result<(), String> {
     let s = name.trim();
@@ -1403,6 +1482,28 @@ mod tests {
             Some("pkg@1.2.3")
         );
         assert_eq!(rollback_add_spec("pkg", None, ""), None);
+    }
+
+    #[test]
+    fn version_is_newer_handles_semver_and_prerelease() {
+        assert!(version_is_newer("0.5.1", "0.5.2"));
+        assert!(version_is_newer("1.9.58", "1.9.61"));
+        assert!(!version_is_newer("0.0.1-rc.5", "0.0.1-rc.1"));
+        assert!(version_is_newer("0.0.1-rc.1", "0.0.1-rc.5"));
+        assert!(version_is_newer("0.0.1-rc.1", "0.0.1"));
+        assert!(!version_is_newer("0.0.1", "0.0.1-rc.1"));
+        assert!(!version_is_newer("not-semver", "1.0.0"));
+    }
+
+    #[test]
+    fn parse_view_version_handles_json_and_wrapped_output() {
+        assert_eq!(parse_view_version("\"0.5.2\"").as_deref(), Some("0.5.2"));
+        assert_eq!(
+            parse_view_version("dsh: warning: something\n0.5.2\n").as_deref(),
+            Some("0.5.2")
+        );
+        assert_eq!(parse_view_version(""), None);
+        assert_eq!(parse_view_version("not-a-version"), None);
     }
 
     #[test]

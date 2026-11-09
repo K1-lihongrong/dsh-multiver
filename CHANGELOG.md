@@ -22,12 +22,13 @@
 - 单插件更新改为 `remove → add → verify` 事务；add 或校验失败时按原依赖 spec 回滚。
 - 回滚失败返回原错误、回滚错误与人工恢复线索，不再让插件静默停留在已卸载状态。
 - 前端新增「全部更新」按钮、批量进度、成功/失败汇总；官方随附 bundle 不参与批量更新。
+- 检查更新改为 `pnpm outdated` + 非官方插件逐项 `pnpm view <pkg> version` 兜底，修复 hoisted profile 漏报 `dsh-ops 0.5.1 -> 0.5.2`；用 semver 比较过滤官方随附包的 prerelease 误报。
 - 安装失败输出中出现不兼容插件时，界面解析出包版本 + DSH 版本，一键调用官方 `dsh plugin allow-version ... --accept-risk` 后重试；profile 信息区可查看/撤销已有精确版本豁免。
 - 单插件「更新」也复用事务命令，不再走前端裸 remove+add。
 
 ### 验证
 
-- Rust 单测 **223 passed / 1 ignored**
+- Rust 单测 **225 passed / 1 ignored**
 - E2E **61 passed**
 - i18n 5 语 × 383 key
 - `cargo fmt --check`、`cargo clippy -D warnings`、`pnpm build`、`pnpm tauri build --no-bundle` 通过
