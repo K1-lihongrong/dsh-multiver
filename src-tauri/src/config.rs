@@ -97,7 +97,7 @@ impl Default for Config {
 }
 
 /// 维护相关配置与状态。
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, specta::Type)]
 pub struct MaintenanceConfig {
     /// 是否启用启动时自动维护（默认开）。
     pub auto_enabled: bool,

@@ -2,7 +2,7 @@ use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
-#[derive(Debug, Clone, Serialize, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Serialize, PartialEq, Eq, Default, specta::Type)]
 pub struct HealthSummary {
     pub scanned: usize,
     pub stale: usize,
@@ -10,7 +10,7 @@ pub struct HealthSummary {
     pub duplicate: usize,
 }
 
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, PartialEq, Eq, specta::Type)]
 pub struct HealthIssue {
     pub kind: String,
     pub package: String,
@@ -19,7 +19,7 @@ pub struct HealthIssue {
     pub detail: String,
 }
 
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, PartialEq, Eq, specta::Type)]
 pub struct SharedHomeHealth {
     pub home: String,
     pub current_version: String,

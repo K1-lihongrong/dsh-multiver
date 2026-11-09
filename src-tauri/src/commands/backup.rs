@@ -4,6 +4,7 @@ use super::*;
 
 /// 导入预览：读备份文件，返回将改动的字段（不应用）。
 #[tauri::command]
+#[specta::specta]
 pub(crate) fn preview_import(
     app: tauri::AppHandle,
     file: String,
@@ -16,6 +17,7 @@ pub(crate) fn preview_import(
 
 /// 应用导入：把备份文件的配置字段写入当前配置。
 #[tauri::command]
+#[specta::specta]
 pub(crate) fn apply_import(app: tauri::AppHandle, file: String) -> Result<Vec<String>, String> {
     let mdir = manager_dir(&app);
     let mut cfg = Config::load(&mdir);
@@ -29,6 +31,7 @@ pub(crate) fn apply_import(app: tauri::AppHandle, file: String) -> Result<Vec<St
 
 /// 导出配置 + 版本清单到指定文件。返回写入路径。
 #[tauri::command]
+#[specta::specta]
 pub(crate) fn export_backup(app: tauri::AppHandle, file: String) -> Result<String, String> {
     let mdir = manager_dir(&app);
     let cfg = Config::load(&mdir);

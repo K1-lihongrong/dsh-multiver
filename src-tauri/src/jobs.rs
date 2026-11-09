@@ -3,7 +3,7 @@ use std::collections::VecDeque;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, PartialEq, Eq, specta::Type)]
 pub struct JobSnapshot {
     pub id: String,
     pub kind: String,

@@ -46,7 +46,7 @@ pub fn bundled_pnpm_ok(root: &Path) -> bool {
 }
 
 /// 运行时状态：当前环境缺什么。
-#[derive(Debug, Clone, Default, serde::Serialize)]
+#[derive(Debug, Clone, Default, serde::Serialize, specta::Type)]
 pub struct RuntimeStatus {
     /// 系统 Node 是否满足 dsh 要求
     pub system_node_ok: bool,

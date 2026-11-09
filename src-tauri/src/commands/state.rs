@@ -3,7 +3,7 @@
 use super::*;
 
 /// 「路径设置」里额外展示的目录项（默认收起，点"展开"才显示）。
-#[derive(Serialize)]
+#[derive(Serialize, specta::Type)]
 pub(crate) struct ExtraDir {
     /// 目录名（同时是 open_dir 的 which 值）
     name: String,
@@ -14,7 +14,7 @@ pub(crate) struct ExtraDir {
 }
 
 /// 一次返回给前端的完整状态
-#[derive(Serialize)]
+#[derive(Serialize, specta::Type)]
 pub(crate) struct AppState {
     /// 管理器自身版本号（来自 Cargo.toml）
     version: String,
@@ -43,6 +43,7 @@ pub(crate) struct AppState {
 }
 
 #[tauri::command]
+#[specta::specta]
 pub(crate) fn get_state(app: tauri::AppHandle) -> AppState {
     let mdir = manager_dir(&app);
     let cfg = Config::load(&mdir);
@@ -100,6 +101,7 @@ pub(crate) fn get_state(app: tauri::AppHandle) -> AppState {
 }
 
 #[tauri::command]
+#[specta::specta]
 pub(crate) fn set_isolated(
     app: tauri::AppHandle,
     version: String,

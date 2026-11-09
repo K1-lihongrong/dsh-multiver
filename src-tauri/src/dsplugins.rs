@@ -18,7 +18,7 @@ use std::time::{Duration, Instant};
 pub const PLUGIN_TIMEOUT: Duration = Duration::from_secs(300);
 
 /// 一个 profile 下的插件信息（从 profiles/<name>/package.json 的 dependencies 读）。
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, specta::Type)]
 pub struct DsPlugin {
     pub name: String,
     pub version: String,
@@ -38,7 +38,7 @@ pub struct DsPlugin {
 }
 
 /// 一个 profile（dsh 的插件集合）。
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, specta::Type)]
 pub struct DsProfile {
     pub name: String,
     pub path: String,
@@ -46,7 +46,7 @@ pub struct DsProfile {
 }
 
 /// 插件列表 + 当前 DSH_HOME 信息（让用户明确插件装在哪）。
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, specta::Type)]
 pub struct DsPluginList {
     /// 实际使用的 DSH_HOME 路径
     pub dsh_home: String,
@@ -591,7 +591,7 @@ pub fn validate_registry_url(url: &str) -> Result<(), String> {
 }
 
 /// 一条「有新版本」信息（pnpm outdated --json 的解析结果）。
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, specta::Type)]
 pub struct DsUpdate {
     pub name: String,
     pub current: String,
@@ -674,7 +674,7 @@ pub fn rollback_add_spec(
 }
 
 /// 前端提交的单个更新目标。只信任包名与目标版本，原版本/原 spec 由后端现场读取。
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, specta::Type)]
 pub struct PluginUpdateTarget {
     pub name: String,
     pub latest: String,
@@ -697,7 +697,7 @@ pub enum PluginUpdateStep {
     Rollback,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, specta::Type)]
 #[serde(rename_all = "snake_case")]
 pub enum PluginUpdateStatus {
     Updated,
@@ -706,7 +706,7 @@ pub enum PluginUpdateStatus {
     Failed,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, specta::Type)]
 pub struct PluginUpdateResult {
     pub name: String,
     pub current: String,

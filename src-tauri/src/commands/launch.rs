@@ -359,6 +359,7 @@ pub(crate) async fn launch_window(
 }
 
 #[tauri::command]
+#[specta::specta]
 pub(crate) async fn run_version(
     app: tauri::AppHandle,
     ctx: tauri::State<'_, crate::AppCtx>,
@@ -368,6 +369,7 @@ pub(crate) async fn run_version(
 }
 
 #[tauri::command]
+#[specta::specta]
 pub(crate) fn create_shortcut(app: tauri::AppHandle, version: String) -> Result<String, String> {
     let mdir = manager_dir(&app);
     let cfg = Config::load(&mdir);
@@ -384,7 +386,7 @@ pub(crate) fn create_shortcut(app: tauri::AppHandle, version: String) -> Result<
 /// home 与「运行」一致：非隔离用共享 home，隔离用独立 home。
 ///
 /// 交互：
-#[derive(serde::Serialize)]
+#[derive(serde::Serialize, specta::Type)]
 pub(crate) struct OpenInBrowserResult {
     pub url: Option<String>,
     pub opened: bool,
@@ -394,6 +396,7 @@ pub(crate) struct OpenInBrowserResult {
 /// - 若该版本已有内嵌窗口（ProcMap 中存在 dsh-<版本>），先弹原生对话框确认「再开一个？」
 /// - 端口固定 3080；若被占用，弹原生对话框让用户选择「换随机端口」或「取消」
 #[tauri::command]
+#[specta::specta]
 pub(crate) async fn open_in_browser(
     app: tauri::AppHandle,
     ctx: tauri::State<'_, crate::AppCtx>,
@@ -486,6 +489,7 @@ pub(crate) async fn open_in_browser(
 /// 重启某版本窗口对应的 dsh web 进程：
 /// kill 旧进程 → 用同版本起新进程（端口重分配）→ 窗口导航到新 URL。
 #[tauri::command]
+#[specta::specta]
 pub(crate) async fn restart_version(
     app: tauri::AppHandle,
     ctx: tauri::State<'_, crate::AppCtx>,
@@ -620,6 +624,7 @@ pub(crate) fn build_topbar_script(version: &str, url: &str, token: &str) -> Stri
 /// v0.2.14：供前端查询是否处于"启动模式"（命令行带 --launch-version）。
 /// 前端 onMounted 主动查，比事件可靠（setup emit 时前端可能还没监听）。
 #[tauri::command]
+#[specta::specta]
 pub(crate) fn get_launch_mode(ctx: tauri::State<'_, crate::AppCtx>) -> Option<String> {
     ctx.lock_intent().mode.clone()
 }
@@ -630,6 +635,7 @@ pub(crate) fn get_launch_mode(ctx: tauri::State<'_, crate::AppCtx>) -> Option<St
 /// 有错误则直接进错误态，不依赖 `launch-progress` 事件（那条在单实例转发路径里
 /// 可能早于前端监听而丢失）。
 #[tauri::command]
+#[specta::specta]
 pub(crate) fn get_launch_error(ctx: tauri::State<'_, crate::AppCtx>) -> Option<String> {
     ctx.lock_intent().error.clone()
 }
@@ -639,6 +645,7 @@ pub(crate) fn get_launch_error(ctx: tauri::State<'_, crate::AppCtx>) -> Option<S
 /// 与 `get_launch_mode` 同样在首帧查询——setup 阶段 emit 的事件可能早于前端监听。
 /// 用「取走」而非「读取」：同一次启动只应滚动一次，重复挂载不应重复跳转。
 #[tauri::command]
+#[specta::specta]
 pub(crate) fn take_open_settings(ctx: tauri::State<'_, crate::AppCtx>) -> Option<String> {
     ctx.lock_intent().open_settings.take()
 }
@@ -646,6 +653,7 @@ pub(crate) fn take_open_settings(ctx: tauri::State<'_, crate::AppCtx>) -> Option
 /// v0.2.14：前端渲染出"启动态"后调用，显示主窗口。
 /// （启动模式下 setup 里先 hide 主窗口，避免闪现主界面；前端就绪后由此命令 show。）
 #[tauri::command]
+#[specta::specta]
 pub(crate) fn show_main_window(app: tauri::AppHandle) {
     use tauri::Manager;
     if let Some(main) = app.get_webview_window("main") {
@@ -656,6 +664,7 @@ pub(crate) fn show_main_window(app: tauri::AppHandle) {
 /// v0.2.14：查询某版本是否已有内嵌窗口在开。
 /// 前端 run() 先查——已开则直接聚焦（不进启动态），避免"杀掉重开"的误导。
 #[tauri::command]
+#[specta::specta]
 pub(crate) fn is_version_open(ctx: tauri::State<'_, crate::AppCtx>, version: String) -> bool {
     VersionId::new(version)
         .map(|v| lock_procs(&ctx.procs).contains_key(&ProcKey::Shared(v)))
@@ -667,6 +676,7 @@ pub(crate) fn is_version_open(ctx: tauri::State<'_, crate::AppCtx>, version: Str
 /// 只覆盖 embedded 窗口——基于内存 ProcMap。console 启动与终端 dsh
 /// 没有进程内记录，不在本命令范围（已知限制，见 M3b 交接单）。
 #[tauri::command]
+#[specta::specta]
 pub(crate) fn list_running_versions(ctx: tauri::State<'_, crate::AppCtx>) -> Vec<String> {
     let mut out: Vec<String> = lock_procs(&ctx.procs)
         .keys()

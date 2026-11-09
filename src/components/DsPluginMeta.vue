@@ -1,6 +1,6 @@
 <script setup>
 import { computed } from "vue";
-import { invoke } from "@tauri-apps/api/core";
+import { dsExemptionAction, dsApproveBuilds } from "../api/plugins.js";
 import { t } from "../composables/useI18n.js";
 import { useToast } from "../composables/useToast.js";
 
@@ -32,13 +32,7 @@ const exemptionItems = computed(() => {
 
 async function revokeExemption(item) {
   try {
-    await invoke("ds_exemption_action", {
-      version: props.version,
-      profile: props.profile,
-      action: "revoke",
-      package_version: item.pkgVersion,
-      dsh_version: item.dshVersion,
-    });
+    await dsExemptionAction(props.version, props.profile, "revoke", item.pkgVersion, item.dshVersion);
     notify(t("dsplugins.exemptionRevoked", { p: item.pkgVersion, v: item.dshVersion }));
     emit("refresh");
   } catch (e) {
@@ -51,11 +45,7 @@ async function approveBuilds() {
   const pkgs = props.profileInfo.pending_builds || [];
   if (!pkgs.length) return;
   try {
-    const left = await invoke("ds_approve_builds", {
-      version: props.version,
-      profile: props.profile,
-      packages: pkgs,
-    });
+    const left = await dsApproveBuilds(props.version, props.profile, pkgs);
     props.profileInfo.pending_builds = left || [];
     notify(t("dsplugins.buildsApproved", { n: pkgs.length }));
     emit("approved");

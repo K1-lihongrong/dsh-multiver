@@ -1,6 +1,6 @@
 <script setup>
 import { ref, computed, watch, onMounted, onUnmounted, provide, nextTick } from "vue";
-import { invoke } from "@tauri-apps/api/core";
+import { dsProfileInfo, dsListPlugins, dsOpenPluginLogs, dsInitProfile, dsOpenProfileDir } from "../api/plugins.js";
 import { listen } from "@tauri-apps/api/event";
 import { t } from "../composables/useI18n.js";
 import { useToast } from "../composables/useToast.js";
@@ -73,10 +73,7 @@ async function refreshInfo() {
     return;
   }
   try {
-    const info = await invoke("ds_profile_info", {
-      version: props.version,
-      profile: activeProfile.value,
-    });
+    const info = await dsProfileInfo(props.version, activeProfile.value);
     profileInfo.value = {
       runtime_version: info?.runtime_version || null,
       exemptions: info?.exemptions || {},
@@ -91,7 +88,7 @@ async function refreshInfo() {
 async function load() {
   loading.value = true;
   try {
-    const res = await invoke("ds_list_plugins", { version: props.version });
+    const res = await dsListPlugins(props.version);
     profiles.value = res?.profiles || [];
     dshHome.value = res?.dsh_home || "";
     homeKind.value = res?.home_kind || "shared";
@@ -148,7 +145,7 @@ async function retryLastAction() {
 
 async function openLogs() {
   try {
-    await invoke("ds_open_plugin_logs", { version: props.version, profile: activeProfile.value });
+    await dsOpenPluginLogs(props.version, activeProfile.value);
   } catch (e) {
     notify("" + e);
   }
@@ -161,7 +158,7 @@ async function initProfile() {
   initializing.value = true;
   logLines.value = [];
   try {
-    await invoke("ds_init_profile", { version: props.version, profile: name });
+    await dsInitProfile(props.version, name);
     notify(t("dsplugins.initDone", { p: name }));
     if (logLines.value.length) showLog.value = true;
     activeProfile.value = name;
@@ -176,7 +173,7 @@ async function initProfile() {
 
 async function openDir() {
   try {
-    await invoke("ds_open_profile_dir", { version: props.version, profile: activeProfile.value });
+    await dsOpenProfileDir(props.version, activeProfile.value);
   } catch (e) {
     notify("" + e);
   }

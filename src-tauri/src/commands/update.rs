@@ -3,6 +3,7 @@
 use super::*;
 
 #[tauri::command]
+#[specta::specta]
 pub(crate) async fn check_update() -> crate::updater::UpdateInfo {
     tauri::async_runtime::spawn_blocking(crate::updater::check)
         .await
@@ -19,6 +20,7 @@ pub(crate) async fn check_update() -> crate::updater::UpdateInfo {
 
 /// 请求管理器退出（供一键更新用：替换批处理需主进程退出后才能覆盖 exe）。
 #[tauri::command]
+#[specta::specta]
 pub(crate) fn exit_app(app: tauri::AppHandle) {
     app.exit(0);
 }
@@ -28,6 +30,7 @@ pub(crate) fn exit_app(app: tauri::AppHandle) {
 ///
 /// 返回成功消息（含新版本号）。失败时返回 Err（不触碰原 exe）。
 #[tauri::command]
+#[specta::specta]
 pub(crate) async fn perform_update(
     app: tauri::AppHandle,
     url: String,

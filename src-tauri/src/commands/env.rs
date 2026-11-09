@@ -3,6 +3,7 @@
 use super::*;
 
 #[tauri::command]
+#[specta::specta]
 pub(crate) fn check_env(app: tauri::AppHandle, full: Option<bool>) -> Vec<envcheck::CheckItem> {
     let mdir = manager_dir(&app);
     let cfg = Config::load(&mdir);
@@ -15,6 +16,7 @@ pub(crate) fn check_env(app: tauri::AppHandle, full: Option<bool>) -> Vec<envche
 
 /// 运行时状态：系统/便携的 Node、pnpm 是否就绪（供前端判断是否显示"自动准备"按钮）。
 #[tauri::command]
+#[specta::specta]
 pub(crate) fn runtime_status(app: tauri::AppHandle) -> runtime::RuntimeStatus {
     let mdir = manager_dir(&app);
     let cfg = Config::load(&mdir);
@@ -33,6 +35,7 @@ pub(crate) fn runtime_status(app: tauri::AppHandle) -> runtime::RuntimeStatus {
 /// 阻塞式下载放在后台线程池，进度经 "runtime-progress" 事件推给前端（GUI 进度条）。
 /// 返回结果消息（成功/已就绪）。
 #[tauri::command]
+#[specta::specta]
 pub(crate) async fn setup_runtime(app: tauri::AppHandle) -> Result<String, String> {
     if !cfg!(windows) {
         return Err(
@@ -76,6 +79,7 @@ pub(crate) async fn setup_runtime(app: tauri::AppHandle) -> Result<String, Strin
 /// 用户忽略「缺少运行时」的启动提示（v0.2.9）：记住选择，不再自动弹横幅。
 /// 用户仍可从环境检查面板手动准备运行时。
 #[tauri::command]
+#[specta::specta]
 pub(crate) fn dismiss_runtime_prompt(app: tauri::AppHandle) -> Result<String, String> {
     let mdir = manager_dir(&app);
     let mut cfg = Config::load(&mdir);

@@ -3,6 +3,7 @@
 use super::*;
 
 #[tauri::command]
+#[specta::specta]
 pub(crate) fn set_root(
     app: tauri::AppHandle,
     ctx: tauri::State<'_, crate::AppCtx>,
@@ -51,6 +52,7 @@ pub(crate) fn set_root(
 /// 开启后，非隔离版本的 DSH_HOME 指向官方默认目录，用户已有的会话/凭据/插件立即可用；
 /// 隔离版本不受影响。切换后重生成转发脚本，保证 GUI 与终端行为一致。
 #[tauri::command]
+#[specta::specta]
 pub(crate) fn set_use_official_home(
     app: tauri::AppHandle,
     enabled: bool,
@@ -74,6 +76,7 @@ pub(crate) fn set_use_official_home(
 
 /// 查询官方 dsh 配置目录路径（供前端展示/判断是否存在）。
 #[tauri::command]
+#[specta::specta]
 pub(crate) fn get_official_home() -> Option<String> {
     crate::paths::official_dsh_home().map(|p| p.to_string_lossy().to_string())
 }

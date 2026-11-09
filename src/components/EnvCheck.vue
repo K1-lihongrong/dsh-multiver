@@ -1,6 +1,6 @@
 <script setup>
 import { ref, onMounted, onUnmounted } from "vue";
-import { invoke } from "@tauri-apps/api/core";
+import { checkEnv, runtimeStatus, setupRuntime } from "../api/env.js";
 import { listen } from "@tauri-apps/api/event";
 import { t } from "../composables/useI18n.js";
 
@@ -43,8 +43,8 @@ function needsSystemRuntime() {
 async function run(full = true) {
   loading.value = true;
   try {
-    checks.value = await invoke("check_env", { full });
-    rtStatus.value = await invoke("runtime_status");
+    checks.value = await checkEnv(full);
+    rtStatus.value = await runtimeStatus();
     // 把运行时状态交给父组件（避免父组件再单独调一次 runtime_status）
     emit("runtime-status", rtStatus.value);
     checked.value = true;
@@ -65,7 +65,7 @@ async function prepareRuntime() {
   progDone.value = 0;
   progTotal.value = null;
   try {
-    await invoke("setup_runtime");
+    await setupRuntime();
     emit("error", t("env.runtimeReady"));
     await run();
   } catch (e) {

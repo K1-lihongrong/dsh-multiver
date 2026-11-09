@@ -1,5 +1,6 @@
 mod actions;
 mod backup;
+mod bindings;
 mod catalog;
 mod cli;
 mod commands;
@@ -35,6 +36,13 @@ use std::path::PathBuf;
 use std::process::Child;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
+
+/// A2-8: 生成 TypeScript bindings 的稳定入口。
+/// 由 `cargo run --bin generate_bindings -- ../src/api/bindings.ts` 调用；
+/// 生成物入库，`scripts/check-commands.mjs` 负责一致性校验。
+pub fn generate_bindings(path: &str) -> Result<(), String> {
+    bindings::export(path)
+}
 
 /// 「版本号 → (窗口 label, 代次, dsh 子进程, Job 持有句柄)」映射。
 /// - label 唯一化（带代次），避免 "a webview with label ... already exists"；
@@ -306,6 +314,8 @@ pub fn run() {
 
     let ctx_setup = ctx.clone();
     let ctx_run = ctx.clone();
+    // A2-8: 同一份命令清单同时用于运行时 invoke handler 与 TS bindings 生成。
+    let specta_builder = bindings::builder();
     tauri::Builder::default()
         // M2m：单实例锁必须是第一个注册的 plugin（Tauri 要求）。
         // 回调在第二实例被检测到时于已运行实例内执行：
@@ -508,67 +518,7 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .manage(ctx.clone())
-        .invoke_handler(tauri::generate_handler![
-            commands::get_state,
-            commands::list_installed,
-            commands::list_remote,
-            commands::install_version,
-            commands::clear_broken,
-            commands::uninstall_version,
-            commands::set_default,
-            commands::run_version,
-            commands::open_in_browser,
-            commands::create_shortcut,
-            commands::restart_version,
-            commands::set_root,
-            commands::open_dir,
-            commands::open_url,
-            commands::check_env,
-            commands::runtime_status,
-            commands::setup_runtime,
-            commands::dismiss_runtime_prompt,
-            commands::set_isolated,
-            commands::set_use_official_home,
-            commands::get_official_home,
-            commands::scan_versions,
-            commands::cancel_scan,
-            commands::run_maintenance,
-            commands::set_auto_maintenance,
-            commands::scan_isolated_size,
-            commands::copy_shared_to_isolated,
-            commands::clear_isolated_data,
-            commands::open_isolated_dir,
-            commands::log_frontend,
-            commands::check_update,
-            commands::perform_update,
-            commands::exit_app,
-            commands::export_backup,
-            commands::preview_import,
-            commands::apply_import,
-            commands::get_launch_mode,
-            commands::get_launch_error,
-            commands::take_open_settings,
-            commands::show_main_window,
-            commands::is_version_open,
-            commands::list_running_versions,
-            commands::ds_list_plugins,
-            commands::ds_plugin_action,
-            commands::ds_plugin_update_batch,
-            commands::ds_init_profile,
-            commands::ds_open_profile_dir,
-            commands::ds_profile_info,
-            commands::ds_exemption_action,
-            commands::ds_approve_builds,
-            commands::ds_open_plugin_logs,
-            commands::ds_check_updates,
-            commands::ds_shared_home_health,
-            commands::ds_classify_plugin_failure,
-            commands::list_jobs,
-            commands::ds_inspect_spec,
-            commands::ds_probe_registries,
-            commands::ds_plugin_catalog,
-            commands::ds_plugin_catalog_check,
-        ])
+        .invoke_handler(specta_builder.invoke_handler())
         .setup(move |app| {
             use tauri::Manager;
             // 窗口就绪打点：进程启动 → 此处（含 WebView2 初始化 + 窗口创建）
