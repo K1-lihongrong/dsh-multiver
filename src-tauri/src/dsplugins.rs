@@ -123,7 +123,7 @@ fn read_profile(name: &str, path: &Path, official: &[String]) -> DsProfile {
                     let (version, spec) = match (&installed, &declared) {
                         (Some(actual), Some(d)) if actual != d => (actual.clone(), Some(d.clone())),
                         (Some(actual), _) => (actual.clone(), None),
-                        (None, Some(d)) => (d.clone(), None),
+                        (None, Some(d)) => (String::new(), Some(d.clone())),
                         (None, None) => (String::new(), None),
                     };
                     seen.insert(k.clone());
@@ -1063,6 +1063,27 @@ mod tests {
             profiles_dir(Path::new("H")),
             PathBuf::from("H").join("profiles")
         );
+    }
+
+    #[test]
+    fn missing_installed_dependency_keeps_spec_but_not_fake_version() {
+        let base = std::env::temp_dir().join(format!("dsplug-missing-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).unwrap();
+        std::fs::write(
+            base.join("package.json"),
+            r#"{"name":"p","dependencies":{"missing-plugin":"^1.2.3"}}"#,
+        )
+        .unwrap();
+        let p = read_profile("web", &base, &[]);
+        let plugin = p
+            .plugins
+            .iter()
+            .find(|x| x.name == "missing-plugin")
+            .unwrap();
+        assert_eq!(plugin.version, "");
+        assert_eq!(plugin.spec.as_deref(), Some("^1.2.3"));
+        let _ = std::fs::remove_dir_all(&base);
     }
 
     #[test]

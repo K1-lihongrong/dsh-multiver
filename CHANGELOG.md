@@ -7,7 +7,7 @@
 
 ---
 
-## [0.4.0-alpha.1] - 2026-11-09（开发中）
+## [0.4.0-alpha.1] - 2026-11-09
 
 ### 类型与状态收口
 
@@ -30,7 +30,7 @@
 
 ### 验证
 
-- Rust 单测 **226 passed / 1 ignored**
+- Rust 单测 **227 passed / 1 ignored**
 - E2E **61 passed**
 - i18n 5 语 × 386 key
 - `cargo fmt --check`、`cargo clippy -D warnings`、`pnpm build`、`pnpm tauri build --no-bundle` 通过
