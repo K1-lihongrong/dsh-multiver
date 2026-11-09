@@ -3,7 +3,7 @@ import { ref, computed, inject, watch } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import { t } from "../composables/useI18n.js";
 import { useToast } from "../composables/useToast.js";
-import { actionErrorText } from "../composables/useDsPluginErrors.js";
+import { actionErrorText, parseIncompatiblePlugins } from "../composables/useDsPluginErrors.js";
 import { DS_PLUGIN_LOG_KEY } from "../composables/useDsPluginLog.js";
 
 // 官方风格安装对话框：form → checking → confirm → installing → done/failed。
@@ -29,6 +29,7 @@ const installing = ref(false);
 const installPhase = ref("form");
 const installResult = ref(null);
 const installError = ref("");
+const incompatible = ref([]);
 const inspectInfo = ref(null);
 const inspectFailed = ref(false);
 const registryProbed = ref(false);
@@ -62,6 +63,7 @@ async function open(prefill) {
   installPhase.value = "form";
   installResult.value = null;
   installError.value = "";
+  incompatible.value = [];
   inspectInfo.value = null;
   inspectFailed.value = false;
   registryProbed.value = false;
@@ -140,6 +142,35 @@ function retryInstall() {
   }
 }
 
+function exemptionCommand(item) {
+  return (
+    "dsh plugin --profile " + props.profile + " allow-version " +
+    item.packageVersion + " --dsh-version " + item.dshVersion + " --accept-risk"
+  );
+}
+
+async function allowIncompatibleAndRetry(onlyItem) {
+  const items = onlyItem ? [onlyItem] : incompatible.value.slice();
+  if (!items.length) return;
+  try {
+    for (const item of items) {
+      await invoke("ds_exemption_action", {
+        version: props.version,
+        profile: props.profile,
+        action: "allow",
+        package_version: item.packageVersion,
+        dsh_version: item.dshVersion,
+      });
+    }
+    notify(t("dsplugins.exemptionAllowed", { n: items.length }));
+    emit("refresh-info");
+    incompatible.value = incompatible.value.filter((x) => !items.includes(x));
+    await confirmInstall();
+  } catch (e) {
+    notify("" + e);
+  }
+}
+
 // 失败界面内直接允许 pnpm 拦截的构建脚本并重试安装（对齐官方）
 async function approveAndRetryInstall() {
   const pkgs = props.profileInfo.pending_builds || [];
@@ -185,6 +216,7 @@ async function confirmInstall() {
     emit("refresh-info");
   } catch (e) {
     installError.value = actionErrorText(e);
+    incompatible.value = parseIncompatiblePlugins(installError.value + "\n" + logLines.value.join("\n"));
     installPhase.value = "failed";
     emit("refresh-info");
   } finally {
@@ -325,6 +357,20 @@ defineExpose({ open });
           <code class="dp-meta-code">{{ profileInfo.pending_builds.join(", ") }}</code>
           <button class="dp-btn dp-btn-primary dp-btn-sm" @click="approveAndRetryInstall">
             {{ t("dsplugins.approveRetry") }}
+          </button>
+        </div>
+        <div class="dp-incompatible" v-if="incompatible.length">
+          <div class="dp-meta-label">{{ t("dsplugins.incompatibleFound", { n: incompatible.length }) }}</div>
+          <div class="dp-incompatible-row" v-for="item in incompatible" :key="item.packageVersion + item.dshVersion">
+            <code class="dp-meta-code">{{ item.packageVersion }} · DSH {{ item.dshVersion }}</code>
+            <button class="dp-btn dp-btn-sm" @click="allowIncompatibleAndRetry(item)">
+              {{ t("dsplugins.allowExactVersion") }}
+            </button>
+          </div>
+          <div class="dp-modal-hint">{{ t("dsplugins.exemptionCommand") }}</div>
+          <code class="dp-meta-code">{{ exemptionCommand(incompatible[0]) }}</code>
+          <button class="dp-btn dp-btn-primary dp-btn-sm" @click="allowIncompatibleAndRetry()">
+            {{ t("dsplugins.allowExactVersionsRetry", { n: incompatible.length }) }}
           </button>
         </div>
         <div class="dp-modal-actions">

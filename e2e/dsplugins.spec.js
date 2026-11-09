@@ -363,6 +363,37 @@ test("批量更新 → 一次提交全部目标并回显失败回滚", async ({ 
   await expect(page.locator(".dp-log-body")).toContainText("已回滚到 1.0.0");
 });
 
+test("安装遇到不兼容 → 一键精确版本豁免并重试", async ({ page }) => {
+  const exemptions = [];
+  await page.exposeFunction("__recordExemption", (x) => exemptions.push(x));
+  await mockTauri(page, {
+    installed: [makeVersion("0.2.0-rc.1", { isolated: true })],
+    extra: {
+      ds_list_plugins: { dsh_home: "D:/dsh", home_kind: "shared", profiles: [PROFILE] },
+      ds_plugin_action:
+        "() => { window.__attempt = (window.__attempt || 0) + 1; if (window.__attempt === 1) return Promise.reject('Plugin @deepseek-ai/test-plugin@1.0.0 is incompatible with dsh 0.2.2-rc.1: requirements {}'); return Promise.resolve('ok'); }",
+      ds_exemption_action:
+        "(args) => { window.__recordExemption(args); return Promise.resolve('dsh: allowed'); }",
+    },
+  });
+  await page.goto("/");
+  await page.getByRole("button", { name: "插件", exact: true }).click();
+  await page.getByRole("button", { name: /添加插件/ }).click();
+  await page.locator(".dp-modal-input").first().fill("@deepseek-ai/test-plugin");
+  await page.locator(".dp-modal").getByRole("button", { name: "安装", exact: true }).click();
+  await page.locator(".dp-modal").getByRole("button", { name: "确认安装", exact: true }).click();
+  await expect(page.locator(".dp-incompatible")).toContainText("精确版本");
+  await page.getByRole("button", { name: /允许全部 1 个并重试/ }).click();
+  await page.waitForTimeout(700);
+  expect(exemptions).toHaveLength(1);
+  expect(exemptions[0]).toMatchObject({
+    action: "allow",
+    package_version: "@deepseek-ai/test-plugin@1.0.0",
+    dsh_version: "0.2.2-rc.1",
+  });
+  await expect(page.locator(".dp-done-title")).toContainText("安装完成");
+});
+
 test("安装前 inspect 拒绝非组合包（B1-16）", async ({ page }) => {
   const calls = [];
   await page.exposeFunction("__recordInspectInstall", (x) => calls.push(x));

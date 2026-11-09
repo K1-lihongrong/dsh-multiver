@@ -322,6 +322,7 @@ onUnmounted(() => {
         :profile-info="profileInfo"
         :busy="busy"
         @approved="retryLastAction"
+        @refresh="refreshInfo"
       />
     </template>
 
