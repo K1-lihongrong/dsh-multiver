@@ -65,6 +65,9 @@ const filteredPlugins = computed(() => {
 
 // 可更新插件（包名 → 最新版本信息）
 const updates = ref({});
+const checkingUpdates = ref(false);
+const checkElapsed = ref(0);
+let checkTimer = null;
 const batchRunning = ref(false);
 const batchProgress = ref(null);
 let unlistenBatch = null;
@@ -97,6 +100,12 @@ function phaseText(phase) {
 async function checkUpdates() {
   if (!props.profile) return;
   emit("update:busy", true);
+  checkingUpdates.value = true;
+  checkElapsed.value = 0;
+  clearInterval(checkTimer);
+  checkTimer = setInterval(() => {
+    checkElapsed.value += 1;
+  }, 1000);
   try {
     const list = await withTimeout(
       invoke("ds_check_updates", {
@@ -113,6 +122,9 @@ async function checkUpdates() {
   } catch (e) {
     notify("" + e);
   } finally {
+    clearInterval(checkTimer);
+    checkTimer = null;
+    checkingUpdates.value = false;
     emit("update:busy", false);
   }
 }
@@ -291,6 +303,8 @@ onMounted(async () => {
 
 onUnmounted(() => {
   if (unlistenBatch) unlistenBatch();
+  clearInterval(checkTimer);
+  checkTimer = null;
   stopPending();
 });
 
@@ -320,6 +334,13 @@ defineExpose({ checkUpdates, updateAll, runAction });
       >
         {{ t("dsplugins.updateAll") }} ({{ updateCount }})
       </button>
+    </div>
+    <div v-if="checkingUpdates" class="dp-check-progress">
+      <div class="dp-check-progress-label">
+        <span class="dp-spinner dp-check-spinner"></span>
+        <span>{{ t("dsplugins.checkingUpdates", { s: checkElapsed }) }}</span>
+      </div>
+      <div class="dp-check-bar"><span class="dp-check-bar-fill"></span></div>
     </div>
     <div v-if="batchProgress" class="dp-batch-progress">
       {{ t("dsplugins.updateAllRunning", { i: batchProgress.i, n: batchProgress.n, p: batchProgress.name }) }}

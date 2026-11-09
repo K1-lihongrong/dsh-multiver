@@ -341,6 +341,7 @@ export default {
     "dsplugins.update": "更新",
     "dsplugins.updateAll": "すべて更新",
     "dsplugins.updateFailed": "{p} の更新に失敗しました",
+    "dsplugins.checkingUpdates": "更新を確認中… {s}s",
     "dsplugins.checkTimeout": "更新確認がタイムアウトしました。ネットワークまたは dsh ログを確認して再試行してください。",
     "dsplugins.operationTimeout": "プラグイン操作がタイムアウトしました。ボタンは復元されました。ネットワークまたはログを確認して再試行してください。",
     "dsplugins.existingExemptions": "既存の正確なバージョン豁免（{n}）",

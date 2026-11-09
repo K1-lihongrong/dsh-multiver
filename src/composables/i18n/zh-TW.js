@@ -341,6 +341,7 @@ export default {
     "dsplugins.update": "更新",
     "dsplugins.updateAll": "全部更新",
     "dsplugins.updateFailed": "更新 {p} 失敗",
+    "dsplugins.checkingUpdates": "正在檢查更新… {s}s",
     "dsplugins.checkTimeout": "檢查更新逾時，請檢查網路或 dsh 日誌後重試",
     "dsplugins.operationTimeout": "外掛操作逾時，已恢復按鈕；請檢查網路或日誌後重試",
     "dsplugins.existingExemptions": "已有精確版本豁免（{n}）",

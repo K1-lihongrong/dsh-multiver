@@ -464,6 +464,13 @@
 .dp-search { min-width: 160px; max-width: 260px; flex: 1; font-size: 11.5px; }
 .dp-filter-action { margin-left: auto; flex: none; }
 .dp-batch-progress { padding: 0 16px 8px; color: var(--text-muted); font-size: 11.5px; }
+.dp-check-progress { padding: 0 16px 8px; display: flex; flex-direction: column; gap: 5px; }
+.dp-check-progress-label { display: flex; align-items: center; gap: 6px; color: var(--text-muted); font-size: 11.5px; }
+.dp-check-spinner { width: 11px; height: 11px; border-width: 1.5px; }
+.dp-check-bar { height: 3px; border-radius: 3px; background: var(--surface-3); overflow: hidden; }
+.dp-check-bar-fill { display: block; height: 100%; width: 38%; border-radius: 3px; background: var(--accent); animation: dp-check-slide 1.1s ease-in-out infinite; }
+@keyframes dp-check-slide { 0% { transform: translateX(-120%); } 100% { transform: translateX(320%); } }
+
 
 /* B1-11/B1-12：官方信息（构建脚本 / 版本豁免） */
 .dp-meta { border-top: 1px dashed var(--panel-border); padding: 8px 16px 12px; display: flex; flex-direction: column; gap: 8px; }

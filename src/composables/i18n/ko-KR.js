@@ -341,6 +341,7 @@ export default {
     "dsplugins.update": "업데이트",
     "dsplugins.updateAll": "모두 업데이트",
     "dsplugins.updateFailed": "{p} 업데이트 실패",
+    "dsplugins.checkingUpdates": "업데이트 확인 중… {s}s",
     "dsplugins.checkTimeout": "업데이트 확인 시간이 초과되었습니다. 네트워크 또는 dsh 로그를 확인한 후 다시 시도하세요.",
     "dsplugins.operationTimeout": "플러그인 작업 시간이 초과되었습니다. 버튼이 복원되었습니다. 네트워크 또는 로그를 확인한 후 다시 시도하세요.",
     "dsplugins.existingExemptions": "기존 정확한 버전 예외 ({n})",
