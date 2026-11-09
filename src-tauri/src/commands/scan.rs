@@ -16,27 +16,38 @@ pub(crate) async fn scan_versions(
     let store = dirs.store.clone();
     let app2 = app.clone();
 
-    // 清除上次的取消标志
+    // A2-5: one Job per scan, while keeping the legacy scan-size-progress events.
+    let job_target = format!("{} versions", versions.len());
+    let job_id = ctx.jobs().create("scan", &job_target);
+    let jobs = ctx.jobs().clone();
+
+    // Clear the previous cancellation flag.
     let cancel_flag = ctx.scan_cancel_handle();
     cancel_flag.store(false, std::sync::atomic::Ordering::SeqCst);
 
-    tauri::async_runtime::spawn_blocking(move || {
+    let job_for_scan = job_id.clone();
+    let jobs_for_scan = jobs.clone();
+    let target_for_scan = job_target.clone();
+    let scan = tauri::async_runtime::spawn_blocking(move || {
+        use tauri::Emitter;
         let names: Vec<String> = versions;
         let total = names.len();
         let store_mtime = sizecache::dir_mtime(&store);
         let mut cache = sizecache::load(&root);
-        // D13：清掉已卸载版本留下的死条目，保证写回时只含当前实际安装的版本
+        // D13: drop cache entries for versions that no longer exist.
         sizecache::prune(&mut cache, |v| versions_dir.join(v).exists());
+        let mut cancelled = false;
 
         for (i, n) in names.iter().enumerate() {
-            // 取消检查（每个版本开始前）
+            // Cancellation check before each version.
             if cancel_flag.load(std::sync::atomic::Ordering::SeqCst) {
+                cancelled = true;
                 break;
             }
             let idx = i + 1;
             let dir_mtime = sizecache::dir_mtime(&versions_dir.join(n));
 
-            // 缓存命中：逐个 emit（间隔 80ms），让"复用"有节奏感
+            // Cache hit: emit one event per version, preserving the legacy 80ms cadence.
             if sizecache::is_valid(&cache, n, dir_mtime, store_mtime) {
                 if let Some(info) = sizecache::get_info(&cache, n) {
                     let _ = app2.emit(
@@ -52,6 +63,21 @@ pub(crate) async fn scan_versions(
                             "cached": true,
                         }),
                     );
+                    jobs_for_scan.progress(&job_for_scan, "detail", idx as u64, Some(total as u64));
+                    let _ = app2.emit(
+                        "job:progress",
+                        serde_json::json!({
+                            "id": job_for_scan,
+                            "kind": "scan",
+                            "target": target_for_scan,
+                            "stage": "detail",
+                            "version": n,
+                            "index": idx,
+                            "done": idx,
+                            "total": total,
+                            "cached": true,
+                        }),
+                    );
                     if total > 1 {
                         std::thread::sleep(std::time::Duration::from_millis(80));
                     }
@@ -59,7 +85,8 @@ pub(crate) async fn scan_versions(
                 continue;
             }
 
-            // 第一段开始：发 counting 事件（前端显示不确定进度条）
+            // First pass starts: legacy counting event plus the unified job event.
+            jobs_for_scan.progress(&job_for_scan, "counting", i as u64, Some(total as u64));
             let _ = app2.emit(
                 "scan-size-progress",
                 serde_json::json!({
@@ -73,14 +100,28 @@ pub(crate) async fn scan_versions(
                     "cached": false,
                 }),
             );
+            let _ = app2.emit(
+                "job:progress",
+                serde_json::json!({
+                    "id": job_for_scan,
+                    "kind": "scan",
+                    "target": target_for_scan,
+                    "stage": "counting",
+                    "version": n,
+                    "index": idx,
+                    "done": i,
+                    "total": total,
+                }),
+            );
 
-            // 取消检查闭包
             let cancel_flag = cancel_flag.clone();
             let cancel = move || cancel_flag.load(std::sync::atomic::Ordering::SeqCst);
 
-            // 第一段（合并遍历）：收集文件列表 + 总量。带进度与取消。
             let app_c = app2.clone();
             let vname_c = n.clone();
+            let job_c = job_for_scan.clone();
+            let jobs_c = jobs_for_scan.clone();
+            let target_c = target_for_scan.clone();
             let cb_count = move |done: u64, _tot: u64| {
                 let _ = app_c.emit(
                     "scan-size-progress",
@@ -95,15 +136,30 @@ pub(crate) async fn scan_versions(
                         "cached": false,
                     }),
                 );
+                jobs_c.progress(&job_c, "counting", i as u64, Some(total as u64));
+                let _ = app_c.emit(
+                    "job:progress",
+                    serde_json::json!({
+                        "id": job_c,
+                        "kind": "scan",
+                        "target": target_c,
+                        "stage": "counting",
+                        "version": vname_c,
+                        "index": idx,
+                        "done": i,
+                        "total": total,
+                        "files": done,
+                    }),
+                );
             };
             let Some(fl) =
                 versions::collect_files(&versions_dir.join(n), Some(&cb_count), Some(&cancel))
             else {
-                break; // 被取消
+                cancelled = true;
+                break;
             };
             let file_count = fl.files.len() as u64;
 
-            // 第一段完成：发总量（stage="total"）
             let first = versions::SizeInfo {
                 total: fl.total,
                 shared_size: 0,
@@ -123,10 +179,27 @@ pub(crate) async fn scan_versions(
                     "cached": false,
                 }),
             );
+            jobs_for_scan.progress(&job_for_scan, "counting", i as u64, Some(total as u64));
+            let _ = app2.emit(
+                "job:progress",
+                serde_json::json!({
+                    "id": job_for_scan,
+                    "kind": "scan",
+                    "target": target_for_scan,
+                    "stage": "counting",
+                    "version": n,
+                    "index": idx,
+                    "done": i,
+                    "total": total,
+                    "fileTotal": file_count,
+                }),
+            );
 
-            // 第二段：用文件列表读 nlink（带进度与取消）
             let app3 = app2.clone();
             let vname = n.clone();
+            let job_d = job_for_scan.clone();
+            let jobs_d = jobs_for_scan.clone();
+            let target_d = target_for_scan.clone();
             let cb = move |done: u64, ftot: u64| {
                 let _ = app3.emit(
                     "scan-size-progress",
@@ -141,11 +214,28 @@ pub(crate) async fn scan_versions(
                         "cached": false,
                     }),
                 );
+                jobs_d.progress(&job_d, "detail", i as u64, Some(total as u64));
+                let _ = app3.emit(
+                    "job:progress",
+                    serde_json::json!({
+                        "id": job_d,
+                        "kind": "scan",
+                        "target": target_d,
+                        "stage": "detail",
+                        "version": vname,
+                        "index": idx,
+                        "done": i,
+                        "total": total,
+                        "files": done,
+                        "fileTotal": if ftot > 0 { ftot } else { file_count },
+                    }),
+                );
             };
             let Some(info) =
                 versions::detail_from_files(&fl.files, fl.total, Some(&cb), Some(&cancel))
             else {
-                break; // 被取消
+                cancelled = true;
+                break;
             };
 
             let _ = app2.emit(
@@ -161,13 +251,71 @@ pub(crate) async fn scan_versions(
                     "cached": false,
                 }),
             );
+            jobs_for_scan.progress(&job_for_scan, "detail", idx as u64, Some(total as u64));
+            let _ = app2.emit(
+                "job:progress",
+                serde_json::json!({
+                    "id": job_for_scan,
+                    "kind": "scan",
+                    "target": target_for_scan,
+                    "stage": "detail",
+                    "version": n,
+                    "index": idx,
+                    "done": idx,
+                    "total": total,
+                    "fileTotal": file_count,
+                }),
+            );
             sizecache::put(&mut cache, n, dir_mtime, store_mtime, info);
         }
         let _ = sizecache::save(&root, &cache);
+        cancelled
     })
-    .await
-    .map_err(|e| format!("扫描失败: {}", e))?;
-    Ok(())
+    .await;
+
+    match scan {
+        Ok(true) => {
+            jobs.cancel(&job_id, "scan cancelled");
+            let _ = app.emit(
+                "job:failed",
+                serde_json::json!({
+                    "id": job_id,
+                    "kind": "scan",
+                    "target": job_target,
+                    "code": "cancelled",
+                    "message": "scan cancelled",
+                }),
+            );
+            Ok(())
+        }
+        Ok(false) => {
+            jobs.finish(&job_id, "scan done");
+            let _ = app.emit(
+                "job:done",
+                serde_json::json!({
+                    "id": job_id,
+                    "kind": "scan",
+                    "target": job_target,
+                }),
+            );
+            Ok(())
+        }
+        Err(e) => {
+            let msg = format!("扫描失败: {}", e);
+            jobs.fail(&job_id, "scan_failed", &msg);
+            let _ = app.emit(
+                "job:failed",
+                serde_json::json!({
+                    "id": job_id,
+                    "kind": "scan",
+                    "target": job_target,
+                    "code": "scan_failed",
+                    "message": msg,
+                }),
+            );
+            Err(msg)
+        }
+    }
 }
 
 /// v0.2.13：请求取消正在进行的扫描。置位全局标志，扫描循环会在当前版本中断后停止。
@@ -182,13 +330,10 @@ pub(crate) fn cancel_scan(ctx: tauri::State<'_, crate::AppCtx>) -> Result<(), St
 #[tauri::command]
 #[specta::specta]
 pub(crate) async fn scan_isolated_size(
-    _app: tauri::AppHandle,
     ctx: tauri::State<'_, crate::AppCtx>,
     version: String,
 ) -> Result<u64, String> {
-    let mdir = ctx.manager_dir().clone();
-    let cfg = Config::load(&mdir);
-    let dirs = ctx.dirs_snapshot();
+    let (cfg, dirs) = ctx.config_dirs();
     let home = crate::paths::resolve_home(&cfg, &dirs, &version);
     // 目录扫描可能很慢，放到后台线程
     let size = tauri::async_runtime::spawn_blocking(move || versions::dir_size(&home))
@@ -200,9 +345,12 @@ pub(crate) async fn scan_isolated_size(
 /// 设置自动维护开关。
 #[tauri::command]
 #[specta::specta]
-pub(crate) fn set_auto_maintenance(app: tauri::AppHandle, enabled: bool) -> Result<(), String> {
-    let mdir = manager_dir(&app);
-    let mut cfg = Config::load(&mdir);
+pub(crate) fn set_auto_maintenance(
+    ctx: tauri::State<'_, crate::AppCtx>,
+    enabled: bool,
+) -> Result<(), String> {
+    let mdir = ctx.manager_dir().clone();
+    let (mut cfg, _dirs) = ctx.config_dirs();
     cfg.maintenance.auto_enabled = enabled;
     cfg.save(&mdir).map_err(|e| format!("保存配置失败: {}", e))
 }
@@ -211,11 +359,13 @@ pub(crate) fn set_auto_maintenance(app: tauri::AppHandle, enabled: bool) -> Resu
 /// 返回人类可读的结果描述。
 #[tauri::command]
 #[specta::specta]
-pub(crate) async fn run_maintenance(app: tauri::AppHandle, kind: String) -> Result<String, String> {
-    let mdir = manager_dir(&app);
-    let mut cfg = Config::load(&mdir);
-    let root = cfg.resolve_root(&mdir);
-    let dirs = Dirs::new(root.clone());
+pub(crate) async fn run_maintenance(
+    ctx: tauri::State<'_, crate::AppCtx>,
+    kind: String,
+) -> Result<String, String> {
+    let mdir = ctx.manager_dir().clone();
+    let (mut cfg, dirs) = ctx.config_dirs();
+    let root = dirs.root.clone();
     let _ = dirs.ensure();
     let mdir2 = mdir.clone();
 

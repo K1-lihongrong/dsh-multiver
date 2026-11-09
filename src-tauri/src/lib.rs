@@ -133,6 +133,13 @@ impl AppCtx {
         self.dirs.read().unwrap_or_else(|e| e.into_inner()).clone()
     }
 
+    // A2-11: read-only config + dirs helper.
+    pub(crate) fn config_dirs(&self) -> (Config, Dirs) {
+        let cfg = Config::load(&self.manager_dir);
+        let dirs = Dirs::new(cfg.resolve_root(&self.manager_dir));
+        (cfg, dirs)
+    }
+
     pub(crate) fn set_dirs(&self, next: Dirs) {
         *self.dirs.write().unwrap_or_else(|e| e.into_inner()) = next;
     }

@@ -44,11 +44,10 @@ pub(crate) struct AppState {
 
 #[tauri::command]
 #[specta::specta]
-pub(crate) fn get_state(app: tauri::AppHandle) -> AppState {
-    let mdir = manager_dir(&app);
-    let cfg = Config::load(&mdir);
-    let root = cfg.resolve_root(&mdir);
-    let dirs = Dirs::new(root.clone());
+pub(crate) fn get_state(ctx: tauri::State<'_, crate::AppCtx>) -> AppState {
+    let mdir = ctx.manager_dir().clone();
+    let (cfg, dirs) = ctx.config_dirs();
+    let root = dirs.root.clone();
     // D19：记录 ensure 结果供前端横幅使用（不再静默忽略）
     let ensure_err = dirs.ensure().err().map(|e| e.to_string());
     let extra_dirs = vec![
@@ -103,14 +102,13 @@ pub(crate) fn get_state(app: tauri::AppHandle) -> AppState {
 #[tauri::command]
 #[specta::specta]
 pub(crate) fn set_isolated(
-    app: tauri::AppHandle,
+    ctx: tauri::State<'_, crate::AppCtx>,
     version: String,
     isolated: bool,
 ) -> Result<String, String> {
-    let mdir = manager_dir(&app);
-    let mut cfg = Config::load(&mdir);
-    let root = cfg.resolve_root(&mdir);
-    let dirs = Dirs::new(root.clone());
+    let mdir = ctx.manager_dir().clone();
+    let (mut cfg, dirs) = ctx.config_dirs();
+    let root = dirs.root.clone();
     if !versions::exists(&dirs.versions, &version) {
         return Err(format!("版本 {} 未安装", version));
     }

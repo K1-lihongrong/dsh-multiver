@@ -4,12 +4,10 @@ use super::*;
 
 /// 按版本解析 dsh CLI 与 DSH_HOME（隔离 / 官方 / 共享）。
 fn resolve_dsh(
-    app: &tauri::AppHandle,
+    ctx: &crate::AppCtx,
     version: &str,
 ) -> Result<(crate::dsplugins::DshCli, std::path::PathBuf), String> {
-    let mdir = manager_dir(app);
-    let cfg = Config::load(&mdir);
-    let dirs = Dirs::new(cfg.resolve_root(&mdir));
+    let (cfg, dirs) = ctx.config_dirs();
     let vdir = dirs.versions.join(version);
     if !vdir.join("node_modules").exists() {
         return Err(format!("版本 {} 未安装", version));
@@ -29,12 +27,10 @@ fn resolve_dsh(
 #[tauri::command]
 #[specta::specta]
 pub(crate) fn ds_list_plugins(
-    app: tauri::AppHandle,
+    ctx: tauri::State<'_, crate::AppCtx>,
     version: String,
 ) -> Result<crate::dsplugins::DsPluginList, String> {
-    let mdir = manager_dir(&app);
-    let cfg = Config::load(&mdir);
-    let dirs = Dirs::new(cfg.resolve_root(&mdir));
+    let (cfg, dirs) = ctx.config_dirs();
     let home = crate::paths::resolve_home(&cfg, &dirs, &version);
     let home_kind = if cfg.isolated_versions.iter().any(|v| v == &version) {
         "isolated"
@@ -63,14 +59,12 @@ pub(crate) struct DsProfileInfo {
 #[tauri::command]
 #[specta::specta]
 pub(crate) fn ds_profile_info(
-    app: tauri::AppHandle,
+    ctx: tauri::State<'_, crate::AppCtx>,
     version: String,
     profile: String,
 ) -> Result<DsProfileInfo, String> {
     crate::dsplugins::validate_profile_name(&profile)?;
-    let mdir = manager_dir(&app);
-    let cfg = Config::load(&mdir);
-    let dirs = Dirs::new(cfg.resolve_root(&mdir));
+    let (cfg, dirs) = ctx.config_dirs();
     let home = crate::paths::resolve_home(&cfg, &dirs, &version);
     let pdir = crate::dsplugins::profiles_dir(&home).join(&profile);
     Ok(DsProfileInfo {
@@ -93,7 +87,7 @@ pub(crate) fn ds_profile_info(
 #[tauri::command(rename_all = "snake_case")]
 #[specta::specta(rename_all = "snake_case")]
 pub(crate) async fn ds_exemption_action(
-    app: tauri::AppHandle,
+    ctx: tauri::State<'_, crate::AppCtx>,
     version: String,
     profile: String,
     action: String,
@@ -104,7 +98,7 @@ pub(crate) async fn ds_exemption_action(
     crate::dsplugins::validate_package_spec(&package_version)?;
     crate::dsplugins::validate_package_spec(&dsh_version)
         .map_err(|_| "DSH 版本格式不正确".to_string())?;
-    let (cli, home) = resolve_dsh(&app, &version)?;
+    let (cli, home) = resolve_dsh(ctx.inner(), &version)?;
     let adapter = crate::dsh_adapter::adapter_for(&version);
     if !adapter.supports_allow_version() {
         return Err("当前 DSH 版本不支持精确版本豁免".into());
@@ -157,15 +151,13 @@ pub(crate) async fn ds_exemption_action(
 #[tauri::command]
 #[specta::specta]
 pub(crate) fn ds_approve_builds(
-    app: tauri::AppHandle,
+    ctx: tauri::State<'_, crate::AppCtx>,
     version: String,
     profile: String,
     packages: Vec<String>,
 ) -> Result<Vec<String>, String> {
     crate::dsplugins::validate_profile_name(&profile)?;
-    let mdir = manager_dir(&app);
-    let cfg = Config::load(&mdir);
-    let dirs = Dirs::new(cfg.resolve_root(&mdir));
+    let (cfg, dirs) = ctx.config_dirs();
     let home = crate::paths::resolve_home(&cfg, &dirs, &version);
     let pdir = crate::dsplugins::profiles_dir(&home).join(&profile);
     for p in &packages {
@@ -179,14 +171,12 @@ pub(crate) fn ds_approve_builds(
 #[tauri::command]
 #[specta::specta]
 pub(crate) fn ds_open_plugin_logs(
-    app: tauri::AppHandle,
+    ctx: tauri::State<'_, crate::AppCtx>,
     version: String,
     profile: String,
 ) -> Result<(), String> {
     crate::dsplugins::validate_profile_name(&profile)?;
-    let mdir = manager_dir(&app);
-    let cfg = Config::load(&mdir);
-    let dirs = Dirs::new(cfg.resolve_root(&mdir));
+    let (cfg, dirs) = ctx.config_dirs();
     let home = crate::paths::resolve_home(&cfg, &dirs, &version);
     let dir = crate::dsplugins::profiles_dir(&home)
         .join(&profile)
@@ -250,7 +240,7 @@ fn inspect_path_spec(spec: &str, profile_dir: &std::path::Path) -> Option<DsInsp
 #[tauri::command]
 #[specta::specta]
 pub(crate) async fn ds_inspect_spec(
-    app: tauri::AppHandle,
+    ctx: tauri::State<'_, crate::AppCtx>,
     version: String,
     profile: String,
     spec: String,
@@ -261,7 +251,7 @@ pub(crate) async fn ds_inspect_spec(
     if let Some(url) = &registry {
         crate::dsplugins::validate_registry_url(url)?;
     }
-    let (cli, home) = resolve_dsh(&app, &version)?;
+    let (cli, home) = resolve_dsh(ctx.inner(), &version)?;
     let pdir = crate::dsplugins::profiles_dir(&home).join(&profile);
     let s = spec.trim().to_string();
     let lower = s.to_ascii_lowercase();
@@ -489,6 +479,7 @@ fn read_dep_map(profile_dir: &std::path::Path) -> serde_json::Map<String, serde_
 #[specta::specta]
 pub(crate) async fn ds_plugin_action(
     app: tauri::AppHandle,
+    ctx: tauri::State<'_, crate::AppCtx>,
     version: String,
     profile: String,
     action: String,
@@ -505,7 +496,7 @@ pub(crate) async fn ds_plugin_action(
     if let Some(url) = &registry {
         crate::dsplugins::validate_registry_url(url)?;
     }
-    let (cli, home) = resolve_dsh(&app, &version)?;
+    let (cli, home) = resolve_dsh(ctx.inner(), &version)?;
     let pdir = crate::dsplugins::profiles_dir(&home).join(&profile);
     let before = read_dep_map(&pdir);
     let is_add = action == "add";
@@ -522,13 +513,11 @@ pub(crate) async fn ds_plugin_action(
         _ => return Err(format!("未知操作：{}", action)),
     };
 
-    use tauri::Manager;
-    let ctx = app.try_state::<crate::AppCtx>().map(|c| c.inner().clone());
-    let job_id = ctx.as_ref().map(|c| {
-        c.jobs()
-            .create("plugin", &format!("{}/{}/{}", version, profile, action))
-    });
-    let jobs = ctx.as_ref().map(|c| c.jobs().clone());
+    let job_id = Some(
+        ctx.jobs()
+            .create("plugin", &format!("{}/{}/{}", version, profile, action)),
+    );
+    let jobs = Some(ctx.jobs().clone());
     let app2 = app.clone();
     let version2 = version.clone();
     let profile2 = profile.clone();
@@ -628,11 +617,12 @@ pub(crate) async fn ds_plugin_action(
 #[specta::specta]
 pub(crate) async fn ds_init_profile(
     app: tauri::AppHandle,
+    ctx: tauri::State<'_, crate::AppCtx>,
     version: String,
     profile: String,
 ) -> Result<String, String> {
     crate::dsplugins::validate_profile_name(&profile)?;
-    let (cli, home) = resolve_dsh(&app, &version)?;
+    let (cli, home) = resolve_dsh(ctx.inner(), &version)?;
 
     let app2 = app.clone();
     let version2 = version.clone();
@@ -676,14 +666,12 @@ pub(crate) async fn ds_init_profile(
 #[tauri::command]
 #[specta::specta]
 pub(crate) fn ds_open_profile_dir(
-    app: tauri::AppHandle,
+    ctx: tauri::State<'_, crate::AppCtx>,
     version: String,
     profile: String,
 ) -> Result<(), String> {
     crate::dsplugins::validate_profile_name(&profile)?;
-    let mdir = manager_dir(&app);
-    let cfg = Config::load(&mdir);
-    let dirs = Dirs::new(cfg.resolve_root(&mdir));
+    let (cfg, dirs) = ctx.config_dirs();
     let home = crate::paths::resolve_home(&cfg, &dirs, &version);
     let dir = crate::dsplugins::profiles_dir(&home).join(&profile);
     if !dir.exists() {
@@ -708,23 +696,15 @@ pub(crate) fn ds_classify_plugin_failure(output: String) -> crate::plugin_failur
 #[tauri::command]
 #[specta::specta]
 pub(crate) fn ds_shared_home_health(
-    app: tauri::AppHandle,
+    ctx: tauri::State<'_, crate::AppCtx>,
     version: String,
 ) -> Result<crate::shared_home::SharedHomeHealth, String> {
-    use tauri::Manager;
-    let mdir = manager_dir(&app);
-    let cfg = Config::load(&mdir);
-    let dirs = Dirs::new(cfg.resolve_root(&mdir));
+    let (cfg, dirs) = ctx.config_dirs();
     let home = crate::paths::resolve_home(&cfg, &dirs, &version);
-    let ctx = app.try_state::<crate::AppCtx>();
-    let job = ctx.as_ref().map(|c| c.jobs().create("health", &version));
-    if let (Some(ctx), Some(job)) = (ctx.as_ref(), job.as_deref()) {
-        ctx.jobs().progress(job, "scanning", 0, None);
-    }
+    let job = ctx.jobs().create("health", &version);
+    ctx.jobs().progress(&job, "scanning", 0, None);
     let report = crate::shared_home::scan(&home, &version);
-    if let (Some(ctx), Some(job)) = (ctx.as_ref(), job.as_deref()) {
-        ctx.jobs().finish(job, "shared home health scanned");
-    }
+    ctx.jobs().finish(&job, "shared home health scanned");
     Ok(report)
 }
 
@@ -732,13 +712,10 @@ pub(crate) fn ds_shared_home_health(
 #[tauri::command]
 #[specta::specta]
 pub(crate) fn list_jobs(
-    app: tauri::AppHandle,
+    ctx: tauri::State<'_, crate::AppCtx>,
     limit: Option<usize>,
 ) -> Vec<crate::jobs::JobSnapshot> {
-    use tauri::Manager;
-    app.try_state::<crate::AppCtx>()
-        .map(|ctx| ctx.jobs().list_recent(limit.unwrap_or(20)))
-        .unwrap_or_default()
+    ctx.jobs().list_recent(limit.unwrap_or(20))
 }
 
 /// 检查可更新插件（B1-13）：`dsh plugin --profile <p> outdated --json`。
@@ -748,16 +725,14 @@ pub(crate) fn list_jobs(
 #[tauri::command]
 #[specta::specta]
 pub(crate) async fn ds_check_updates(
-    app: tauri::AppHandle,
+    ctx: tauri::State<'_, crate::AppCtx>,
     version: String,
     profile: String,
 ) -> Result<Vec<crate::dsplugins::DsUpdate>, String> {
     crate::dsplugins::validate_profile_name(&profile)?;
-    let mdir = manager_dir(&app);
-    let cfg = Config::load(&mdir);
-    let dirs = Dirs::new(cfg.resolve_root(&mdir));
+    let (_cfg, dirs) = ctx.config_dirs();
     let version_dir = dirs.versions.join(&version);
-    let (cli, home) = resolve_dsh(&app, &version)?;
+    let (cli, home) = resolve_dsh(ctx.inner(), &version)?;
     let profile2 = profile.clone();
     tauri::async_runtime::spawn_blocking(move || {
         let res = crate::dsplugins::run_dsh_plugin(
@@ -842,6 +817,7 @@ pub(crate) async fn ds_check_updates(
 #[specta::specta]
 pub(crate) async fn ds_plugin_update_batch(
     app: tauri::AppHandle,
+    ctx: tauri::State<'_, crate::AppCtx>,
     version: String,
     profile: String,
     targets: Vec<crate::dsplugins::PluginUpdateTarget>,
@@ -850,10 +826,8 @@ pub(crate) async fn ds_plugin_update_batch(
     if targets.is_empty() {
         return Ok(Vec::new());
     }
-    let mdir = manager_dir(&app);
-    let cfg = Config::load(&mdir);
-    let dirs = Dirs::new(cfg.resolve_root(&mdir));
-    let (cli, home) = resolve_dsh(&app, &version)?;
+    let (_cfg, dirs) = ctx.config_dirs();
+    let (cli, home) = resolve_dsh(ctx.inner(), &version)?;
     let version_dir = dirs.versions.join(&version);
     let official = crate::dsplugins::official_bundles(&version_dir);
     let profiles = crate::dsplugins::list_profiles(&home, &official);
@@ -932,13 +906,11 @@ pub(crate) async fn ds_plugin_update_batch(
         return Ok(results.into_iter().map(|r| r.unwrap()).collect());
     }
 
-    use tauri::Manager;
-    let ctx = app.try_state::<crate::AppCtx>().map(|c| c.inner().clone());
-    let job_id = ctx.as_ref().map(|c| {
-        c.jobs()
-            .create("update", &format!("{}/{}", version, profile))
-    });
-    let jobs = ctx.as_ref().map(|c| c.jobs().clone());
+    let job_id = Some(
+        ctx.jobs()
+            .create("update", &format!("{}/{}", version, profile)),
+    );
+    let jobs = Some(ctx.jobs().clone());
     let app2 = app.clone();
     let version2 = version.clone();
     let profile2 = profile.clone();
@@ -1100,11 +1072,11 @@ pub(crate) async fn ds_plugin_update_batch(
 /// 读本地推荐列表（磁盘缓存优先，缺失回退内置副本）。不联网，立即返回。
 #[tauri::command]
 #[specta::specta]
-pub(crate) fn ds_plugin_catalog(app: tauri::AppHandle) -> Result<crate::catalog::Catalog, String> {
-    let mdir = manager_dir(&app);
-    let cfg = Config::load(&mdir);
-    let root = cfg.resolve_root(&mdir);
-    crate::catalog::load_local(&root)
+pub(crate) fn ds_plugin_catalog(
+    ctx: tauri::State<'_, crate::AppCtx>,
+) -> Result<crate::catalog::Catalog, String> {
+    let (_cfg, dirs) = ctx.config_dirs();
+    crate::catalog::load_local(&dirs.root)
 }
 
 /// 检查远端推荐列表是否有更新。有更新时写入磁盘缓存。
@@ -1113,12 +1085,11 @@ pub(crate) fn ds_plugin_catalog(app: tauri::AppHandle) -> Result<crate::catalog:
 #[tauri::command]
 #[specta::specta]
 pub(crate) async fn ds_plugin_catalog_check(
-    app: tauri::AppHandle,
+    ctx: tauri::State<'_, crate::AppCtx>,
     force: Option<bool>,
 ) -> Result<crate::catalog::CheckResult, String> {
-    let mdir = manager_dir(&app);
-    let cfg = Config::load(&mdir);
-    let root = cfg.resolve_root(&mdir);
+    let (_cfg, dirs) = ctx.config_dirs();
+    let root = dirs.root;
     let force = force.unwrap_or(false);
     tauri::async_runtime::spawn_blocking(move || crate::catalog::check_remote(&root, force))
         .await

@@ -3,6 +3,63 @@
 use super::*;
 use crate::domain::{LaunchTicket, ProcKey, VersionId};
 
+fn emit_launch_job_progress(
+    app: &tauri::AppHandle,
+    ctx: &crate::AppCtx,
+    job_id: &str,
+    version: &str,
+    stage: &str,
+) {
+    use tauri::Emitter;
+    ctx.jobs().progress(job_id, stage, 0, None);
+    let _ = app.emit(
+        "job:progress",
+        serde_json::json!({
+            "id": job_id,
+            "kind": "launch",
+            "target": version,
+            "stage": stage,
+        }),
+    );
+}
+
+fn finish_launch_job(
+    app: &tauri::AppHandle,
+    ctx: &crate::AppCtx,
+    job_id: &str,
+    version: &str,
+    message: &str,
+) {
+    use tauri::Emitter;
+    ctx.jobs().finish(job_id, message);
+    let _ = app.emit(
+        "job:done",
+        serde_json::json!({ "id": job_id, "kind": "launch", "target": version }),
+    );
+}
+
+fn fail_launch_job(
+    app: &tauri::AppHandle,
+    ctx: &crate::AppCtx,
+    job_id: &str,
+    version: &str,
+    code: &str,
+    message: &str,
+) {
+    use tauri::Emitter;
+    ctx.jobs().fail(job_id, code, message);
+    let _ = app.emit(
+        "job:failed",
+        serde_json::json!({
+            "id": job_id,
+            "kind": "launch",
+            "target": version,
+            "code": code,
+            "message": message,
+        }),
+    );
+}
+
 pub(crate) async fn launch_window(
     app: tauri::AppHandle,
     ctx: crate::AppCtx,
@@ -11,14 +68,29 @@ pub(crate) async fn launch_window(
     use tauri::{Manager, WebviewUrl, WebviewWindowBuilder};
     let procs = ctx.procs.clone();
 
-    let mdir = manager_dir(&app);
-    let cfg = Config::load(&mdir);
-    let dirs = Dirs::new(cfg.resolve_root(&mdir));
-    let version_id = VersionId::new(&version)?;
-    let proc_key = ProcKey::shared(version_id.as_str())?;
+    // A2-5: one Job per launch. The legacy launch-progress event is kept below.
+    let job_id = ctx.jobs().create("launch", &version);
+
+    let (cfg, dirs) = ctx.config_dirs();
+    let version_id = match VersionId::new(&version) {
+        Ok(v) => v,
+        Err(e) => {
+            fail_launch_job(&app, &ctx, &job_id, &version, "invalid_version", &e);
+            return Err(e);
+        }
+    };
+    let proc_key = match ProcKey::shared(version_id.as_str()) {
+        Ok(v) => v,
+        Err(e) => {
+            fail_launch_job(&app, &ctx, &job_id, &version, "invalid_version", &e);
+            return Err(e);
+        }
+    };
     let vdir = dirs.versions.join(version_id.as_str());
     if !vdir.join("node_modules").exists() {
-        return Err(format!("版本 {} 未安装", version));
+        let msg = format!("版本 {} 未安装", version);
+        fail_launch_job(&app, &ctx, &job_id, &version, "not_installed", &msg);
+        return Err(msg);
     }
     let home = crate::paths::resolve_home_for(&cfg, &dirs, &version_id, None);
 
@@ -33,6 +105,8 @@ pub(crate) async fn launch_window(
                 let _ = win.show();
                 let _ = win.unminimize();
                 let _ = win.set_focus();
+                emit_launch_job_progress(&app, &ctx, &job_id, &version, "ready");
+                finish_launch_job(&app, &ctx, &job_id, &version, "focused existing window");
                 return Ok(format!("已聚焦 DSH {} 的窗口", version));
             }
         }
@@ -44,6 +118,7 @@ pub(crate) async fn launch_window(
     //   waiting   —— 进程已起、正在等 dsh 打印 URL（最慢，最坏 90s）
     // 这里直接发 waiting：spawn_blocking 内部即"起进程 + 等 URL"，属"等待"。
     // （preparing 由前端进入启动态时自行设定，无需后端再发。）
+    emit_launch_job_progress(&app, &ctx, &job_id, &version, "waiting");
     {
         use tauri::Emitter;
         let _ = app.emit(
@@ -53,6 +128,8 @@ pub(crate) async fn launch_window(
     }
 
     // 阻塞部分（起进程 + 等端口/URL，最多 90s，见 launcher 的超时常量）丢到后台线程，避免冻结界面
+    emit_launch_job_progress(&app, &ctx, &job_id, &version, "starting");
+
     let vdir2 = vdir.clone();
     let home2 = home.clone();
     let store2 = dirs.store.clone();
@@ -61,16 +138,24 @@ pub(crate) async fn launch_window(
     let spawned = tauri::async_runtime::spawn_blocking(move || {
         launcher::spawn_web_hidden(&vdir2, &home2, &store2, &cache2, &state2)
     })
-    .await
-    .map_err(|e| {
-        let m = format!("启动任务失败: {}", e);
-        logging::log_app_error(&dirs.root, "launch_window", &format!("{} ({})", version, m));
-        m
-    })?;
-    let (child, url, job) = spawned.map_err(|e| {
-        logging::log_app_error(&dirs.root, "launch_window", &format!("{} ({})", version, e));
-        e
-    })?;
+    .await;
+    let spawned = match spawned {
+        Ok(v) => v,
+        Err(e) => {
+            let m = format!("启动任务失败: {}", e);
+            logging::log_app_error(&dirs.root, "launch_window", &format!("{} ({})", version, m));
+            fail_launch_job(&app, &ctx, &job_id, &version, "spawn_failed", &m);
+            return Err(m);
+        }
+    };
+    let (child, url, job) = match spawned {
+        Ok(v) => v,
+        Err(e) => {
+            logging::log_app_error(&dirs.root, "launch_window", &format!("{} ({})", version, e));
+            fail_launch_job(&app, &ctx, &job_id, &version, "spawn_failed", &e);
+            return Err(e);
+        }
+    };
 
     // Unix：登记该 dsh 的进程组，供"管理器被强杀后下次启动清理"兜底（GAP-010）。
     // Windows 无此需要（Job Object 是 OS 级保障）。
@@ -105,7 +190,14 @@ pub(crate) async fn launch_window(
     let title = format!("DSH {}", version);
     let topbar_token = new_topbar_token();
     let init_script = build_topbar_script(&version, &url, &topbar_token);
-    let parsed = url.parse().map_err(|e| format!("URL 解析失败: {}", e))?;
+    let parsed = match url.parse() {
+        Ok(p) => p,
+        Err(e) => {
+            let msg = format!("URL 解析失败: {}", e);
+            fail_launch_job(&app, &ctx, &job_id, &version, "window_failed", &msg);
+            return Err(msg);
+        }
+    };
 
     let built = WebviewWindowBuilder::new(&app, &ticket.label, WebviewUrl::External(parsed))
         .title(&title)
@@ -134,7 +226,9 @@ pub(crate) async fn launch_window(
                 "launch_window",
                 &format!("{} 创建窗口失败: {}", version, e),
             );
-            return Err(format!("创建窗口失败: {}", e));
+            let msg = format!("创建窗口失败: {}", e);
+            fail_launch_job(&app, &ctx, &job_id, &version, "window_failed", &msg);
+            return Err(msg);
         }
     };
 
@@ -265,6 +359,9 @@ pub(crate) async fn launch_window(
         );
     }
 
+    emit_launch_job_progress(&app, &ctx, &job_id, &version, "ready");
+    finish_launch_job(&app, &ctx, &job_id, &version, "launch ready");
+
     // 关窗回调里要注销进程登记，故提前把 root 算好（闭包不能捕获 app —— 它随后还要用）
     #[cfg(unix)]
     let root_for_unregister = dirs.root.clone();
@@ -370,10 +467,11 @@ pub(crate) async fn run_version(
 
 #[tauri::command]
 #[specta::specta]
-pub(crate) fn create_shortcut(app: tauri::AppHandle, version: String) -> Result<String, String> {
-    let mdir = manager_dir(&app);
-    let cfg = Config::load(&mdir);
-    let dirs = Dirs::new(cfg.resolve_root(&mdir));
+pub(crate) fn create_shortcut(
+    ctx: tauri::State<'_, crate::AppCtx>,
+    version: String,
+) -> Result<String, String> {
+    let (_cfg, dirs) = ctx.config_dirs();
     if !versions::exists(&dirs.versions, &version) {
         return Err(format!("版本 {} 未安装", version));
     }
@@ -404,9 +502,7 @@ pub(crate) async fn open_in_browser(
 ) -> Result<OpenInBrowserResult, String> {
     use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
 
-    let mdir = manager_dir(&app);
-    let cfg = Config::load(&mdir);
-    let dirs = Dirs::new(cfg.resolve_root(&mdir));
+    let (cfg, dirs) = ctx.config_dirs();
     let vdir = dirs.versions.join(&version);
     if !vdir.join("node_modules").exists() {
         return Err(format!("版本 {} 未安装", version));
@@ -512,9 +608,7 @@ pub(crate) async fn restart_version_impl(
     let procs = &ctx.procs;
     use tauri::Manager;
 
-    let mdir = manager_dir(app);
-    let cfg = Config::load(&mdir);
-    let dirs = Dirs::new(cfg.resolve_root(&mdir));
+    let (cfg, dirs) = ctx.config_dirs();
     let vdir = dirs.versions.join(version);
     if !vdir.join("node_modules").exists() {
         return Err(format!("版本 {} 未安装", version));

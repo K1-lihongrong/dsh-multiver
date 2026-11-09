@@ -4,10 +4,8 @@ use super::*;
 
 #[tauri::command]
 #[specta::specta]
-pub(crate) fn list_installed(app: tauri::AppHandle) -> Vec<versions::VersionInfo> {
-    let mdir = manager_dir(&app);
-    let cfg = Config::load(&mdir);
-    let dirs = Dirs::new(cfg.resolve_root(&mdir));
+pub(crate) fn list_installed(ctx: tauri::State<'_, crate::AppCtx>) -> Vec<versions::VersionInfo> {
+    let (cfg, dirs) = ctx.config_dirs();
     versions::list(
         &dirs.versions,
         cfg.default_version.as_deref(),
@@ -17,10 +15,8 @@ pub(crate) fn list_installed(app: tauri::AppHandle) -> Vec<versions::VersionInfo
 
 #[tauri::command]
 #[specta::specta]
-pub(crate) fn list_remote(app: tauri::AppHandle) -> Result<Vec<String>, String> {
-    let mdir = manager_dir(&app);
-    let cfg = Config::load(&mdir);
-    let dirs = Dirs::new(cfg.resolve_root(&mdir));
+pub(crate) fn list_remote(ctx: tauri::State<'_, crate::AppCtx>) -> Result<Vec<String>, String> {
+    let (_cfg, dirs) = ctx.config_dirs();
     let _ = dirs.ensure();
     let (ok, list, err) = actions::list_remote(&dirs.store, &dirs.cache, &dirs.state);
     if ok {
@@ -34,22 +30,20 @@ pub(crate) fn list_remote(app: tauri::AppHandle) -> Result<Vec<String>, String> 
 #[specta::specta]
 pub(crate) async fn install_version(
     app: tauri::AppHandle,
+    ctx: tauri::State<'_, crate::AppCtx>,
     version: String,
     registry: Option<String>,
 ) -> Result<String, String> {
     use tauri::Emitter;
-    let mdir = manager_dir(&app);
-    let cfg = Config::load(&mdir);
-    let dirs = Dirs::new(cfg.resolve_root(&mdir));
+    let (cfg, dirs) = ctx.config_dirs();
+    let mdir = ctx.manager_dir().clone();
     let _ = dirs.ensure();
     // 启动参数 --debug-progress 时，把进度事件落盘到 <exe目录>/progress-debug.log
     // 供排查进度问题（默认关闭，不产生任何文件）。
     let debug_progress = std::env::args().any(|a| a == "--debug-progress");
 
-    use tauri::Manager;
-    let ctx = app.try_state::<crate::AppCtx>().map(|c| c.inner().clone());
-    let job_id = ctx.as_ref().map(|c| c.jobs().create("install", &version));
-    let jobs = ctx.as_ref().map(|c| c.jobs().clone());
+    let job_id = Some(ctx.jobs().create("install", &version));
+    let jobs = Some(ctx.jobs().clone());
     let job_id2 = job_id.clone();
     let jobs2 = jobs.clone();
     let app2 = app.clone();
@@ -136,9 +130,12 @@ pub(crate) async fn install_version(
 /// 清除「已知安装失败」标记（用户手动重试前可调用）。
 #[tauri::command]
 #[specta::specta]
-pub(crate) fn clear_broken(app: tauri::AppHandle, version: Option<String>) -> Result<(), String> {
-    let mdir = manager_dir(&app);
-    let mut cfg = Config::load(&mdir);
+pub(crate) fn clear_broken(
+    ctx: tauri::State<'_, crate::AppCtx>,
+    version: Option<String>,
+) -> Result<(), String> {
+    let mdir = ctx.manager_dir().clone();
+    let (mut cfg, _dirs) = ctx.config_dirs();
     match version {
         Some(v) => cfg.broken_versions.retain(|x| x != &v),
         None => cfg.broken_versions.clear(),
@@ -149,12 +146,11 @@ pub(crate) fn clear_broken(app: tauri::AppHandle, version: Option<String>) -> Re
 #[tauri::command]
 #[specta::specta]
 pub(crate) async fn uninstall_version(
-    app: tauri::AppHandle,
+    ctx: tauri::State<'_, crate::AppCtx>,
     version: String,
 ) -> Result<String, String> {
-    let mdir = manager_dir(&app);
-    let cfg = Config::load(&mdir);
-    let dirs = Dirs::new(cfg.resolve_root(&mdir));
+    let mdir = ctx.manager_dir().clone();
+    let (cfg, dirs) = ctx.config_dirs();
     // 如果卸载的是默认版本 / 隔离版本，清理引用；同时记录不再被任何版本使用的实例 home
     let mut cfg = cfg;
     let (refs_changed, orphan_ids) = cfg.remove_version_refs_and_collect_orphans(&version);
@@ -208,13 +204,12 @@ pub(crate) const CONFLICT_PREFIX: &str = "DSH_CONFLICT:";
 #[tauri::command]
 #[specta::specta]
 pub(crate) fn set_default(
-    app: tauri::AppHandle,
+    ctx: tauri::State<'_, crate::AppCtx>,
     version: Option<String>,
     force: Option<bool>,
 ) -> Result<String, String> {
-    let mdir = manager_dir(&app);
-    let mut cfg = Config::load(&mdir);
-    let dirs = Dirs::new(cfg.resolve_root(&mdir));
+    let mdir = ctx.manager_dir().clone();
+    let (mut cfg, dirs) = ctx.config_dirs();
     if let Some(v) = &version {
         if !versions::exists(&dirs.versions, v) {
             return Err(format!("版本 {} 未安装", v));
