@@ -1,6 +1,6 @@
 <script setup>
 import { ref, computed, inject, onMounted, onUnmounted } from "vue";
-import { invoke } from "@tauri-apps/api/core";
+import { dsCheckUpdates, dsPluginUpdateBatch, dsPluginAction } from "../api/plugins.js";
 import { listen } from "@tauri-apps/api/event";
 import { ask } from "@tauri-apps/plugin-dialog";
 import { t } from "../composables/useI18n.js";
@@ -108,10 +108,7 @@ async function checkUpdates() {
   }, 1000);
   try {
     const list = await withTimeout(
-      invoke("ds_check_updates", {
-        version: props.version,
-        profile: props.profile,
-      }),
+      dsCheckUpdates(props.version, props.profile),
       55000,
       t("dsplugins.checkTimeout"),
     );
@@ -147,11 +144,7 @@ async function updatePlugin(pl) {
   showLog.value = true;
   try {
     const results = await withTimeout(
-      invoke("ds_plugin_update_batch", {
-        version: props.version,
-        profile: props.profile,
-        targets: [{ name: pl.name, latest: u.latest }],
-      }),
+      dsPluginUpdateBatch(props.version, props.profile, [{ name: pl.name, latest: u.latest }]),
       300000,
       t("dsplugins.operationTimeout"),
     );
@@ -190,11 +183,7 @@ async function updateAll() {
   showLog.value = true;
   try {
     const results = await withTimeout(
-      invoke("ds_plugin_update_batch", {
-        version: props.version,
-        profile: props.profile,
-        targets: list.map((u) => ({ name: u.name, latest: u.latest })),
-      }),
+      dsPluginUpdateBatch(props.version, props.profile, list.map((u) => ({ name: u.name, latest: u.latest }))),
       300000,
       t("dsplugins.operationTimeout"),
     );
@@ -258,12 +247,7 @@ async function runAction(action, pkg, locked) {
   showLog.value = true;
   try {
     await withTimeout(
-      invoke("ds_plugin_action", {
-        version: props.version,
-        profile: props.profile,
-        action,
-        package: name,
-      }),
+      dsPluginAction(props.version, props.profile, action, name),
       300000,
       t("dsplugins.operationTimeout"),
     );

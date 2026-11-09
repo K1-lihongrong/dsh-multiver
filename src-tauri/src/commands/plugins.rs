@@ -27,6 +27,7 @@ fn resolve_dsh(
 /// DSH_HOME 用 resolve_home 解析（隔离 / 官方 / 共享）。
 /// 同时带上 DSH 安装随附的官方组合包名（对齐官方「随 DSH 提供」语义）。
 #[tauri::command]
+#[specta::specta]
 pub(crate) fn ds_list_plugins(
     app: tauri::AppHandle,
     version: String,
@@ -51,7 +52,7 @@ pub(crate) fn ds_list_plugins(
 }
 
 /// profile 级信息查询（B1-11/B1-12）：运行时版本、版本豁免、待决定的构建脚本、日志目录。
-#[derive(serde::Serialize)]
+#[derive(serde::Serialize, specta::Type)]
 pub(crate) struct DsProfileInfo {
     pub runtime_version: Option<String>,
     pub exemptions: serde_json::Value,
@@ -60,6 +61,7 @@ pub(crate) struct DsProfileInfo {
 }
 
 #[tauri::command]
+#[specta::specta]
 pub(crate) fn ds_profile_info(
     app: tauri::AppHandle,
     version: String,
@@ -89,6 +91,7 @@ pub(crate) fn ds_profile_info(
 /// 而本命令的 `package_version` / `dsh_version` 是 snake_case，不加会报
 /// `missing required key packageVersion`。
 #[tauri::command(rename_all = "snake_case")]
+#[specta::specta(rename_all = "snake_case")]
 pub(crate) async fn ds_exemption_action(
     app: tauri::AppHandle,
     version: String,
@@ -152,6 +155,7 @@ pub(crate) async fn ds_exemption_action(
 
 /// 允许待决定的构建脚本（B1-12）：写 `pnpm-workspace.yaml` 的 `allowBuilds`，返回剩余待决定项。
 #[tauri::command]
+#[specta::specta]
 pub(crate) fn ds_approve_builds(
     app: tauri::AppHandle,
     version: String,
@@ -173,6 +177,7 @@ pub(crate) fn ds_approve_builds(
 
 /// 打开 profile 的插件诊断日志目录（B1-11）。
 #[tauri::command]
+#[specta::specta]
 pub(crate) fn ds_open_plugin_logs(
     app: tauri::AppHandle,
     version: String,
@@ -202,7 +207,7 @@ pub(crate) fn ds_open_plugin_logs(
 /// 安装前 inspect（B1-16，对齐官方 `pluginManager.inspect` 的可见行为）：
 /// npm 包 → `pnpm view` 读名称/版本/描述/`dsh.bundle`；本地目录 → 读 package.json；
 /// git URL → 只确认形式与主机（不抓取）。问题码：not-found / not-a-bundle / network。
-#[derive(serde::Serialize)]
+#[derive(serde::Serialize, specta::Type)]
 pub(crate) struct DsInspect {
     pub kind: String,
     pub name: Option<String>,
@@ -243,6 +248,7 @@ fn inspect_path_spec(spec: &str, profile_dir: &std::path::Path) -> Option<DsInsp
 }
 
 #[tauri::command]
+#[specta::specta]
 pub(crate) async fn ds_inspect_spec(
     app: tauri::AppHandle,
     version: String,
@@ -381,7 +387,7 @@ pub(crate) async fn ds_inspect_spec(
 }
 
 /// 安装源探测（B1-17，对齐官方「首次使用时探测 npm 官方源与镜像，选最快」）。
-#[derive(serde::Serialize)]
+#[derive(serde::Serialize, specta::Type)]
 pub(crate) struct DsRegistryProbe {
     pub kind: Option<String>,
     pub url: Option<String>,
@@ -391,6 +397,7 @@ pub(crate) struct DsRegistryProbe {
 type ProbeCacheEntry = (String, String, u64, std::time::Instant);
 
 #[tauri::command]
+#[specta::specta]
 pub(crate) async fn ds_probe_registries() -> Result<DsRegistryProbe, String> {
     use std::sync::{Mutex, OnceLock};
     use std::time::{Duration, Instant};
@@ -457,7 +464,7 @@ pub(crate) async fn ds_probe_registries() -> Result<DsRegistryProbe, String> {
 }
 
 /// 插件操作结果（安装对话框「完成」页用：name 为新装/变更的依赖名；卸载为 None）。
-#[derive(serde::Serialize)]
+#[derive(serde::Serialize, specta::Type)]
 pub(crate) struct DsActionResult {
     pub output: String,
     pub name: Option<String>,
@@ -479,6 +486,7 @@ fn read_dep_map(profile_dir: &std::path::Path) -> serde_json::Map<String, serde_
 /// B1-04：改为 async + `spawn_blocking`，带 300s 超时；执行期间按行 emit
 /// `ds-plugin-progress` 事件供前端展示进度（B1-08）。
 #[tauri::command]
+#[specta::specta]
 pub(crate) async fn ds_plugin_action(
     app: tauri::AppHandle,
     version: String,
@@ -582,7 +590,7 @@ pub(crate) async fn ds_plugin_action(
                 }
                 Err(raw) => {
                     let f = crate::plugin_failure::classify(raw);
-                    reg.fail(jid, &f.code, &f.message);
+                    reg.fail(jid, f.code.as_str(), &f.message);
                     let _ = app2.emit(
                         "job:failed",
                         serde_json::json!({
@@ -617,6 +625,7 @@ pub(crate) async fn ds_plugin_action(
 /// 初始化一个 profile（B1-07）：调 `dsh plugin --profile <p> list`，
 /// dsh 会在首次使用时创建 profile 目录并安装模板 bundle。
 #[tauri::command]
+#[specta::specta]
 pub(crate) async fn ds_init_profile(
     app: tauri::AppHandle,
     version: String,
@@ -665,6 +674,7 @@ pub(crate) async fn ds_init_profile(
 
 /// 打开某版本的 profile 目录（资源管理器）。
 #[tauri::command]
+#[specta::specta]
 pub(crate) fn ds_open_profile_dir(
     app: tauri::AppHandle,
     version: String,
@@ -689,12 +699,14 @@ pub(crate) fn ds_open_profile_dir(
 
 /// 把 pnpm/dsh 原始失败输出分类；`raw` 原样保留。
 #[tauri::command]
+#[specta::specta]
 pub(crate) fn ds_classify_plugin_failure(output: String) -> crate::plugin_failure::PluginFailure {
     crate::plugin_failure::classify(&output)
 }
 
 /// 共享 home 只读体检：扫描 profiles/node_modules 的 junction，报告旧版本/悬空/重复来源。
 #[tauri::command]
+#[specta::specta]
 pub(crate) fn ds_shared_home_health(
     app: tauri::AppHandle,
     version: String,
@@ -718,6 +730,7 @@ pub(crate) fn ds_shared_home_health(
 
 /// 最近 Job 快照，供前端/诊断使用。
 #[tauri::command]
+#[specta::specta]
 pub(crate) fn list_jobs(
     app: tauri::AppHandle,
     limit: Option<usize>,
@@ -733,6 +746,7 @@ pub(crate) fn list_jobs(
 /// `pnpm outdated` 在部分 hoisted / bundle 组合 profile 上会漏报范围内的新版本
 ///（例如 dsh-ops 0.5.1 到 0.5.2），因此再对非官方插件逐个 `view <pkg> version --json` 兜底。
 #[tauri::command]
+#[specta::specta]
 pub(crate) async fn ds_check_updates(
     app: tauri::AppHandle,
     version: String,
@@ -825,6 +839,7 @@ pub(crate) async fn ds_check_updates(
 /// 只处理当前 version + profile 的可更新项；官方随附 bundle、缺失包、
 /// 目标版本与当前版本相同等情况在预检阶段直接返回 Failed，不发生写入。
 #[tauri::command]
+#[specta::specta]
 pub(crate) async fn ds_plugin_update_batch(
     app: tauri::AppHandle,
     version: String,
@@ -1084,6 +1099,7 @@ pub(crate) async fn ds_plugin_update_batch(
 
 /// 读本地推荐列表（磁盘缓存优先，缺失回退内置副本）。不联网，立即返回。
 #[tauri::command]
+#[specta::specta]
 pub(crate) fn ds_plugin_catalog(app: tauri::AppHandle) -> Result<crate::catalog::Catalog, String> {
     let mdir = manager_dir(&app);
     let cfg = Config::load(&mdir);
@@ -1095,6 +1111,7 @@ pub(crate) fn ds_plugin_catalog(app: tauri::AppHandle) -> Result<crate::catalog:
 ///
 /// force=true 跳过 30 分钟节流窗口（用户手动点刷新）。
 #[tauri::command]
+#[specta::specta]
 pub(crate) async fn ds_plugin_catalog_check(
     app: tauri::AppHandle,
     force: Option<bool>,

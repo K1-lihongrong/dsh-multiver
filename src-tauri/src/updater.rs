@@ -11,7 +11,7 @@
 use serde::Serialize;
 
 /// 更新检查结果（前端据此渲染提示）。
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, specta::Type)]
 pub struct UpdateInfo {
     /// 是否有新版本
     pub has_update: bool,

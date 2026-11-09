@@ -1,6 +1,8 @@
 <script setup>
 import { ref, watch } from "vue";
-import { invoke } from "@tauri-apps/api/core";
+import { setRoot, setUseOfficialHome } from "../api/settings.js";
+import { runMaintenance, setAutoMaintenance } from "../api/scan.js";
+import { exportBackup as exportBackupApi, previewImport, applyImport } from "../api/backup.js";
 import { save, open, ask } from "@tauri-apps/plugin-dialog";
 import { useToast } from "../composables/useToast.js";
 import { useSharedHomeWarn } from "../composables/useSharedHomeWarn.js";
@@ -31,7 +33,7 @@ watch(
 
 async function applyRoot() {
   try {
-    notify(await invoke("set_root", { root: rootInput.value.trim() || null }));
+    notify(await setRoot(rootInput.value.trim() || null));
     emit("refresh");
   } catch (e) { notify("" + e); }
 }
@@ -49,7 +51,7 @@ async function toggleOfficialHome(on) {
     const msg = t("paths.officialHomeConfirm", { path });
     if (!window.confirm(msg)) return;
     try {
-      notify(await invoke("set_use_official_home", { enabled: true }));
+      notify(await setUseOfficialHome(true));
       // 目录不存在时不静默：dsh 会自动创建，这里明确提示路径
       emit("refresh");
     } catch (e) {
@@ -57,7 +59,7 @@ async function toggleOfficialHome(on) {
     }
   } else {
     try {
-      notify(await invoke("set_use_official_home", { enabled: false }));
+      notify(await setUseOfficialHome(false));
       emit("refresh");
     } catch (e) {
       notify("" + e);
@@ -73,7 +75,7 @@ function openDir(which) {
 async function doMaintenance(kind) {
   maintBusy.value = kind;
   try {
-    notify(await invoke("run_maintenance", { kind }));
+    notify(await runMaintenance(kind));
     emit("refresh");
   } catch (e) {
     notify("" + e);
@@ -85,7 +87,7 @@ async function doMaintenance(kind) {
 /// 维护：切换自动维护开关
 async function toggleAutoMaint(on) {
   try {
-    await invoke("set_auto_maintenance", { enabled: on });
+    await setAutoMaintenance(on);
     emit("refresh");
   } catch (e) {
     notify("" + e);
@@ -101,7 +103,7 @@ async function exportBackup() {
       filters: [{ name: "JSON", extensions: ["json"] }],
     });
     if (!file) return; // 用户取消
-    notify(await invoke("export_backup", { file }));
+    notify(await exportBackupApi(file));
   } catch (e) {
     notify("" + e);
   }
@@ -118,7 +120,7 @@ async function importBackup() {
     if (!file) return; // 用户取消
     const filePath = typeof file === "string" ? file : file.path;
     // 先预览
-    const preview = await invoke("preview_import", { file: filePath });
+    const preview = await previewImport(filePath);
     const lines = [];
     lines.push(t("paths.importPreviewChanges"));
     lines.push(preview.changes.length ? preview.changes.map((c) => "· " + c).join("\n") : t("paths.importNoChanges"));
@@ -130,7 +132,7 @@ async function importBackup() {
     lines.push(t("paths.importConfirm"));
     const ok = await ask(lines.join("\n"), { title: t("paths.importBackup"), kind: "warning" });
     if (!ok) return;
-    const applied = await invoke("apply_import", { file: filePath });
+    const applied = await applyImport(filePath);
     notify(applied.length ? t("paths.importDone", { list: applied.join("、") }) : t("paths.importNoChanges"));
     emit("refresh");
   } catch (e) {

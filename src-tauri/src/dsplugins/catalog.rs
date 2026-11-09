@@ -90,7 +90,7 @@ pub fn runtime_version(version_dir: &Path) -> Option<String> {
 }
 
 /// 一条「有新版本」信息（pnpm outdated --json 的解析结果）。
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, specta::Type)]
 pub struct DsUpdate {
     pub name: String,
     pub current: String,

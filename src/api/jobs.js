@@ -1,5 +1,3 @@
-import { invoke } from "@tauri-apps/api/core";
+import { call, commands } from "./client.js";
 
-export function listJobs(limit = 20) {
-  return invoke("list_jobs", { limit });
-}
+export const listJobs = (limit = 20) => call(commands.list_jobs(limit));

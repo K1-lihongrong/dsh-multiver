@@ -4,7 +4,7 @@ use serde::Serialize;
 use std::path::{Path, PathBuf};
 
 /// 一个 profile 下的插件信息（从 profiles/<name>/package.json 的 dependencies 读）。
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, specta::Type)]
 pub struct DsPlugin {
     pub name: String,
     pub version: String,
@@ -24,7 +24,7 @@ pub struct DsPlugin {
 }
 
 /// 一个 profile（dsh 的插件集合）。
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, specta::Type)]
 pub struct DsProfile {
     pub name: String,
     pub path: String,
@@ -32,7 +32,7 @@ pub struct DsProfile {
 }
 
 /// 插件列表 + 当前 DSH_HOME 信息（让用户明确插件装在哪）。
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, specta::Type)]
 pub struct DsPluginList {
     /// 实际使用的 DSH_HOME 路径
     pub dsh_home: String,

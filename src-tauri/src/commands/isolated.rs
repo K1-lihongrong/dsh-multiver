@@ -3,6 +3,7 @@
 use super::*;
 
 #[tauri::command]
+#[specta::specta]
 pub(crate) async fn copy_shared_to_isolated(
     app: tauri::AppHandle,
     version: String,
@@ -28,6 +29,7 @@ pub(crate) async fn copy_shared_to_isolated(
 }
 
 #[tauri::command]
+#[specta::specta]
 pub(crate) async fn clear_isolated_data(
     app: tauri::AppHandle,
     version: String,
@@ -48,6 +50,7 @@ pub(crate) async fn clear_isolated_data(
 }
 
 #[tauri::command]
+#[specta::specta]
 pub(crate) fn open_isolated_dir(app: tauri::AppHandle, version: String) -> Result<(), String> {
     let mdir = manager_dir(&app);
     let cfg = Config::load(&mdir);

@@ -19,7 +19,7 @@ fn cmd_command(program: &str) -> Command {
 }
 
 /// 单项检查结果
-#[derive(Serialize)]
+#[derive(Serialize, specta::Type)]
 pub struct CheckItem {
     /// 检查项名称（中文，作为无 i18n 时的回退）
     pub name: String,

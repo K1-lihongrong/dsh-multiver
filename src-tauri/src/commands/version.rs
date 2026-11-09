@@ -3,6 +3,7 @@
 use super::*;
 
 #[tauri::command]
+#[specta::specta]
 pub(crate) fn list_installed(app: tauri::AppHandle) -> Vec<versions::VersionInfo> {
     let mdir = manager_dir(&app);
     let cfg = Config::load(&mdir);
@@ -15,6 +16,7 @@ pub(crate) fn list_installed(app: tauri::AppHandle) -> Vec<versions::VersionInfo
 }
 
 #[tauri::command]
+#[specta::specta]
 pub(crate) fn list_remote(app: tauri::AppHandle) -> Result<Vec<String>, String> {
     let mdir = manager_dir(&app);
     let cfg = Config::load(&mdir);
@@ -29,6 +31,7 @@ pub(crate) fn list_remote(app: tauri::AppHandle) -> Result<Vec<String>, String> 
 }
 
 #[tauri::command]
+#[specta::specta]
 pub(crate) async fn install_version(
     app: tauri::AppHandle,
     version: String,
@@ -132,6 +135,7 @@ pub(crate) async fn install_version(
 
 /// 清除「已知安装失败」标记（用户手动重试前可调用）。
 #[tauri::command]
+#[specta::specta]
 pub(crate) fn clear_broken(app: tauri::AppHandle, version: Option<String>) -> Result<(), String> {
     let mdir = manager_dir(&app);
     let mut cfg = Config::load(&mdir);
@@ -143,6 +147,7 @@ pub(crate) fn clear_broken(app: tauri::AppHandle, version: Option<String>) -> Re
 }
 
 #[tauri::command]
+#[specta::specta]
 pub(crate) async fn uninstall_version(
     app: tauri::AppHandle,
     version: String,
@@ -201,6 +206,7 @@ pub(crate) async fn uninstall_version(
 pub(crate) const CONFLICT_PREFIX: &str = "DSH_CONFLICT:";
 
 #[tauri::command]
+#[specta::specta]
 pub(crate) fn set_default(
     app: tauri::AppHandle,
     version: Option<String>,

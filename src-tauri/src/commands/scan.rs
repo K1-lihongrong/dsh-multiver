@@ -3,6 +3,7 @@
 use super::*;
 
 #[tauri::command]
+#[specta::specta]
 pub(crate) async fn scan_versions(
     app: tauri::AppHandle,
     ctx: tauri::State<'_, crate::AppCtx>,
@@ -171,6 +172,7 @@ pub(crate) async fn scan_versions(
 
 /// v0.2.13：请求取消正在进行的扫描。置位全局标志，扫描循环会在当前版本中断后停止。
 #[tauri::command]
+#[specta::specta]
 pub(crate) fn cancel_scan(ctx: tauri::State<'_, crate::AppCtx>) -> Result<(), String> {
     ctx.scan_cancel()
         .store(true, std::sync::atomic::Ordering::SeqCst);
@@ -178,6 +180,7 @@ pub(crate) fn cancel_scan(ctx: tauri::State<'_, crate::AppCtx>) -> Result<(), St
 }
 
 #[tauri::command]
+#[specta::specta]
 pub(crate) async fn scan_isolated_size(
     _app: tauri::AppHandle,
     ctx: tauri::State<'_, crate::AppCtx>,
@@ -196,6 +199,7 @@ pub(crate) async fn scan_isolated_size(
 
 /// 设置自动维护开关。
 #[tauri::command]
+#[specta::specta]
 pub(crate) fn set_auto_maintenance(app: tauri::AppHandle, enabled: bool) -> Result<(), String> {
     let mdir = manager_dir(&app);
     let mut cfg = Config::load(&mdir);
@@ -206,6 +210,7 @@ pub(crate) fn set_auto_maintenance(app: tauri::AppHandle, enabled: bool) -> Resu
 /// 手动执行维护。kind: "cleanup"（孤立 webview）| "prune"（依赖仓库）| "all"。
 /// 返回人类可读的结果描述。
 #[tauri::command]
+#[specta::specta]
 pub(crate) async fn run_maintenance(app: tauri::AppHandle, kind: String) -> Result<String, String> {
     let mdir = manager_dir(&app);
     let mut cfg = Config::load(&mdir);

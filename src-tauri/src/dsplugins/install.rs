@@ -165,7 +165,7 @@ pub fn rollback_add_spec(
 }
 
 /// 前端提交的单个更新目标。只信任包名与目标版本，原版本/原 spec 由后端现场读取。
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, specta::Type)]
 pub struct PluginUpdateTarget {
     pub name: String,
     pub latest: String,
@@ -188,7 +188,7 @@ pub enum PluginUpdateStep {
     Rollback,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, specta::Type)]
 #[serde(rename_all = "snake_case")]
 pub enum PluginUpdateStatus {
     Updated,
@@ -197,7 +197,7 @@ pub enum PluginUpdateStatus {
     Failed,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, specta::Type)]
 pub struct PluginUpdateResult {
     pub name: String,
     pub current: String,

@@ -1,11 +1,11 @@
 <script setup>
 import { ref, computed, inject, watch } from "vue";
-import { invoke } from "@tauri-apps/api/core";
+import { dsProbeRegistries, dsInspectSpec, dsExemptionAction, dsApproveBuilds, dsPluginAction, classifyPluginFailure } from "../api/plugins.js";
 import { t } from "../composables/useI18n.js";
 import { useToast } from "../composables/useToast.js";
 import { actionErrorText, parseIncompatiblePlugins } from "../composables/useDsPluginErrors.js";
 import { withTimeout } from "../composables/useAsyncTimeout.js";
-import { classifyPluginFailure } from "../api/plugins.js";
+import { ErrorKind, toApiError } from "../api/errors.js";
 import { DS_PLUGIN_LOG_KEY } from "../composables/useDsPluginLog.js";
 
 // 官方风格安装对话框：form → checking → confirm → installing → done/failed。
@@ -82,7 +82,7 @@ async function open(prefill) {
   // 首次使用（未记住安装源）时探测最快源（对齐官方 registryProbe）
   if (!installRegistry.value) {
     try {
-      const p = await invoke("ds_probe_registries");
+      const p = await dsProbeRegistries();
       if (p?.kind) {
         installRegistry.value = p.kind;
         registryProbed.value = true;
@@ -117,12 +117,7 @@ async function requestInstall() {
   inspectFailed.value = false;
   inspectInfo.value = null;
   try {
-    const info = await invoke("ds_inspect_spec", {
-      version: props.version,
-      profile: props.profile,
-      spec,
-      registry: registryValue.value,
-    });
+    const info = await dsInspectSpec(props.version, props.profile, spec, registryValue.value);
     inspectInfo.value = info || null;
     if (info?.problem) {
       installError.value = inspectProblemText(info);
@@ -159,13 +154,7 @@ async function allowIncompatibleAndRetry(onlyItem) {
   try {
     for (const item of items) {
       await withTimeout(
-        invoke("ds_exemption_action", {
-          version: props.version,
-          profile: props.profile,
-          action: "allow",
-          package_version: item.packageVersion,
-          dsh_version: item.dshVersion,
-        }),
+        dsExemptionAction(props.version, props.profile, "allow", item.packageVersion, item.dshVersion),
         60000,
         t("dsplugins.operationTimeout"),
       );
@@ -184,11 +173,7 @@ async function approveAndRetryInstall() {
   const pkgs = props.profileInfo.pending_builds || [];
   if (!pkgs.length) return;
   try {
-    await invoke("ds_approve_builds", {
-      version: props.version,
-      profile: props.profile,
-      packages: pkgs,
-    });
+    await dsApproveBuilds(props.version, props.profile, pkgs);
     emit("refresh-info");
     retryInstall();
   } catch (e) {
@@ -212,13 +197,7 @@ async function confirmInstall() {
   logLines.value = [];
   try {
     const res = await withTimeout(
-      invoke("ds_plugin_action", {
-        version: props.version,
-        profile: props.profile,
-        action: "add",
-        package: spec,
-        registry: registryValue.value,
-      }),
+      dsPluginAction(props.version, props.profile, "add", spec, registryValue.value),
       300000,
       t("dsplugins.operationTimeout"),
     );
@@ -227,11 +206,14 @@ async function confirmInstall() {
     emit("installed");
     emit("refresh-info");
   } catch (e) {
-    const raw = String(e) + "\n" + logLines.value.join("\n");
-    installError.value = actionErrorText(e);
+    const apiError = toApiError(e, { code: ErrorKind.commandFailed });
+    const raw = apiError.raw + "\n" + logLines.value.join("\n");
+    installError.value = actionErrorText(apiError);
     incompatible.value = parseIncompatiblePlugins(raw);
     try {
-      failure.value = await classifyPluginFailure(raw);
+      const classified = await classifyPluginFailure(raw);
+      // 保留现有 code/message/detail；raw 必须包含完整日志，不能被截断。
+      failure.value = { ...classified, raw };
     } catch (_) {
       failure.value = null;
     }

@@ -33,7 +33,7 @@ const CHECK_TTL: Duration = Duration::from_secs(30 * 60);
 /// 缓存文件名（位于 `<数据根>/cache/`）。
 const CACHE_FILE: &str = "plugins.json";
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, specta::Type)]
 pub struct CatalogPlugin {
     pub name: String,
     pub description: String,
@@ -78,7 +78,7 @@ struct RawCatalog {
 }
 
 /// 当前展示的列表。
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, specta::Type)]
 pub struct Catalog {
     /// 分类标签的多语言映射。前端按当前语言取用，缺项回退中文原值。
     #[serde(
@@ -91,7 +91,7 @@ pub struct Catalog {
 }
 
 /// 一次远端检查的结果。
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, specta::Type)]
 pub struct CheckResult {
     /// 是否真的发起了检查。false = 节流窗口内跳过。
     pub checked: bool,

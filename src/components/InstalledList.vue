@@ -1,13 +1,12 @@
 <script setup>
 import { ref, onMounted, onUnmounted } from "vue";
-import { invoke } from "@tauri-apps/api/core";
+import { listRunningVersions, isVersionOpen, runVersion as runVersionApi, openInBrowser as openInBrowserApi, setDefault as setDefaultApi, createShortcut as createShortcutApi, setIsolated, uninstallVersion } from "../api/versions.js";
+import { logFrontend } from "../api/app.js";
 import { ask } from "@tauri-apps/plugin-dialog";
 import { useToast } from "../composables/useToast.js";
 import { useSharedHomeWarn } from "../composables/useSharedHomeWarn.js";
 import { useSizeScan } from "../composables/useSizeScan.js";
-import IsolatedMenu from "./IsolatedMenu.vue";
-import NotesPanel from "./NotesPanel.vue";
-import DsPluginPanel from "./DsPluginPanel.vue";
+import InstalledRow from "./InstalledRow.vue";
 import SharedHomeDialog from "./SharedHomeDialog.vue";
 import { t } from "../composables/useI18n.js";
 
@@ -61,7 +60,7 @@ const openVersions = ref(new Set());
 let openPollTimer = null;
 async function refreshOpenVersions() {
   try {
-    const list = await invoke("list_running_versions");
+    const list = await listRunningVersions();
     openVersions.value = new Set(list || []);
   } catch (_) { /* 查询失败保持原状 */ }
 }
@@ -91,14 +90,6 @@ function toggleSelectAll(on) {
   selected.value = s;
 }
 function clearSelection() { selected.value = new Set(); }
-
-function fmtSize(bytes) {
-  if (bytes == null) return "";
-  if (bytes < 1024) return bytes + " B";
-  if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + " KB";
-  if (bytes < 1024 * 1024 * 1024) return (bytes / 1024 / 1024).toFixed(1) + " MB";
-  return (bytes / 1024 / 1024 / 1024).toFixed(2) + " GB";
-}
 
 // ---- 扫描操作 ----
 /// 单版本扫描
@@ -147,8 +138,8 @@ async function run(v) {
   // v0.2.14：该版本窗口已开 → 直接聚焦（不进启动态，避免一闪）。
   // 预查询多一次 IPC（~10-50ms），但换来"已开场景不闪启动态"的干净体验。
   try {
-    if (await invoke("is_version_open", { version: v })) {
-      const msg = await invoke("run_version", { version: v });
+    if (await isVersionOpen(v)) {
+      const msg = await runVersionApi(v);
       notify(msg);
       runningVersion.value = "";
       return;
@@ -159,11 +150,11 @@ async function run(v) {
   emit("launch", { version: v });
   const t0 = performance.now();
   try {
-    const msg = await invoke("run_version", { version: v });
+    const msg = await runVersionApi(v);
     const ms = (performance.now() - t0).toFixed(0);
     emit("launch-done", { version: v, ok: true });
     notify(msg);
-    invoke("log_frontend", { msg: "[launch] 运行 " + v + " 耗时=" + ms + "ms" }).catch(() => {});
+    logFrontend("[launch] 运行 " + v + " 耗时=" + ms + "ms").catch(() => {});
   } catch (e) {
     emit("launch-done", { version: v, ok: false, error: "" + e });
     notify("" + e);
@@ -174,7 +165,7 @@ async function run(v) {
 async function openInBrowser(v) {
   if (!(await confirmSharedHome(v))) return;
   try {
-    const res = await invoke("open_in_browser", { version: v });
+    const res = await openInBrowserApi(v);
     if (res && res.url && res.opened === false) {
       browserOpenResult.value = res;
       return;
@@ -185,7 +176,7 @@ async function openInBrowser(v) {
 
 async function setDefault(v) {
   try {
-    notify(await invoke("set_default", { version: v }));
+    notify(await setDefaultApi(v));
     emit("refresh");
   } catch (e) {
     const msg = String(e);
@@ -196,7 +187,7 @@ async function setDefault(v) {
       const ok = await ask(t("installed.dshConflict", { path }), { title: t("installed.dshConflictTitle"), kind: "warning" });
       if (ok) {
         try {
-          notify(await invoke("set_default", { version: v, force: true }));
+          notify(await setDefaultApi(v, true));
           emit("refresh");
         } catch (e2) { notify("" + e2); }
       }
@@ -207,13 +198,13 @@ async function setDefault(v) {
 }
 
 async function createShortcut(v) {
-  try { notify(await invoke("create_shortcut", { version: v })); }
+  try { notify(await createShortcutApi(v)); }
   catch (e) { notify("" + e); }
 }
 
 async function toggleIsolated(v, current) {
   try {
-    notify(await invoke("set_isolated", { version: v, isolated: !current }));
+    notify(await setIsolated(v, !current));
     emit("refresh");
   } catch (e) { notify("" + e); }
 }
@@ -224,7 +215,7 @@ async function uninstall(v) {
   uninstalling.value = v;
   notify(t("installed.uninstallingMsg", { v }));
   try {
-    notify(await invoke("uninstall_version", { version: v }));
+    notify(await uninstallVersion(v));
     emit("refresh");
   } catch (e) { notify("" + e); }
   finally { uninstalling.value = ""; }
@@ -242,7 +233,7 @@ async function batchUninstall() {
     const name = names[i];
     notify(t("installed.batchProgress", { i: i + 1, n: names.length, name }));
     uninstalling.value = name;
-    try { await invoke("uninstall_version", { version: name }); okCount++; }
+    try { await uninstallVersion(name); okCount++; }
     catch (e) { failed.push(name + ": " + e); }
   }
   emit("refresh");
@@ -298,82 +289,39 @@ function toggleInstalledNote(v) {
     </div>
 
     <ul class="ver-list" v-else>
-      <li v-for="v in installed" :key="v.version" class="ver-item"
-        :class="{
-          'item-selected': isSelected(v.version),
-          'item-scanning': isScanningVer(v.version),
-          'item-queued': scanning && inQueue(v.version) && !isScanningVer(v.version),
-          'item-flash': flashVersions.has(v.version),
-        }">
-        <input type="checkbox" class="sel-box" :checked="isSelected(v.version)" :disabled="batchBusy" @change="toggleSelect(v.version)" />
-        <div class="ver-main">
-          <span class="ver-num ver-num-clickable" :title="t('installed.clickNotes')" @click="toggleInstalledNote(v.version)">
-            {{ v.version }}<span class="ver-caret">{{ installedNoteVer === v.version ? "▾" : "▸" }}</span>
-          </span>
-          <span class="badge badge-running" v-if="openVersions.has(v.version)" :title="t('installed.openWindowTip')">{{ t("installed.openWindow") }}</span>
-          <span class="badge" v-if="v.is_default">{{ t("installed.default") }}</span>
-          <span class="badge badge-iso" v-if="v.isolated">{{ t("installed.isolated") }}</span>
-          <span class="badge badge-shared" v-else :title="t('installed.sharedHomeTip')">{{ t("installed.sharedHome") }}</span>
-          <span class="ver-meta" v-if="v.installed_at">{{ t("installed.installedAt") }} {{ v.installed_at }}</span>
-          <span class="ver-meta" v-if="verSizes[v.version] != null">
-            {{ t("installed.usage") }} {{ fmtSize(verSizes[v.version].total) }}
-            <template v-if="verSizes[v.version].shared_count">
-              ({{ t("installed.reused") }} {{ fmtSize(verSizes[v.version].shared_size) }} / {{ fmtSize(verSizes[v.version].exclusive_size) }})
-            </template>
-          </span>
-          <span class="badge badge-cached" v-if="cachedSet.has(v.version)" :class="{ 'cached-fade': fadingOut }">{{ t("installed.scanCached") }}</span>
-          <!-- 单版本扫描：行内文件级进度条 -->
-          <span class="ver-inline-progress" v-if="isScanningVer(v.version) && progress">
-            <span class="ver-inline-bar">
-              <span v-if="progress.stage === 'counting'" class="scan-bar-indeterminate"></span>
-              <span v-else class="ver-inline-fill" :style="{ width: filePercent(progress) + '%' }"></span>
-            </span>
-            <span class="ver-inline-pct">{{ progress.stage === 'counting' ? (progress.done ? t("installed.scanCountingN", { n: progress.done }) : t("installed.scanCounting")) : filePercent(progress) + '%' }}</span>
-          </span>
-        </div>
-        <div class="ver-actions">
-          <button class="btn primary" @click="run(v.version)" :disabled="!!runningVersion || isBlocked(v.version)">{{ runningVersion === v.version ? t("installed.running") : t("installed.run") }}</button>
-          <button class="btn" @click="openInBrowser(v.version)" :disabled="isBlocked(v.version)" :title="t('installed.openBrowserTip')">{{ t("installed.openBrowser") }}</button>
-          <button class="btn" @click="setDefault(v.version)" :disabled="v.is_default || isBlocked(v.version)">{{ t("installed.setDefault") }}</button>
-          <button class="btn" @click="createShortcut(v.version)" :disabled="isBlocked(v.version)" :title="t('installed.shortcutTip')">{{ t("installed.shortcut") }}</button>
-          <button
-            class="btn btn-plugin-toggle"
-            :class="{ 'is-open': pluginPanelVer === v.version }"
-            @click="pluginPanelVer = pluginPanelVer === v.version ? null : v.version"
-            :disabled="isBlocked(v.version)"
-            :aria-expanded="pluginPanelVer === v.version"
-          >{{ t("dsplugins.button") }}</button>
-          <button class="btn" @click="scanVersionSize(v.version)" :disabled="scanning || isBlocked(v.version)" :title="t('installed.scanTip')">
-            {{ isScanningVer(v.version) ? t("installed.scanning") : (verSizes[v.version] != null ? t("installed.rescanSize") : t("installed.scanSize")) }}
-          </button>
-          <IsolatedMenu
-            v-if="v.isolated"
-            :version="v.version"
-            :disabled="isBlocked(v.version)"
-            @toggle-isolated="toggleIsolated(v.version, $event)"
-          />
-          <button
-            v-else
-            class="btn"
-            @click="toggleIsolated(v.version, false)"
-            :disabled="isBlocked(v.version)"
-            :title="t('installed.isolateTip')"
-          >{{ t("installed.isolate") }}</button>
-          <button class="btn danger" @click="uninstall(v.version)" :disabled="!!uninstalling || batchBusy || (scanning && inQueue(v.version))">{{ uninstalling === v.version ? t("installed.uninstalling") : t("installed.uninstall") }}</button>
-        </div>
-        <DsPluginPanel
-          v-if="pluginPanelVer === v.version"
-          :version="v.version"
-          @close="pluginPanelVer = null"
-        />
-        <NotesPanel
-          v-if="installedNoteVer === v.version"
-          :version="v.version"
-          inline
-          @close="installedNoteVer = null"
-          @open-url="emit('open-url', $event)"
-        />
-      </li>
+      <InstalledRow
+        v-for="v in installed"
+        :key="v.version"
+        :item="v"
+        :selected="isSelected(v.version)"
+        :open="openVersions.has(v.version)"
+        :is-scanning="isScanningVer(v.version)"
+        :queued="scanning && inQueue(v.version) && !isScanningVer(v.version)"
+        :flash="flashVersions.has(v.version)"
+        :progress="progress"
+        :scan-pending="scanning && inQueue(v.version)"
+        :size-info="verSizes[v.version]"
+        :cached="cachedSet.has(v.version)"
+        :fading-out="fadingOut"
+        :batch-busy="batchBusy"
+        :uninstalling-version="uninstalling"
+        :running-version="runningVersion"
+        :plugin-panel-open="pluginPanelVer === v.version"
+        :notes-open="installedNoteVer === v.version"
+        @select="toggleSelect(v.version)"
+        @toggle-notes="toggleInstalledNote(v.version)"
+        @run="run(v.version)"
+        @open-browser="openInBrowser(v.version)"
+        @set-default="setDefault(v.version)"
+        @shortcut="createShortcut(v.version)"
+        @toggle-plugin="pluginPanelVer = pluginPanelVer === v.version ? null : v.version"
+        @scan-size="scanVersionSize(v.version)"
+        @toggle-isolated="toggleIsolated(v.version, $event)"
+        @uninstall="uninstall(v.version)"
+        @close-plugin="pluginPanelVer = null"
+        @close-notes="installedNoteVer = null"
+        @open-url="emit('open-url', $event)"
+      />
     </ul>
 
     <!-- 批量操作栏 -->

@@ -3,6 +3,7 @@
 use super::*;
 
 #[tauri::command]
+#[specta::specta]
 pub(crate) fn log_frontend(app: tauri::AppHandle, msg: String) {
     let mdir = manager_dir(&app);
     let root = Config::load(&mdir).resolve_root(&mdir);
@@ -20,6 +21,7 @@ pub(crate) fn log_frontend(app: tauri::AppHandle, msg: String) {
 }
 
 #[tauri::command]
+#[specta::specta]
 pub(crate) fn open_url(url: String) -> Result<(), String> {
     if !url.starts_with("http://") && !url.starts_with("https://") {
         return Err("只允许打开 http/https 链接".to_string());
@@ -33,6 +35,7 @@ pub(crate) fn open_url(url: String) -> Result<(), String> {
 }
 
 #[tauri::command]
+#[specta::specta]
 pub(crate) fn open_dir(app: tauri::AppHandle, which: String) -> Result<(), String> {
     let mdir = manager_dir(&app);
     let cfg = Config::load(&mdir);
