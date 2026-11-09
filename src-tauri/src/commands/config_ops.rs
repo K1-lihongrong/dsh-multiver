@@ -29,7 +29,14 @@ pub(crate) fn set_root(
         }
     }
 
-    cfg.root_dir = root.clone();
+    cfg.root_dir = match root.as_deref() {
+        Some(raw) => Some(
+            crate::config::validate_root_path(raw)?
+                .to_string_lossy()
+                .to_string(),
+        ),
+        None => None,
+    };
     cfg.save(&mdir).map_err(|e| e.to_string())?;
     let dirs = Dirs::new(cfg.resolve_root(&mdir));
     dirs.ensure().map_err(|e| e.to_string())?;

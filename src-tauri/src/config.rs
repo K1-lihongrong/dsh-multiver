@@ -123,6 +123,25 @@ impl Default for MaintenanceConfig {
     }
 }
 
+/// 校验用户输入的数据根路径（GUI 与 CLI 共用）。
+pub fn validate_root_path(raw: &str) -> Result<std::path::PathBuf, String> {
+    let raw = raw.trim();
+    if raw.is_empty() {
+        return Err("目录不能为空".into());
+    }
+    let path = std::path::PathBuf::from(raw);
+    if !path.is_absolute() {
+        return Err(format!("请提供绝对路径：{}", raw));
+    }
+    if path
+        .components()
+        .any(|c| matches!(c, std::path::Component::ParentDir))
+    {
+        return Err(format!("路径不能包含 ..：{}", raw));
+    }
+    Ok(path)
+}
+
 impl Config {
     /// 配置文件名
     pub const FILE_NAME: &'static str = "config.json";
@@ -694,6 +713,20 @@ mod tests {
         assert_eq!(back.maintenance.last_cleanup_count, 3);
         assert!(back.use_official_dsh_home);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn validate_root_path_rules() {
+        assert!(validate_root_path("  ").is_err());
+        assert!(validate_root_path("relative/path").is_err());
+        #[cfg(windows)]
+        assert!(validate_root_path("C:\\a\\..\\b").is_err());
+        #[cfg(not(windows))]
+        assert!(validate_root_path("/tmp/../etc").is_err());
+        #[cfg(windows)]
+        assert!(validate_root_path("C:\\data").is_ok());
+        #[cfg(not(windows))]
+        assert!(validate_root_path("/tmp/data").is_ok());
     }
 
     #[test]

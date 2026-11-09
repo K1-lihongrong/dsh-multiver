@@ -9,6 +9,7 @@ import DsPluginInstalled from "./DsPluginInstalled.vue";
 import DsPluginCatalog from "./DsPluginCatalog.vue";
 import DsPluginInstallDialog from "./DsPluginInstallDialog.vue";
 import DsPluginMeta from "./DsPluginMeta.vue";
+import SharedHomeHealth from "./SharedHomeHealth.vue";
 
 // v0.3.0 双向桥 B1：管理某 dsh 版本的插件（dsh profile 里的 npm 包）。
 // 通过 dsh CLI（dsh plugin --profile <p> add/remove <包>）执行。
@@ -44,6 +45,7 @@ provide(DS_PLUGIN_LOG_KEY, { logLines, showLog });
 
 // 阶段 4：已安装 / 推荐 两个标签页
 const tab = ref("installed"); // installed | catalog
+const showHealth = ref(false);
 
 const homeKindLabel = computed(() => {
   const m = { isolated: "dsplugins.homeIsolated", official: "dsplugins.homeOfficial", shared: "dsplugins.homeShared" };
@@ -281,6 +283,9 @@ onUnmounted(() => {
         >
           {{ t("dsplugins.checkUpdates") }}
         </button>
+        <button class="dp-btn" @click="showHealth = true" :disabled="busy">
+          🩺 {{ t("dsplugins.healthTitle") }}
+        </button>
       </div>
 
       <!-- 已安装标签页 -->
@@ -327,6 +332,7 @@ onUnmounted(() => {
     </template>
 
     <!-- 官方风格安装对话框：form → confirm → installing → done/failed -->
+    <SharedHomeHealth v-if="showHealth" :version="version" @close="showHealth = false" />
     <DsPluginInstallDialog
       ref="installRef"
       :version="version"

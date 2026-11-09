@@ -5,6 +5,7 @@ import { t } from "../composables/useI18n.js";
 import { useToast } from "../composables/useToast.js";
 import { actionErrorText, parseIncompatiblePlugins } from "../composables/useDsPluginErrors.js";
 import { withTimeout } from "../composables/useAsyncTimeout.js";
+import { classifyPluginFailure } from "../api/plugins.js";
 import { DS_PLUGIN_LOG_KEY } from "../composables/useDsPluginLog.js";
 
 // 官方风格安装对话框：form → checking → confirm → installing → done/failed。
@@ -31,6 +32,7 @@ const installPhase = ref("form");
 const installResult = ref(null);
 const installError = ref("");
 const incompatible = ref([]);
+const failure = ref(null);
 const inspectInfo = ref(null);
 const inspectFailed = ref(false);
 const registryProbed = ref(false);
@@ -65,6 +67,7 @@ async function open(prefill) {
   installResult.value = null;
   installError.value = "";
   incompatible.value = [];
+  failure.value = null;
   inspectInfo.value = null;
   inspectFailed.value = false;
   registryProbed.value = false;
@@ -224,12 +227,28 @@ async function confirmInstall() {
     emit("installed");
     emit("refresh-info");
   } catch (e) {
+    const raw = String(e) + "\n" + logLines.value.join("\n");
     installError.value = actionErrorText(e);
-    incompatible.value = parseIncompatiblePlugins(installError.value + "\n" + logLines.value.join("\n"));
+    incompatible.value = parseIncompatiblePlugins(raw);
+    try {
+      failure.value = await classifyPluginFailure(raw);
+    } catch (_) {
+      failure.value = null;
+    }
     installPhase.value = "failed";
     emit("refresh-info");
   } finally {
     installing.value = false;
+  }
+}
+
+async function copyFailureRaw() {
+  if (!failure.value) return;
+  try {
+    await navigator.clipboard.writeText(failure.value.raw);
+    notify(t("dsplugins.healthCopied"));
+  } catch (e) {
+    notify("" + e);
   }
 }
 
@@ -360,6 +379,13 @@ defineExpose({ open });
 
       <template v-else>
         <div class="dp-done-title dp-fail-title">✕ {{ t("dsplugins.installFailedTitle") }}</div>
+        <div class="dp-failure-card" v-if="failure">
+          <strong>{{ t("dsplugins.failure." + failure.code) }}</strong>
+          <span class="dp-modal-hint">{{ failure.detail }}</span>
+          <button class="dp-link-btn" @click="copyFailureRaw">
+            {{ t("dsplugins.copyRaw") }}
+          </button>
+        </div>
         <pre class="dp-log-body dp-modal-log">{{ installError }}</pre>
         <div class="dp-pending" v-if="profileInfo.pending_builds.length">
           <span class="dp-meta-label">{{ t("dsplugins.pendingBuilds", { n: profileInfo.pending_builds.length }) }}</span>

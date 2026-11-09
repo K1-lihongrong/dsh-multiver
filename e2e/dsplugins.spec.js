@@ -55,6 +55,49 @@ test("安装失败且带官方诊断 → 透传原文并提示诊断日志", asy
 });
 
 
+test("共享 home 体检 → 显示旧版本残留报告", async ({ page }) => {
+  await mockTauri(page, {
+    installed: [makeVersion("0.2.0-rc.1", { isolated: true })],
+    extra: {
+      ds_list_plugins: { dsh_home: "D:/dsh", home_kind: "shared", profiles: [PROFILE] },
+      ds_shared_home_health: {
+        home: "D:/dsh",
+        current_version: "0.2.0-rc.1",
+        summary: { scanned: 3, stale: 1, dangling: 0, duplicate: 1 },
+        issues: [
+          { kind: "stale_junction", package: "@deepseek-ai/dsh-agent-presets", source_version: "0.0.1-rc.5", target: "D:/dsh/versions/0.0.1-rc.5/node_modules/x", detail: "链接来自 DSH 0.0.1-rc.5" },
+        ],
+      },
+    },
+  });
+  await page.goto("/");
+  await page.getByRole("button", { name: "插件", exact: true }).click();
+  await page.getByRole("button", { name: /共享 home 体检/ }).click();
+  await expect(page.locator(".dp-health-modal")).toBeVisible();
+  await expect(page.locator(".dp-health-modal")).toContainText("旧版本 1");
+  await expect(page.locator(".dp-health-modal")).toContainText("@deepseek-ai/dsh-agent-presets");
+});
+
+test("安装失败分类 → 保留原始输出并显示动作", async ({ page }) => {
+  await mockTauri(page, {
+    installed: [makeVersion("0.2.0-rc.1", { isolated: true })],
+    extra: {
+      ds_list_plugins: { dsh_home: "D:/dsh", home_kind: "shared", profiles: [PROFILE] },
+      ds_plugin_action: "(args) => Promise.reject('EPERM: file is being used by another process')",
+      ds_classify_plugin_failure: "(args) => Promise.resolve({ code: 'file_locked', message: '文件被占用', detail: '关闭 dsh 后重试', raw: args.output, log_path: null })",
+    },
+  });
+  await page.goto("/");
+  await page.getByRole("button", { name: "插件", exact: true }).click();
+  await page.getByRole("button", { name: /添加插件/ }).click();
+  await page.locator(".dp-modal-input").first().fill("x");
+  await page.locator(".dp-modal").getByRole("button", { name: "安装", exact: true }).click();
+  await page.locator(".dp-modal").getByRole("button", { name: "确认安装", exact: true }).click();
+  await page.waitForTimeout(500);
+  await expect(page.locator(".dp-failure-card")).toContainText("文件被占用");
+  await expect(page.locator(".dp-modal-log")).toContainText("EPERM");
+});
+
 test("点「插件」→ 展开面板（列 profile 与插件 + 官方语义标签）", async ({ page }) => {
   await mockTauri(page, {
     installed: [makeVersion("0.2.0-rc.1", { isolated: true })],

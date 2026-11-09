@@ -17,6 +17,8 @@ fn resolve_dsh(
     let home = crate::paths::resolve_home(&cfg, &dirs, version);
     let cli = crate::dsplugins::dsh_cli(&vdir)
         .ok_or_else(|| format!("版本 {} 缺少 dsh 入口", version))?;
+    let adapter = crate::dsh_adapter::adapter_for(version);
+    let _ = adapter.generation();
     Ok((cli, home))
 }
 
@@ -100,6 +102,11 @@ pub(crate) async fn ds_exemption_action(
     crate::dsplugins::validate_package_spec(&dsh_version)
         .map_err(|_| "DSH 版本格式不正确".to_string())?;
     let (cli, home) = resolve_dsh(&app, &version)?;
+    let adapter = crate::dsh_adapter::adapter_for(&version);
+    if !adapter.supports_allow_version() {
+        return Err("当前 DSH 版本不支持精确版本豁免".into());
+    }
+    let _ = adapter.profile_dir(&home, &profile);
     let args: Vec<String> = match action.as_str() {
         "allow" => vec![
             "allow-version".into(),
@@ -630,6 +637,47 @@ pub(crate) fn ds_open_profile_dir(
     }
 }
 
+/// 把 pnpm/dsh 原始失败输出分类；`raw` 原样保留。
+#[tauri::command]
+pub(crate) fn ds_classify_plugin_failure(output: String) -> crate::plugin_failure::PluginFailure {
+    crate::plugin_failure::classify(&output)
+}
+
+/// 共享 home 只读体检：扫描 profiles/node_modules 的 junction，报告旧版本/悬空/重复来源。
+#[tauri::command]
+pub(crate) fn ds_shared_home_health(
+    app: tauri::AppHandle,
+    version: String,
+) -> Result<crate::shared_home::SharedHomeHealth, String> {
+    use tauri::Manager;
+    let mdir = manager_dir(&app);
+    let cfg = Config::load(&mdir);
+    let dirs = Dirs::new(cfg.resolve_root(&mdir));
+    let home = crate::paths::resolve_home(&cfg, &dirs, &version);
+    let ctx = app.try_state::<crate::AppCtx>();
+    let job = ctx.as_ref().map(|c| c.jobs().create("health", &version));
+    if let (Some(ctx), Some(job)) = (ctx.as_ref(), job.as_deref()) {
+        ctx.jobs().progress(job, "scanning", 0, None);
+    }
+    let report = crate::shared_home::scan(&home, &version);
+    if let (Some(ctx), Some(job)) = (ctx.as_ref(), job.as_deref()) {
+        ctx.jobs().finish(job, "shared home health scanned");
+    }
+    Ok(report)
+}
+
+/// 最近 Job 快照，供前端/诊断使用。
+#[tauri::command]
+pub(crate) fn list_jobs(
+    app: tauri::AppHandle,
+    limit: Option<usize>,
+) -> Vec<crate::jobs::JobSnapshot> {
+    use tauri::Manager;
+    app.try_state::<crate::AppCtx>()
+        .map(|ctx| ctx.jobs().list_recent(limit.unwrap_or(20)))
+        .unwrap_or_default()
+}
+
 /// 检查可更新插件（B1-13）：`dsh plugin --profile <p> outdated --json`。
 ///
 /// `pnpm outdated` 在部分 hoisted / bundle 组合 profile 上会漏报范围内的新版本
@@ -819,6 +867,13 @@ pub(crate) async fn ds_plugin_update_batch(
         return Ok(results.into_iter().map(|r| r.unwrap()).collect());
     }
 
+    use tauri::Manager;
+    let ctx = app.try_state::<crate::AppCtx>().map(|c| c.inner().clone());
+    let job_id = ctx.as_ref().map(|c| {
+        c.jobs()
+            .create("update", &format!("{}/{}", version, profile))
+    });
+    let jobs = ctx.as_ref().map(|c| c.jobs().clone());
     let app2 = app.clone();
     let version2 = version.clone();
     let profile2 = profile.clone();
@@ -827,9 +882,38 @@ pub(crate) async fn ds_plugin_update_batch(
     let pdir2 = pdir;
     let outcome = tauri::async_runtime::spawn_blocking(move || {
         use tauri::Emitter;
+        if let (Some(jid), Some(reg)) = (job_id.as_deref(), jobs.as_ref()) {
+            reg.progress(jid, "batch", 0, Some(total as u64));
+            let _ = app2.emit(
+                "job:progress",
+                serde_json::json!({
+                    "id": jid,
+                    "kind": "update",
+                    "target": format!("{}/{}", version2, profile2),
+                    "stage": "batch",
+                    "done": 0,
+                    "total": total,
+                }),
+            );
+        }
         let mut out = results;
         for (pos, (idx, plan)) in plans.into_iter().enumerate() {
             let index = pos + 1;
+            if let (Some(jid), Some(reg)) = (job_id.as_deref(), jobs.as_ref()) {
+                reg.progress(jid, "update", pos as u64, Some(total as u64));
+                let _ = app2.emit(
+                    "job:progress",
+                    serde_json::json!({
+                        "id": jid,
+                        "kind": "update",
+                        "target": format!("{}/{}", version2, profile2),
+                        "stage": "update",
+                        "done": pos,
+                        "total": total,
+                        "name": plan.name,
+                    }),
+                );
+            }
             let app3 = app2.clone();
             let version3 = version2.clone();
             let profile3 = profile2.clone();
@@ -908,6 +992,25 @@ pub(crate) async fn ds_plugin_update_batch(
                 }),
             );
             out[idx] = Some(result);
+        }
+        let failed = out
+            .iter()
+            .filter(|r| {
+                !r.as_ref()
+                    .is_some_and(|x| matches!(&x.status, crate::dsplugins::PluginUpdateStatus::Updated))
+            })
+            .count();
+        if let (Some(jid), Some(reg)) = (job_id.as_deref(), jobs.as_ref()) {
+            if failed == 0 {
+                reg.finish(jid, "plugin update done");
+                let _ = app2.emit("job:done", serde_json::json!({ "id": jid, "kind": "update" }));
+            } else {
+                reg.fail(jid, "partial_failure", "some plugin updates failed");
+                let _ = app2.emit(
+                    "job:failed",
+                    serde_json::json!({ "id": jid, "kind": "update", "code": "partial_failure", "failed": failed }),
+                );
+            }
         }
         out
     })

@@ -7,6 +7,18 @@
 
 ---
 
+## [0.4.0-alpha.2] - 2026-11-09（开发中）
+
+### 第一批
+
+- 新增共享 home 体检：只读扫描 profiles/node_modules 的旧版本 junction、悬空链接和重复来源，不自动删除。
+- 新增插件安装失败分类器：覆盖版本兼容、发布保护期、文件锁、网络、环境、peer 警告、构建脚本、未知 8 类；完整保留 pnpm/dsh 原始输出。
+- 新增 JobRegistry 基础、`list_jobs` 命令；批量更新开始发 `job:*` 事件。
+- 新增 dsh_adapter 基础识别与 allow-version 能力门控。
+- GUI/CLI set_root 共用路径校验。
+
+---
+
 ## [0.4.0-alpha.1] - 2026-11-09
 
 ### 类型与状态收口

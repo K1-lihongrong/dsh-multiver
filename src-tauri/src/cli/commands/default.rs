@@ -68,23 +68,13 @@ pub fn cmd_set_default(version: &str, dry_run: bool, json: bool) -> i32 {
 /// 不会被新 root 的启动清理触及，其中的 dsh 可能永久残留。
 /// Windows 不需要：子进程由 Job Object 保障（OS 级），见 procreg.rs 模块注释。
 pub fn cmd_set_root(dir: &str, dry_run: bool, json: bool) -> i32 {
-    let raw = dir.trim();
-    if raw.is_empty() {
-        out_result(json, false, "目录不能为空");
-        return 1;
-    }
-    let path = std::path::Path::new(raw);
-    if !path.is_absolute() {
-        out_result(json, false, &format!("请提供绝对路径：{}", raw));
-        return 1;
-    }
-    if path
-        .components()
-        .any(|c| matches!(c, std::path::Component::ParentDir))
-    {
-        out_result(json, false, &format!("路径不能包含 ..：{}", raw));
-        return 1;
-    }
+    let path = match crate::config::validate_root_path(dir) {
+        Ok(p) => p,
+        Err(e) => {
+            out_result(json, false, &e);
+            return 1;
+        }
+    };
 
     let mut ctx = load_ctx();
     let old_root = ctx.dirs.root.clone();

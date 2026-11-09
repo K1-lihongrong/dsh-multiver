@@ -6,18 +6,22 @@ mod commands;
 mod config;
 mod console_decode;
 mod domain;
+mod dsh_adapter;
 mod dsplugins;
 mod envcheck;
 mod jobobj;
+mod jobs;
 mod launcher;
 mod logging;
 mod maintenance;
 mod net;
 mod paths;
+mod plugin_failure;
 mod ports;
 #[cfg(unix)]
 mod procreg;
 mod runtime;
+mod shared_home;
 mod sizecache;
 mod staged;
 mod updater;
@@ -88,6 +92,7 @@ pub(crate) struct AppCtx {
     dirs: Arc<RwLock<Dirs>>,
     scan_cancel: Arc<AtomicBool>,
     generation: Arc<AtomicU64>,
+    jobs: jobs::JobRegistry,
 }
 
 impl AppCtx {
@@ -103,6 +108,7 @@ impl AppCtx {
             dirs: Arc::new(RwLock::new(dirs)),
             scan_cancel: Arc::new(AtomicBool::new(false)),
             generation: Arc::new(AtomicU64::new(1)),
+            jobs: jobs::JobRegistry::default(),
         }
     }
 
@@ -128,6 +134,10 @@ impl AppCtx {
 
     pub(crate) fn scan_cancel_handle(&self) -> Arc<AtomicBool> {
         self.scan_cancel.clone()
+    }
+
+    pub(crate) fn jobs(&self) -> &jobs::JobRegistry {
+        &self.jobs
     }
 
     pub(crate) fn next_generation(&self) -> u64 {
@@ -550,6 +560,9 @@ pub fn run() {
             commands::ds_approve_builds,
             commands::ds_open_plugin_logs,
             commands::ds_check_updates,
+            commands::ds_shared_home_health,
+            commands::ds_classify_plugin_failure,
+            commands::list_jobs,
             commands::ds_inspect_spec,
             commands::ds_probe_registries,
             commands::ds_plugin_catalog,
