@@ -3,16 +3,26 @@
   window.__dshTopbarInjected = true;
   var VER = '__VER__';
   var URL = '__URL__';
+  // 每窗口随机令牌：页面内第三方代码无法读取其他窗口的闭包变量，
+  // Rust 侧据此拒绝跨窗口伪造事件（仅靠 label 可猜）。
+  var TOKEN = '__TOKEN__';
 
   // ── 事件通道 ──────────────────────────────────────────────
   // 内嵌 dsh 窗口是 remote 上下文，应用自有命令（log_frontend / restart_version）
-  // 被 ACL 默认拒绝；插件命令（plugin:event|emit，由 core:default 授权）可用。
-  // 故所有通知统一走事件，由 Rust 侧接收处理。
+  // 被 ACL 默认拒绝；事件插件命令可用。
+  // 必须用 emit_to 定向到**当前窗口**：全局 emit 会被所有窗口的 window.listen
+  // 收到，点 A 窗口的关闭会连带触发 B 窗口。定向后 Rust 侧即可按窗口隔离。
   function emit(event, payload) {
     try {
       var it = window.__TAURI_INTERNALS__;
-      if (it && typeof it.invoke === 'function') {
-        it.invoke('plugin:event|emit', { event: event, payload: payload || {} }).catch(function(){});
+      var meta = it && it.metadata && it.metadata.currentWindow;
+      var label = meta && meta.label;
+      if (it && typeof it.invoke === 'function' && label) {
+        it.invoke('plugin:event|emit_to', {
+          target: { kind: 'WebviewWindow', label: label },
+          event: event,
+          payload: Object.assign({ token: TOKEN }, payload || {})
+        }).catch(function(){});
       }
     } catch(_) {}
   }
@@ -156,6 +166,9 @@
     document.body.style.boxSizing = 'border-box';
 
     observeTheme();
+    // Rust 侧监听器在 WebviewWindowBuilder::build() 之后注册；页面可能在隐藏状态下
+    // 先完成首帧，首次 topbar-theme 事件可能丢失。延迟重发一次当前主题，确保跟随。
+    setTimeout(function(){ applyTheme(); }, 500);
     log('injected ver=' + VER + ' dark=' + isDark);
   }
 

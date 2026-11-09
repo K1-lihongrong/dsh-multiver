@@ -62,20 +62,32 @@ mod tests {
 
     #[test]
     fn topbar_script_substitutes_placeholders() {
-        let s = build_topbar_script("0.2.0-rc.2", "http://127.0.0.1:1234/?token=abc");
+        let s = build_topbar_script("0.2.0-rc.2", "http://127.0.0.1:1234/?token=abc", "deadbeef");
         // 占位符应被替换
         assert!(!s.contains("__VER__"));
         assert!(!s.contains("__URL__"));
+        assert!(!s.contains("__TOKEN__"));
         assert!(s.contains("0.2.0-rc.2"));
+        assert!(s.contains("deadbeef"));
         assert!(s.contains("http://127.0.0.1:1234/?token=abc"));
     }
 
     #[test]
     fn topbar_script_escapes_quote_and_backslash() {
         // 单引号、反斜杠应被转义，防注入 JS 单引号字符串字面量
-        let s = build_topbar_script("v'1", "http://x/'y\\z");
+        let s = build_topbar_script("v'1", "http://x/'y\\z", "tok'en");
         assert!(s.contains("v\\'1"), "单引号应被转义: {}", s);
         assert!(s.contains("http://x/\\'y"), "URL 中单引号应被转义");
+        assert!(s.contains("tok\\'en"), "token 中单引号应被转义");
+    }
+
+    #[test]
+    fn topbar_token_is_non_empty_and_unique() {
+        let a = new_topbar_token();
+        let b = new_topbar_token();
+        assert_eq!(a.len(), 32, "token 应为 128 bit 十六进制");
+        assert_ne!(a, b, "每窗口 token 必须不同");
+        assert!(a.chars().all(|c| c.is_ascii_hexdigit()));
     }
 
     /// topbar 与 Rust 侧的契约：事件名、通道、拖拽属性必须两边一致。
@@ -85,19 +97,29 @@ mod tests {
     /// 但运行时按钮静默失效——只能靠实机发现。这条断言把"两边名字对不上"
     /// 提前到 `cargo test`。
     ///
-    /// 维护方式：改 `topbar.js` 的事件名或 `lib.rs` 的 `listen_any` 时，
+    /// 维护方式：改 `topbar.js` 的事件名或 `launch.rs` 的 `window.listen` 时，
     /// 同步改这里的期望值；三者（JS / 监听器 / 本断言）必须同时更新。
     #[test]
     fn topbar_script_emits_events_matching_rust_listeners() {
-        let s = build_topbar_script("0.2.0", "http://127.0.0.1:1/");
+        let s = build_topbar_script("0.2.0", "http://127.0.0.1:1/", "deadbeef");
 
         // 通道：remote 上下文只能走插件命令
         assert!(
-            s.contains("plugin:event|emit"),
-            "topbar 必须用 plugin:event|emit（remote 下应用命令被 ACL 拒）"
+            s.contains("plugin:event|emit_to"),
+            "topbar 必须用 plugin:event|emit_to（remote 下应用命令被 ACL 拒，且全局 emit 会串窗口）"
         );
 
-        // 四个事件名：必须与 lib.rs 的 listen_any 一一对应
+        // emit_to 必须带当前窗口 label，否则 window.listen 无法按窗口隔离
+        assert!(
+            s.contains("metadata.currentWindow") && s.contains("'WebviewWindow'"),
+            "topbar 必须用当前窗口 label 定向 emit_to"
+        );
+        assert!(
+            s.contains("token: TOKEN") && s.contains("var TOKEN = 'deadbeef'"),
+            "topbar 事件必须携带每窗口 token"
+        );
+
+        // 四个事件名：必须与 launch.rs 的窗口级监听器一一对应
         for ev in [
             "topbar-log",
             "topbar-restart",
@@ -106,7 +128,7 @@ mod tests {
         ] {
             assert!(
                 s.contains(ev),
-                "topbar.js 缺少事件 {}（Rust 侧 listen_any 会收不到）",
+                "topbar.js 缺少事件 {}（Rust 侧 window.listen 会收不到）",
                 ev
             );
         }
@@ -130,6 +152,78 @@ mod tests {
             !s.contains("documentElement"),
             "不得触碰 documentElement（观察 <html> 会与 dsh 渲染抢时序导致闪退）"
         );
+    }
+
+    /// A1 安全回归：topbar 监听必须按窗口绑定，不能再回到全局 listen_any。
+    /// 全局监听 + 信任 payload 的 version 会让任意 dsh 页面关闭/重启别的版本窗口。
+    #[test]
+    fn topbar_listeners_are_window_scoped() {
+        let launch = include_str!("launch.rs");
+        assert_eq!(
+            launch.matches(".listen(\"topbar-").count(),
+            4,
+            "四个 topbar 事件都必须用 window.listen 绑定"
+        );
+        assert!(
+            !launch.contains("app.listen_any("),
+            "launch.rs 不得出现全局 listen_any"
+        );
+        assert_eq!(
+            launch
+                .matches("authenticated_topbar_payload(&event")
+                .count(),
+            4,
+            "四个监听器都必须校验窗口 token"
+        );
+        let lib = include_str!("../lib.rs");
+        assert!(
+            !lib.contains("app.listen_any("),
+            "lib.rs 不得保留全局 topbar 监听器"
+        );
+    }
+
+    /// A2 权限回归：内嵌 dsh 窗口只保留事件 emit 与拖拽；三键由 Rust 处理，不需要 JS 窗口权限。
+    #[test]
+    fn capabilities_are_split_with_minimal_embedded_permissions() {
+        let base = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("capabilities");
+        assert!(
+            !base.join("default.json").exists(),
+            "v0.3.7 起 capability 必须按 main / dsh 拆分，不能保留合并版"
+        );
+
+        let dsh: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(base.join("dsh.json")).unwrap()).unwrap();
+        let dsh_perms: Vec<&str> = dsh["permissions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_str().unwrap())
+            .collect();
+        assert_eq!(
+            dsh_perms,
+            vec![
+                "core:event:allow-emit-to",
+                "core:window:allow-start-dragging"
+            ],
+            "内嵌窗口权限必须最小化"
+        );
+        assert!(
+            !dsh_perms.iter().any(|p| p.starts_with("opener:")
+                || p.starts_with("dialog:")
+                || *p == "core:default"),
+            "内嵌窗口不得保留 opener / dialog / core:default"
+        );
+
+        let main: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(base.join("main.json")).unwrap())
+                .unwrap();
+        let main_perms = main["permissions"].as_array().unwrap();
+        for required in ["core:default", "opener:default", "dialog:default"] {
+            assert!(
+                main_perms.iter().any(|v| v.as_str() == Some(required)),
+                "主窗口缺少权限 {required}"
+            );
+        }
     }
 
     // ── resolve_home：隔离 / 非隔离版本的 DSH_HOME 解析 ──

@@ -1,6 +1,6 @@
 [package]
 name = "dsh-multiver"
-version = "0.3.6"
+version = "0.3.7"
 description = "Lightweight portable version manager for DeepSeek Harness"
 authors = ["K1-lihongrong"]
 edition = "2021"
@@ -69,6 +69,14 @@ libc = "0.2"
 
 
 # Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration
+[[test]]
+name = "contracts"
+path = "tests/contracts.rs"
+
+[[test]]
+name = "staged_failures"
+path = "tests/staged_failures.rs"
+
 [profile.release]
 codegen-units = 1
 lto = true

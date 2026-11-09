@@ -92,7 +92,8 @@ pub(crate) async fn launch_window(
     let label = window::window_label_gen(&version, generation);
 
     let title = format!("DSH {}", version);
-    let init_script = build_topbar_script(&version, &url);
+    let topbar_token = new_topbar_token();
+    let init_script = build_topbar_script(&version, &url, &topbar_token);
     let parsed = url.parse().map_err(|e| format!("URL 解析失败: {}", e))?;
 
     let built = WebviewWindowBuilder::new(&app, &label, WebviewUrl::External(parsed))
@@ -150,7 +151,98 @@ pub(crate) async fn launch_window(
         }
     }
 
-    // 设好 AUMID / 图标后再显示
+    // 先登记进程，供 topbar-restart 等窗口级监听器使用。
+    lock_procs(&procs).insert(version.clone(), (label.clone(), generation, child, job));
+
+    // ── topbar 事件监听（A1，v0.3.7）：绑定到本窗口 ──
+    // 版本号由闭包捕获，payload 中的 version 字段不再被采信，从而杜绝
+    // 「dsh 页面伪造 version 关掉/重启别的版本窗口」的越权路径。
+    // 见 docs/v0.3.7规划.md §3.2。
+    {
+        use tauri::Listener;
+        // topbar-log：写前端日志
+        {
+            let app_for_log = app.clone();
+            let token_for_log = topbar_token.clone();
+            let _ = window.listen("topbar-log", move |event| {
+                let Some(v) = authenticated_topbar_payload(&event, &token_for_log) else {
+                    return;
+                };
+                if let Some(msg) = v.get("msg").and_then(|m| m.as_str()) {
+                    let mdir = manager_dir(&app_for_log);
+                    let root = Config::load(&mdir).resolve_root(&mdir);
+                    logging::write_line(
+                        &root.join("logs"),
+                        "frontend.log",
+                        &format!("[topbar] {}", msg),
+                    );
+                }
+            });
+        }
+        // topbar-restart：重启本版本的 dsh 进程（版本号来自闭包，非 payload）
+        {
+            let app_for_restart = app.clone();
+            let procs_for_restart = procs.clone();
+            let version_for_restart = version.clone();
+            let token_for_restart = topbar_token.clone();
+            let _ = window.listen("topbar-restart", move |event| {
+                if authenticated_topbar_payload(&event, &token_for_restart).is_none() {
+                    return;
+                }
+                let app2 = app_for_restart.clone();
+                let procs2 = procs_for_restart.clone();
+                let ver = version_for_restart.clone();
+                tauri::async_runtime::spawn(async move {
+                    if let Err(e) = restart_version_impl(&app2, &procs2, &ver).await {
+                        let mdir = manager_dir(&app2);
+                        let root = Config::load(&mdir).resolve_root(&mdir);
+                        logging::log_app_error(&root, "topbar-restart", &format!("{}: {}", ver, e));
+                    }
+                });
+            });
+        }
+        // topbar-ctrl：窗口三键（只操作本窗口）
+        {
+            let win_for_ctrl = window.clone();
+            let token_for_ctrl = topbar_token.clone();
+            let _ = window.listen("topbar-ctrl", move |event| {
+                let Some(v) = authenticated_topbar_payload(&event, &token_for_ctrl) else {
+                    return;
+                };
+                let action = v.get("action").and_then(|a| a.as_str()).unwrap_or("");
+                match action {
+                    "minimize" => {
+                        let _ = win_for_ctrl.minimize();
+                    }
+                    "toggle-maximize" => {
+                        if win_for_ctrl.is_maximized().unwrap_or(false) {
+                            let _ = win_for_ctrl.unmaximize();
+                        } else {
+                            let _ = win_for_ctrl.maximize();
+                        }
+                    }
+                    "close" => {
+                        let _ = win_for_ctrl.close();
+                    }
+                    _ => {}
+                }
+            });
+        }
+        // topbar-theme：深浅色跟随（只作用于本窗口）
+        {
+            let win_for_theme = window.clone();
+            let token_for_theme = topbar_token.clone();
+            let _ = window.listen("topbar-theme", move |event| {
+                let Some(v) = authenticated_topbar_payload(&event, &token_for_theme) else {
+                    return;
+                };
+                let dark = v.get("dark").and_then(|d| d.as_bool()).unwrap_or(false);
+                window::set_dwm_dark(&win_for_theme, dark);
+            });
+        }
+    }
+
+    // 监听器注册完成后再显示窗口：页面首帧发出的 topbar 事件不会丢失。
     if let Err(e) = window.show() {
         logging::log_app_error(
             &dirs.root,
@@ -158,8 +250,6 @@ pub(crate) async fn launch_window(
             &format!("{} 显示窗口失败: {}", version, e),
         );
     }
-
-    lock_procs(&procs).insert(version.clone(), (label.clone(), generation, child, job));
 
     // 关窗回调里要注销进程登记，故提前把 root 算好（闭包不能捕获 app —— 它随后还要用）
     #[cfg(unix)]
@@ -459,25 +549,55 @@ pub(crate) async fn restart_version_impl(
     Ok(())
 }
 
+/// 校验 topbar 事件确实来自本窗口注入的脚本。
+///
+/// 仅靠事件目标 label 不够：页面内第三方代码可以伪造 emit_to 的 target，
+/// 或改写 metadata.currentWindow.label。每窗口随机 token 只存在于该窗口
+/// topbar.js 的 IIFE 闭包与 Rust 监听器闭包中，跨窗口伪造无法通过校验。
+fn authenticated_topbar_payload(event: &tauri::Event, token: &str) -> Option<serde_json::Value> {
+    let payload = event.payload().to_string();
+    let v = serde_json::from_str::<serde_json::Value>(&payload).ok()?;
+    let got = v.get("token").and_then(|t| t.as_str())?;
+    if got == token {
+        Some(v)
+    } else {
+        None
+    }
+}
+
+/// 生成每窗口 topbar 令牌。用标准库 RandomState（系统随机种子），不新增依赖。
+pub(crate) fn new_topbar_token() -> String {
+    use std::hash::{BuildHasher, Hasher};
+    let a = std::collections::hash_map::RandomState::new()
+        .build_hasher()
+        .finish();
+    let b = std::collections::hash_map::RandomState::new()
+        .build_hasher()
+        .finish();
+    format!("{a:016x}{b:016x}")
+}
+
 /// 注入到 dsh 页面的顶部可折叠小栏（显示版本号 + 完整 URL + 重启按钮）。
 ///
 /// 脚本正文外置在 `src/topbar.js`（便于编辑/高亮/审查），编译期用 include_str! 内联；
-/// 运行时把占位符 `__VER__` / `__URL__` 替换为实际值。
-pub(crate) fn build_topbar_script(version: &str, url: &str) -> String {
+/// 运行时把占位符 `__VER__` / `__URL__` / `__TOKEN__` 替换为实际值。
+pub(crate) fn build_topbar_script(version: &str, url: &str, token: &str) -> String {
     const TEMPLATE: &str = include_str!("../topbar.js");
     // 防注入：转义反斜杠与单引号（模板中以单引号包裹字符串字面量）
     let ver = version.replace('\\', "\\\\").replace('\'', "\\'");
     let url_js = url.replace('\\', "\\\\").replace('\'', "\\'");
+    let token_js = token.replace('\\', "\\\\").replace('\'', "\\'");
     TEMPLATE
         .replace("__VER__", &ver)
         .replace("__URL__", &url_js)
+        .replace("__TOKEN__", &token_js)
 }
 
 /// v0.2.14：供前端查询是否处于"启动模式"（命令行带 --launch-version）。
 /// 前端 onMounted 主动查，比事件可靠（setup emit 时前端可能还没监听）。
 #[tauri::command]
 pub(crate) fn get_launch_mode() -> Option<String> {
-    crate::lock_launch_mode().clone()
+    crate::lock_launch_intent().mode.clone()
 }
 
 /// 查询启动失败原因（若上一步启动已失败）。
@@ -487,7 +607,7 @@ pub(crate) fn get_launch_mode() -> Option<String> {
 /// 可能早于前端监听而丢失）。
 #[tauri::command]
 pub(crate) fn get_launch_error() -> Option<String> {
-    crate::lock_launch_error().clone()
+    crate::lock_launch_intent().error.clone()
 }
 
 /// v0.3.2：取走待处理的「打开设置区块」请求（取后即清）。
@@ -496,7 +616,7 @@ pub(crate) fn get_launch_error() -> Option<String> {
 /// 用「取走」而非「读取」：同一次启动只应滚动一次，重复挂载不应重复跳转。
 #[tauri::command]
 pub(crate) fn take_open_settings() -> Option<String> {
-    crate::lock_open_settings().take()
+    crate::lock_launch_intent().open_settings.take()
 }
 
 /// v0.2.14：前端渲染出"启动态"后调用，显示主窗口。
