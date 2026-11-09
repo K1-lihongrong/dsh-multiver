@@ -164,7 +164,7 @@ async function updatePlugin(pl) {
       if (r?.rollback_error) logLines.value.push("[" + pl.name + "] " + r.rollback_error);
     }
     emit("reload");
-    await checkUpdates();
+    updates.value = {};
   } catch (e) {
     notify(actionErrorText(e));
     showLog.value = true;
@@ -215,7 +215,7 @@ async function updateAll() {
     }
     if (failed) showLog.value = true;
     emit("reload");
-    await checkUpdates();
+    updates.value = {};
   } catch (e) {
     notify(actionErrorText(e));
     showLog.value = true;

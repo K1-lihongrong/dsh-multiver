@@ -404,6 +404,9 @@ test("批量更新 → 一次提交全部目标并回显失败回滚", async ({ 
     { name: "p2", latest: "2.0.0" },
   ]);
   await expect(page.locator(".dp-log-body")).toContainText("已回滚到 1.0.0");
+  await expect(page.getByRole("button", { name: /添加插件/ })).toBeEnabled();
+  await expect(page.getByRole("button", { name: "检查更新", exact: true })).toBeEnabled();
+  await expect(page.getByRole("button", { name: /共享 home 体检/ })).toBeEnabled();
 });
 
 test("安装遇到不兼容 → 一键精确版本豁免并重试", async ({ page }) => {

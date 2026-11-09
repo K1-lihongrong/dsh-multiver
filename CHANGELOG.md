@@ -16,6 +16,7 @@
 - 新增 JobRegistry 基础、`list_jobs` 命令；批量更新开始发 `job:*` 事件。
 - 新增 dsh_adapter 基础识别与 allow-version 能力门控。
 - GUI/CLI set_root 共用路径校验。
+- 更新完成后不再自动触发一次完整检查更新，避免「添加插件 / 检查更新 / 体检」按钮长时间置灰；需要刷新时手动点「检查更新」。
 
 ---
 

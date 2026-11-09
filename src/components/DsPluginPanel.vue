@@ -31,6 +31,7 @@ const dshHome = ref("");
 const homeKind = ref("shared");
 const loading = ref(false);
 const busy = ref(false);
+function setBusy(v) { busy.value = v; }
 const activeProfile = ref("");
 const installing = ref(false);
 
@@ -295,7 +296,8 @@ onUnmounted(() => {
         :version="version"
         :profile="activeProfile"
         :plugins="currentProfile()?.plugins || []"
-        v-model:busy="busy"
+        :busy="busy"
+        @update:busy="setBusy"
         @reload="reload"
         @refresh-info="refreshInfo"
         @action-failed="onActionFailed"
