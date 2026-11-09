@@ -6,6 +6,7 @@ import { ask } from "@tauri-apps/plugin-dialog";
 import { t } from "../composables/useI18n.js";
 import { useToast } from "../composables/useToast.js";
 import { actionErrorText } from "../composables/useDsPluginErrors.js";
+import { withTimeout } from "../composables/useAsyncTimeout.js";
 import { DS_PLUGIN_LOG_KEY } from "../composables/useDsPluginLog.js";
 
 // 「已安装」标签页：筛选、卸载、检查更新、更新。
@@ -97,10 +98,14 @@ async function checkUpdates() {
   if (!props.profile) return;
   emit("update:busy", true);
   try {
-    const list = await invoke("ds_check_updates", {
-      version: props.version,
-      profile: props.profile,
-    });
+    const list = await withTimeout(
+      invoke("ds_check_updates", {
+        version: props.version,
+        profile: props.profile,
+      }),
+      55000,
+      t("dsplugins.checkTimeout"),
+    );
     const map = {};
     for (const u of list || []) map[u.name] = u;
     updates.value = map;
@@ -129,11 +134,15 @@ async function updatePlugin(pl) {
   logLines.value = [];
   showLog.value = true;
   try {
-    const results = await invoke("ds_plugin_update_batch", {
-      version: props.version,
-      profile: props.profile,
-      targets: [{ name: pl.name, latest: u.latest }],
-    });
+    const results = await withTimeout(
+      invoke("ds_plugin_update_batch", {
+        version: props.version,
+        profile: props.profile,
+        targets: [{ name: pl.name, latest: u.latest }],
+      }),
+      300000,
+      t("dsplugins.operationTimeout"),
+    );
     const r = (results || [])[0];
     if (r?.status === "updated") {
       notify(t("dsplugins.updated", { p: pl.name, v: u.latest }));
@@ -168,11 +177,15 @@ async function updateAll() {
   logLines.value = [];
   showLog.value = true;
   try {
-    const results = await invoke("ds_plugin_update_batch", {
-      version: props.version,
-      profile: props.profile,
-      targets: list.map((u) => ({ name: u.name, latest: u.latest })),
-    });
+    const results = await withTimeout(
+      invoke("ds_plugin_update_batch", {
+        version: props.version,
+        profile: props.profile,
+        targets: list.map((u) => ({ name: u.name, latest: u.latest })),
+      }),
+      300000,
+      t("dsplugins.operationTimeout"),
+    );
     const updated = (results || []).filter((r) => r.status === "updated").length;
     const failed = (results || []).length - updated;
     notify(
@@ -232,12 +245,16 @@ async function runAction(action, pkg, locked) {
   // 立即展开日志区：卸载大插件要几十秒，不能等结束才让用户看到进度。
   showLog.value = true;
   try {
-    await invoke("ds_plugin_action", {
-      version: props.version,
-      profile: props.profile,
-      action,
-      package: name,
-    });
+    await withTimeout(
+      invoke("ds_plugin_action", {
+        version: props.version,
+        profile: props.profile,
+        action,
+        package: name,
+      }),
+      300000,
+      t("dsplugins.operationTimeout"),
+    );
     notify(t(action === "add" ? "dsplugins.installed" : "dsplugins.removed", { p: name }));
     emit("action-done");
     if (logLines.value.length) showLog.value = true;

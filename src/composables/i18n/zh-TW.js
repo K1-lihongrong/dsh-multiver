@@ -341,6 +341,8 @@ export default {
     "dsplugins.update": "更新",
     "dsplugins.updateAll": "全部更新",
     "dsplugins.updateFailed": "更新 {p} 失敗",
+    "dsplugins.checkTimeout": "檢查更新逾時，請檢查網路或 dsh 日誌後重試",
+    "dsplugins.operationTimeout": "外掛操作逾時，已恢復按鈕；請檢查網路或日誌後重試",
     "dsplugins.existingExemptions": "已有精確版本豁免（{n}）",
     "dsplugins.revokeExemption": "撤銷",
     "dsplugins.exemptionRevoked": "已撤銷 {p} 在 DSH {v} 上的豁免",

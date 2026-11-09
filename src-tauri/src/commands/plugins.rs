@@ -654,18 +654,17 @@ pub(crate) async fn ds_check_updates(
             &home,
             &profile2,
             &["outdated", "--json"],
-            crate::dsplugins::PLUGIN_TIMEOUT,
+            std::time::Duration::from_secs(15),
             |_| {},
         );
-        if res.timed_out {
-            return Err("检查更新超时".into());
-        }
-        let outdated_json_ok = serde_json::from_str::<serde_json::Value>(res.output.trim()).is_ok();
-        let mut updates = if outdated_json_ok {
-            crate::dsplugins::parse_outdated_json(&res.output)
+        let outdated_timed_out = res.timed_out;
+        let outdated_updates = if outdated_timed_out {
+            None
         } else {
-            Vec::new()
+            crate::dsplugins::parse_outdated_output(&res.output)
         };
+        let outdated_json_ok = outdated_updates.is_some();
+        let mut updates = outdated_updates.unwrap_or_default();
 
         let official = crate::dsplugins::official_bundles(&version_dir);
         if let Some(profile_info) = crate::dsplugins::list_profiles(&home, &official)
@@ -674,6 +673,7 @@ pub(crate) async fn ds_check_updates(
         {
             let mut known: std::collections::HashSet<String> =
                 updates.iter().map(|u| u.name.clone()).collect();
+            let fallback_deadline = std::time::Instant::now() + std::time::Duration::from_secs(25);
             for plugin in profile_info
                 .plugins
                 .iter()
@@ -682,13 +682,17 @@ pub(crate) async fn ds_check_updates(
                 if plugin.version.trim().is_empty() || !known.insert(plugin.name.clone()) {
                     continue;
                 }
+                let left = fallback_deadline.saturating_duration_since(std::time::Instant::now());
+                if left.is_zero() {
+                    break;
+                }
                 let view = crate::dsplugins::run_dsh_plugin(
                     &cli.bin,
                     cli.js.as_deref(),
                     &home,
                     &profile2,
                     &["view", &plugin.name, "version", "--json"],
-                    std::time::Duration::from_secs(20),
+                    left.min(std::time::Duration::from_secs(10)),
                     |_| {},
                 );
                 if view.timed_out || !view.ok {
@@ -707,7 +711,11 @@ pub(crate) async fn ds_check_updates(
         }
         updates.sort_by(|a, b| a.name.cmp(&b.name));
         if !outdated_json_ok && updates.is_empty() {
-            return Err(res.output);
+            return Err(if outdated_timed_out {
+                "检查更新超时".into()
+            } else {
+                res.output
+            });
         }
         Ok(updates)
     })

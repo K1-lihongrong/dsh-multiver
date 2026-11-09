@@ -591,7 +591,7 @@ pub fn validate_registry_url(url: &str) -> Result<(), String> {
 }
 
 /// 一条「有新版本」信息（pnpm outdated --json 的解析结果）。
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct DsUpdate {
     pub name: String,
     pub current: String,
@@ -615,7 +615,7 @@ pub fn parse_outdated_json(text: &str) -> Vec<DsUpdate> {
             .get("latest")
             .and_then(|x| x.as_str())
             .unwrap_or_default();
-        if !current.is_empty() && !latest.is_empty() && current != latest {
+        if !current.is_empty() && !latest.is_empty() && version_is_newer(current, latest) {
             out.push(DsUpdate {
                 name: name.clone(),
                 current: current.to_string(),
@@ -625,6 +625,20 @@ pub fn parse_outdated_json(text: &str) -> Vec<DsUpdate> {
     }
     out.sort_by(|a, b| a.name.cmp(&b.name));
     out
+}
+
+/// 从 dsh/pnpm 混合输出中提取 `outdated --json` 的 JSON 行。
+/// dsh 会先打印 profile 兼容性警告，因此不能直接对整个 output 做 JSON 解析。
+pub fn parse_outdated_output(output: &str) -> Option<Vec<DsUpdate>> {
+    for line in output.lines() {
+        let line = line.trim();
+        if (line.starts_with('{') || line.starts_with('['))
+            && serde_json::from_str::<serde_json::Value>(line).is_ok()
+        {
+            return Some(parse_outdated_json(line));
+        }
+    }
+    None
 }
 
 /// 生成失败回滚时要执行的 `add` 参数。
@@ -1493,6 +1507,18 @@ mod tests {
         assert!(version_is_newer("0.0.1-rc.1", "0.0.1"));
         assert!(!version_is_newer("0.0.1", "0.0.1-rc.1"));
         assert!(!version_is_newer("not-semver", "1.0.0"));
+    }
+
+    #[test]
+    fn parse_outdated_output_ignores_dsh_warning_lines() {
+        let output = "dsh: warning: something\n{}\ndsh: it stays installed\n";
+        assert_eq!(parse_outdated_output(output), Some(Vec::new()));
+        let output = "dsh: warning\n{\"dsh-ops\":{\"current\":\"0.5.1\",\"latest\":\"0.5.2\"}}\n";
+        let parsed = parse_outdated_output(output).unwrap();
+        assert_eq!(parsed.len(), 1);
+        assert_eq!(parsed[0].name, "dsh-ops");
+        assert_eq!(parsed[0].latest, "0.5.2");
+        assert_eq!(parse_outdated_output("no json here"), None);
     }
 
     #[test]

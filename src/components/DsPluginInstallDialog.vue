@@ -4,6 +4,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { t } from "../composables/useI18n.js";
 import { useToast } from "../composables/useToast.js";
 import { actionErrorText, parseIncompatiblePlugins } from "../composables/useDsPluginErrors.js";
+import { withTimeout } from "../composables/useAsyncTimeout.js";
 import { DS_PLUGIN_LOG_KEY } from "../composables/useDsPluginLog.js";
 
 // 官方风格安装对话框：form → checking → confirm → installing → done/failed。
@@ -154,13 +155,17 @@ async function allowIncompatibleAndRetry(onlyItem) {
   if (!items.length) return;
   try {
     for (const item of items) {
-      await invoke("ds_exemption_action", {
-        version: props.version,
-        profile: props.profile,
-        action: "allow",
-        package_version: item.packageVersion,
-        dsh_version: item.dshVersion,
-      });
+      await withTimeout(
+        invoke("ds_exemption_action", {
+          version: props.version,
+          profile: props.profile,
+          action: "allow",
+          package_version: item.packageVersion,
+          dsh_version: item.dshVersion,
+        }),
+        60000,
+        t("dsplugins.operationTimeout"),
+      );
     }
     notify(t("dsplugins.exemptionAllowed", { n: items.length }));
     emit("refresh-info");
@@ -203,13 +208,17 @@ async function confirmInstall() {
   installing.value = true;
   logLines.value = [];
   try {
-    const res = await invoke("ds_plugin_action", {
-      version: props.version,
-      profile: props.profile,
-      action: "add",
-      package: spec,
-      registry: registryValue.value,
-    });
+    const res = await withTimeout(
+      invoke("ds_plugin_action", {
+        version: props.version,
+        profile: props.profile,
+        action: "add",
+        package: spec,
+        registry: registryValue.value,
+      }),
+      300000,
+      t("dsplugins.operationTimeout"),
+    );
     installResult.value = { name: res?.name || null, spec, registry: registryValue.value };
     installPhase.value = "done";
     emit("installed");

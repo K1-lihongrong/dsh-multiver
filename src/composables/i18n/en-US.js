@@ -341,6 +341,8 @@ export default {
     "dsplugins.update": "Update",
     "dsplugins.updateAll": "Update all",
     "dsplugins.updateFailed": "Failed to update {p}",
+    "dsplugins.checkTimeout": "Update check timed out. Check your network or dsh logs, then retry.",
+    "dsplugins.operationTimeout": "Plugin operation timed out. Buttons were restored; check the network or logs and retry.",
     "dsplugins.existingExemptions": "Existing exact-version exemptions ({n})",
     "dsplugins.revokeExemption": "Revoke",
     "dsplugins.exemptionRevoked": "Revoked exemption for {p} on DSH {v}",
