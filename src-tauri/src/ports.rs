@@ -95,12 +95,16 @@ pub struct LaunchCommand {
 }
 
 /// dsh 启动端口。生产 adapter 负责隐藏控制台并返回 Child；测试可替换为 fake。
-#[allow(dead_code)]
 pub trait DshLauncher: Send + Sync {
+    #[allow(dead_code)]
     fn spawn(&self, request: &LaunchCommand) -> Result<Child, String>;
+
+    /// 用已构造好的 Command spawn；供现有 launcher 保留自己的 env / Job Object 配置。
+    fn spawn_command(&self, cmd: &mut Command) -> Result<Child, String> {
+        cmd.spawn().map_err(|e| e.to_string())
+    }
 }
 
-#[allow(dead_code)]
 pub struct ProcessDshLauncher;
 
 impl DshLauncher for ProcessDshLauncher {
@@ -159,6 +163,19 @@ mod tests {
         assert_eq!(SystemFs.read_to_string(&b).unwrap(), "hello");
         SystemFs.remove_file(&b).unwrap();
         SystemFs.remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn dsh_launcher_spawns_prebuilt_command() {
+        let mut cmd = if cfg!(windows) {
+            let mut c = Command::new("cmd.exe");
+            c.args(["/C", "exit", "0"]);
+            c
+        } else {
+            Command::new("/bin/true")
+        };
+        let mut child = ProcessDshLauncher.spawn_command(&mut cmd).unwrap();
+        assert!(child.wait().unwrap().success());
     }
 
     #[test]

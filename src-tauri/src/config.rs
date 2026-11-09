@@ -485,7 +485,17 @@ impl Config {
 
     /// 卸载某版本时清理配置中对它的引用：默认版本、隔离标记。
     /// 返回配置是否发生变化。
+    #[cfg(test)]
     pub fn remove_version_refs(&mut self, version: &str) -> bool {
+        self.remove_version_refs_and_collect_orphans(version).0
+    }
+
+    /// 清理版本引用，并返回因本次卸载而不再被任何版本使用的实例 id。
+    /// 调用方负责删除这些实例的 homes/<id> 目录。
+    pub fn remove_version_refs_and_collect_orphans(
+        &mut self,
+        version: &str,
+    ) -> (bool, Vec<InstanceId>) {
         let mut changed = false;
         if self.default_version.as_deref() == Some(version) {
             self.default_version = None;
@@ -495,15 +505,34 @@ impl Config {
             self.isolated_versions.retain(|v| v != version);
             changed = true;
         }
+        let mut mapped = Vec::new();
         if let Ok(vid) = VersionId::new(version) {
-            if self.version_instances.remove(&vid).is_some() {
+            if let Some(ids) = self.version_instances.remove(&vid) {
+                mapped = ids;
                 changed = true;
             }
             if self.selected_target.remove(&vid).is_some() {
                 changed = true;
             }
         }
-        changed
+        if mapped.is_empty() {
+            return (changed, Vec::new());
+        }
+        let still_used: std::collections::HashSet<InstanceId> = self
+            .version_instances
+            .values()
+            .flat_map(|ids| ids.iter().cloned())
+            .chain(self.selected_target.values().filter_map(|id| id.clone()))
+            .collect();
+        let orphans: Vec<InstanceId> = mapped
+            .into_iter()
+            .filter(|id| !still_used.contains(id))
+            .collect();
+        if !orphans.is_empty() {
+            self.instances.retain(|i| !orphans.contains(&i.id));
+            changed = true;
+        }
+        (changed, orphans)
     }
 }
 
@@ -971,6 +1000,29 @@ mod tests {
         assert!(cfg.instances.is_empty());
         assert_eq!(cfg.schema_version, CURRENT_SCHEMA_VERSION);
         let _ = std::fs::remove_dir_all(&manager);
+    }
+
+    #[test]
+    fn removing_version_collects_only_orphan_instances() {
+        let mut cfg = Config::default();
+        let shared_id = InstanceId::new("i1").unwrap();
+        cfg.instances.push(Instance {
+            id: shared_id.clone(),
+            name: "共享实例".into(),
+            created_at: 0,
+            state: InstanceState::Ready,
+        });
+        for v in ["0.1.0", "0.2.0"] {
+            cfg.version_instances
+                .insert(VersionId::new(v).unwrap(), vec![shared_id.clone()]);
+        }
+        let (changed, orphans) = cfg.remove_version_refs_and_collect_orphans("0.1.0");
+        assert!(changed);
+        assert!(orphans.is_empty(), "仍被 0.2.0 使用，不应删除实例");
+        let (changed, orphans) = cfg.remove_version_refs_and_collect_orphans("0.2.0");
+        assert!(changed);
+        assert_eq!(orphans, vec![shared_id]);
+        assert!(cfg.instances.is_empty());
     }
 
     #[test]

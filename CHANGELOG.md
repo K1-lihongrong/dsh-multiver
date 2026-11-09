@@ -14,7 +14,7 @@
 - 引入 `VersionId` / `InstanceId` / `HomeRef` / `ProcKey` / `LaunchTicket`，接入配置、路径、进程表与窗口 label。
 - `config.json` 新增 `schema_version`、实例表、挂载表、主按钮目标与实例序号；旧 `isolated_versions` 自动迁移到 `homes/iN`，保留兼容镜像。
 - `AppCtx` 统一持有进程表、启动意图、目录快照、扫描取消标志与窗口代次；状态敏感命令已迁移。
-- 新增 `Clock` / `FileSystem` / `PnpmRunner` / `DshLauncher` 端口与生产 adapter；前三个已接入生产路径。
+- 新增 `Clock` / `FileSystem` / `PnpmRunner` / `DshLauncher` 端口与生产 adapter；`DshLauncher::spawn_command` 已接入内嵌 dsh 启动路径。
 
 ### 插件批量更新与失败回滚
 
@@ -26,7 +26,7 @@
 
 ### 验证
 
-- Rust 单测 **221 passed / 1 ignored**
+- Rust 单测 **223 passed / 1 ignored**
 - E2E **60 passed**
 - i18n 5 语 × 375 key
 - `cargo fmt --check`、`cargo clippy -D warnings`、`pnpm build`、`pnpm tauri build --no-bundle` 通过

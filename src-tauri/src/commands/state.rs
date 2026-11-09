@@ -57,6 +57,11 @@ pub(crate) fn get_state(app: tauri::AppHandle) -> AppState {
             path: dirs.resolve("logs").to_string_lossy().to_string(),
         },
         ExtraDir {
+            name: "homes".into(),
+            desc: "实例隔离 home（每个实例一份）".into(),
+            path: dirs.homes.to_string_lossy().to_string(),
+        },
+        ExtraDir {
             name: "webview".into(),
             desc: "各版本的 WebView2 数据（删了会丢登录态）".into(),
             path: dirs.webview.to_string_lossy().to_string(),
