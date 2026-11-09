@@ -121,21 +121,12 @@ pub fn cmd_install(version: &str, registry: Option<&str>, dry_run: bool, json: b
         eprintln!(); // 收尾进度行
     }
 
-    // 维护 broken_versions（与 GUI 的 install_version 保持一致）
+    // 完成账本：GUI 与 CLI 共用。
+    crate::install_service::finish_install(&mut ctx.cfg, &ctx.mdir, version, ok, &msg);
     if ok {
-        if ctx.cfg.broken_versions.iter().any(|v| v == version) {
-            ctx.cfg.broken_versions.retain(|v| v != version);
-            let _ = ctx.cfg.save(&ctx.mdir);
-        }
         out_result(json, true, &msg);
         0
     } else {
-        let kind = versions::classify_error(&msg);
-        let is_broken_kind = kind == "private-package" || kind == "incomplete-version";
-        if is_broken_kind && !ctx.cfg.broken_versions.iter().any(|v| v == version) {
-            ctx.cfg.broken_versions.push(version.to_string());
-            let _ = ctx.cfg.save(&ctx.mdir);
-        }
         out_result(json, false, &msg);
         1
     }

@@ -514,6 +514,13 @@ pub(crate) async fn ds_plugin_action(
         _ => return Err(format!("未知操作：{}", action)),
     };
 
+    use tauri::Manager;
+    let ctx = app.try_state::<crate::AppCtx>().map(|c| c.inner().clone());
+    let job_id = ctx.as_ref().map(|c| {
+        c.jobs()
+            .create("plugin", &format!("{}/{}/{}", version, profile, action))
+    });
+    let jobs = ctx.as_ref().map(|c| c.jobs().clone());
     let app2 = app.clone();
     let version2 = version.clone();
     let profile2 = profile.clone();
@@ -536,9 +543,21 @@ pub(crate) async fn ds_plugin_action(
                         "line": line,
                     }),
                 );
+                if let (Some(jid), Some(reg)) = (job_id.as_deref(), jobs.as_ref()) {
+                    reg.progress(jid, "running", 0, None);
+                    let _ = app2.emit(
+                        "job:progress",
+                        serde_json::json!({
+                            "id": jid,
+                            "kind": "plugin",
+                            "target": format!("{}/{}/{}", version2, profile2, action),
+                            "stage": "running",
+                        }),
+                    );
+                }
             },
         );
-        if res.timed_out {
+        let outcome = if res.timed_out {
             Err(format!(
                 "插件操作超时（{} 秒），已中止",
                 crate::dsplugins::PLUGIN_TIMEOUT.as_secs()
@@ -547,7 +566,38 @@ pub(crate) async fn ds_plugin_action(
             Ok(res.output)
         } else {
             Err(res.output)
+        };
+        if let (Some(jid), Some(reg)) = (job_id.as_deref(), jobs.as_ref()) {
+            match &outcome {
+                Ok(_) => {
+                    reg.finish(jid, "plugin action done");
+                    let _ = app2.emit(
+                        "job:done",
+                        serde_json::json!({
+                            "id": jid,
+                            "kind": "plugin",
+                            "target": format!("{}/{}/{}", version2, profile2, action),
+                        }),
+                    );
+                }
+                Err(raw) => {
+                    let f = crate::plugin_failure::classify(raw);
+                    reg.fail(jid, &f.code, &f.message);
+                    let _ = app2.emit(
+                        "job:failed",
+                        serde_json::json!({
+                            "id": jid,
+                            "kind": "plugin",
+                            "target": format!("{}/{}/{}", version2, profile2, action),
+                            "code": f.code,
+                            "message": f.message,
+                            "raw": f.raw,
+                        }),
+                    );
+                }
+            }
         }
+        outcome
     })
     .await
     .map_err(|e| format!("插件操作执行失败：{e}"))?;

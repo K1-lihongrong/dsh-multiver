@@ -84,14 +84,7 @@ pub(crate) async fn install_version(
     let (ok, msg) = result;
     // 维护 broken_versions：失败且分类为「私有包/不完整」时记入；成功时移除。
     let mut c = cfg.clone();
-    let kind = if ok {
-        ""
-    } else {
-        versions::classify_error(&msg)
-    };
-    if c.apply_install_result(&version_for_record, ok, kind) {
-        let _ = c.save(&mdir);
-    }
+    crate::install_service::finish_install(&mut c, &mdir, &version_for_record, ok, &msg);
     if ok {
         Ok(msg)
     } else {

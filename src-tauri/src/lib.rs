@@ -9,6 +9,7 @@ mod domain;
 mod dsh_adapter;
 mod dsplugins;
 mod envcheck;
+mod install_service;
 mod jobobj;
 mod jobs;
 mod launcher;
