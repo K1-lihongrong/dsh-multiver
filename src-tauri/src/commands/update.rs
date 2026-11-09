@@ -32,7 +32,7 @@ pub(crate) fn exit_app(app: tauri::AppHandle) {
 #[tauri::command]
 #[specta::specta]
 pub(crate) async fn perform_update(
-    app: tauri::AppHandle,
+    ctx: tauri::State<'_, crate::AppCtx>,
     url: String,
     sha256: Option<String>,
 ) -> Result<String, String> {
@@ -47,8 +47,8 @@ pub(crate) async fn perform_update(
     // 生成替换批处理并启动
     crate::updater::spawn_replacer(&new_exe, &target)?;
     // 记录到维护日志
-    let mdir = manager_dir(&app);
-    let root = Config::load(&mdir).resolve_root(&mdir);
+    let (_cfg, dirs) = ctx.config_dirs();
+    let root = dirs.root;
     logging::write_line(
         &root.join("logs"),
         "maintenance.log",

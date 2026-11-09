@@ -4,10 +4,11 @@ use super::*;
 
 #[tauri::command]
 #[specta::specta]
-pub(crate) fn check_env(app: tauri::AppHandle, full: Option<bool>) -> Vec<envcheck::CheckItem> {
-    let mdir = manager_dir(&app);
-    let cfg = Config::load(&mdir);
-    let dirs = Dirs::new(cfg.resolve_root(&mdir));
+pub(crate) fn check_env(
+    ctx: tauri::State<'_, crate::AppCtx>,
+    full: Option<bool>,
+) -> Vec<envcheck::CheckItem> {
+    let (_cfg, dirs) = ctx.config_dirs();
     let _ = dirs.ensure();
     // v0.2.13：full=false（启动首屏）跳过 npm 源连通（网络）检查，避免拖慢启动；
     // 用户点「重新检查」/安装前传 full=true 做完整检查。
@@ -17,10 +18,9 @@ pub(crate) fn check_env(app: tauri::AppHandle, full: Option<bool>) -> Vec<envche
 /// 运行时状态：系统/便携的 Node、pnpm 是否就绪（供前端判断是否显示"自动准备"按钮）。
 #[tauri::command]
 #[specta::specta]
-pub(crate) fn runtime_status(app: tauri::AppHandle) -> runtime::RuntimeStatus {
-    let mdir = manager_dir(&app);
-    let cfg = Config::load(&mdir);
-    let root = cfg.resolve_root(&mdir);
+pub(crate) fn runtime_status(ctx: tauri::State<'_, crate::AppCtx>) -> runtime::RuntimeStatus {
+    let (_cfg, dirs) = ctx.config_dirs();
+    let root = dirs.root;
     runtime::RuntimeStatus {
         system_node_ok: runtime::system_node_ok(),
         bundled_node_ok: runtime::bundled_node_ok(&root),
@@ -36,7 +36,10 @@ pub(crate) fn runtime_status(app: tauri::AppHandle) -> runtime::RuntimeStatus {
 /// 返回结果消息（成功/已就绪）。
 #[tauri::command]
 #[specta::specta]
-pub(crate) async fn setup_runtime(app: tauri::AppHandle) -> Result<String, String> {
+pub(crate) async fn setup_runtime(
+    app: tauri::AppHandle,
+    ctx: tauri::State<'_, crate::AppCtx>,
+) -> Result<String, String> {
     if !cfg!(windows) {
         return Err(
             "便携运行时仅支持 Windows；请用系统包管理器安装 Node.js 与 pnpm（Linux：apt/dnf 等）"
@@ -44,9 +47,8 @@ pub(crate) async fn setup_runtime(app: tauri::AppHandle) -> Result<String, Strin
         );
     }
     use tauri::Emitter;
-    let mdir = manager_dir(&app);
-    let cfg = Config::load(&mdir);
-    let root = cfg.resolve_root(&mdir);
+    let (_cfg, dirs) = ctx.config_dirs();
+    let root = dirs.root;
     let app2 = app.clone();
 
     let result = tauri::async_runtime::spawn_blocking(move || -> Result<Vec<String>, String> {
@@ -80,9 +82,11 @@ pub(crate) async fn setup_runtime(app: tauri::AppHandle) -> Result<String, Strin
 /// 用户仍可从环境检查面板手动准备运行时。
 #[tauri::command]
 #[specta::specta]
-pub(crate) fn dismiss_runtime_prompt(app: tauri::AppHandle) -> Result<String, String> {
-    let mdir = manager_dir(&app);
-    let mut cfg = Config::load(&mdir);
+pub(crate) fn dismiss_runtime_prompt(
+    ctx: tauri::State<'_, crate::AppCtx>,
+) -> Result<String, String> {
+    let mdir = ctx.manager_dir().clone();
+    let (mut cfg, _dirs) = ctx.config_dirs();
     cfg.runtime_prompt_dismissed = true;
     cfg.save(&mdir)
         .map_err(|e| format!("保存配置失败: {}", e))?;

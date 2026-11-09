@@ -63,13 +63,23 @@ impl JobRegistry {
         }
     }
 
-    #[allow(dead_code)]
     pub fn fail(&self, id: &str, code: &str, message: &str) {
         let mut q = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(j) = q.iter_mut().find(|j| j.id == id) {
             j.status = "failed".into();
             j.stage = "failed".into();
             j.code = Some(code.into());
+            j.message = Some(message.into());
+        }
+    }
+
+    /// A2-5: 扫描等安全路径可以取消；取消不是成功，也不是普通失败。
+    pub fn cancel(&self, id: &str, message: &str) {
+        let mut q = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(j) = q.iter_mut().find(|j| j.id == id) {
+            j.status = "cancelled".into();
+            j.stage = "cancelled".into();
+            j.code = Some("cancelled".into());
             j.message = Some(message.into());
         }
     }
@@ -103,5 +113,16 @@ mod tests {
         reg.fail(&id, "network", "down");
         let jobs = reg.list_recent(1);
         assert_eq!(jobs[0].code.as_deref(), Some("network"));
+    }
+
+    #[test]
+    fn cancel_marks_job_as_cancelled() {
+        let reg = JobRegistry::default();
+        let id = reg.create("scan", "2 versions");
+        reg.cancel(&id, "scan cancelled");
+        let jobs = reg.list_recent(1);
+        assert_eq!(jobs[0].status, "cancelled");
+        assert_eq!(jobs[0].stage, "cancelled");
+        assert_eq!(jobs[0].code.as_deref(), Some("cancelled"));
     }
 }

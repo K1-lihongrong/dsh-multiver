@@ -5,12 +5,11 @@ use super::*;
 #[tauri::command]
 #[specta::specta]
 pub(crate) fn set_root(
-    app: tauri::AppHandle,
     ctx: tauri::State<'_, crate::AppCtx>,
     root: Option<String>,
 ) -> Result<String, String> {
-    let mdir = manager_dir(&app);
-    let mut cfg = Config::load(&mdir);
+    let mdir = ctx.manager_dir().clone();
+    let (mut cfg, _dirs) = ctx.config_dirs();
 
     // 切换前：对**旧**数据根做一次残留进程清理（GAP-011）。
     // 否则旧 root 下遗留的登记不会被新 root 的启动清理触及，其中的 dsh 可能永久残留。
@@ -54,11 +53,11 @@ pub(crate) fn set_root(
 #[tauri::command]
 #[specta::specta]
 pub(crate) fn set_use_official_home(
-    app: tauri::AppHandle,
+    ctx: tauri::State<'_, crate::AppCtx>,
     enabled: bool,
 ) -> Result<String, String> {
-    let mdir = manager_dir(&app);
-    let mut cfg = Config::load(&mdir);
+    let mdir = ctx.manager_dir().clone();
+    let (mut cfg, _dirs) = ctx.config_dirs();
     cfg.use_official_dsh_home = enabled;
     cfg.save(&mdir)
         .map_err(|e| format!("保存配置失败: {}", e))?;
