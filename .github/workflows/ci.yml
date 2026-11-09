@@ -94,6 +94,7 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 22
+          cache: 'pnpm'
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
@@ -102,6 +103,13 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
+
+      # 干净 checkout 没有 dist；tauri::generate_context! 需要 frontendDist 存在。
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Frontend build
+        run: pnpm build
 
       - name: Contract tests (fake / deterministic)
         run: cargo test --manifest-path src-tauri/Cargo.toml --test contracts

@@ -555,8 +555,12 @@ pub(crate) async fn restart_version_impl(
 /// 或改写 metadata.currentWindow.label。每窗口随机 token 只存在于该窗口
 /// topbar.js 的 IIFE 闭包与 Rust 监听器闭包中，跨窗口伪造无法通过校验。
 fn authenticated_topbar_payload(event: &tauri::Event, token: &str) -> Option<serde_json::Value> {
-    let payload = event.payload().to_string();
-    let v = serde_json::from_str::<serde_json::Value>(&payload).ok()?;
+    topbar_payload_if_token(event.payload(), token)
+}
+
+/// token 校验的纯函数部分，便于单测覆盖「匹配 / 不匹配 / 缺失 token」。
+pub(crate) fn topbar_payload_if_token(payload: &str, token: &str) -> Option<serde_json::Value> {
+    let v = serde_json::from_str::<serde_json::Value>(payload).ok()?;
     let got = v.get("token").and_then(|t| t.as_str())?;
     if got == token {
         Some(v)

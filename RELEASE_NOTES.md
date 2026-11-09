@@ -71,7 +71,7 @@ v0.3.6 用全局 `app.listen_any` 接收 topbar 事件，并信任 payload 里�
 
 ## 验证
 
-- Rust 单测 **201 passed / 1 ignored**
+- Rust 单测 **202 passed / 1 ignored**
 - staged 失败路径 **4 passed**
 - 契约测试 **4 passed / 1 ignored**；真实 pnpm 对拍 **1 passed**
 - `cargo clippy --all-targets -- -D warnings` 0 warning；`cargo fmt --check` 通过
@@ -81,5 +81,7 @@ v0.3.6 用全局 `app.listen_any` 接收 topbar 事件，并信任 payload 里�
   - 最小化 rc.1 后 alpha.3 仍正常；
   - 关闭 alpha.3 后 rc.1 窗口仍在、进程未退出；
   - 「重启」后窗口不消失、dsh node PID 更换、topbar 重新注入；
-  - 最小化 / 最大化 / 还原 / 关闭三键均实测可用。
+  - 最小化 / 最大化 / 还原 / 关闭三键均实测可用；
+  - 标题栏拖拽实测可用；
+  - 主题切换实测：标题栏背景 `rgb(247,247,248)` ↔ `rgb(31,35,40)`，DWM 深色属性 20 在 0/1 间同步。
 - 主题跟随建议验收时切换 dsh 深浅色再确认一次（事件通道与窗口权限已随三键/重启一并验证）。

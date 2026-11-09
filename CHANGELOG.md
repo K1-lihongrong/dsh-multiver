@@ -25,7 +25,7 @@
 
 ### 验证
 
-- Rust 单测 **201 passed / 1 ignored**
+- Rust 单测 **202 passed / 1 ignored**
 - staged 失败路径 **4 passed**
 - 契约测试 **4 passed / 1 ignored**；真实 pnpm 对拍 **1 passed**
 - clippy 0 warning；fmt 通过；`pnpm build` 通过；i18n 5 语 × 361 key 通过

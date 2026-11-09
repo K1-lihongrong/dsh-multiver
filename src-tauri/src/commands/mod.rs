@@ -182,6 +182,16 @@ mod tests {
         );
     }
 
+    /// A1 token 校验纯函数：匹配才放行，不匹配 / 缺失都拒绝。
+    #[test]
+    fn topbar_token_must_match() {
+        let payload = r#"{"token":"good","action":"close"}"#;
+        assert!(topbar_payload_if_token(payload, "good").is_some());
+        assert!(topbar_payload_if_token(payload, "bad").is_none());
+        assert!(topbar_payload_if_token(r#"{"action":"close"}"#, "good").is_none());
+        assert!(topbar_payload_if_token("not-json", "good").is_none());
+    }
+
     /// A2 权限回归：内嵌 dsh 窗口只保留事件 emit 与拖拽；三键由 Rust 处理，不需要 JS 窗口权限。
     #[test]
     fn capabilities_are_split_with_minimal_embedded_permissions() {
