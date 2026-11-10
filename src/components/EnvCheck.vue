@@ -94,7 +94,13 @@ onMounted(async () => {
     progDone.value = p.done || 0;
     progTotal.value = p.total || null;
   });
-  await run(false); // 首次启动：跳过网络检查，加快首屏
+  // 首次启动跳过网络检查；再让出首帧/空闲时间，避免环境探测和主界面首屏抢资源。
+  const start = () => run(false);
+  if (typeof requestIdleCallback === "function") {
+    requestIdleCallback(start, { timeout: 1200 });
+  } else {
+    setTimeout(start, 0);
+  }
 });
 
 onUnmounted(() => {
