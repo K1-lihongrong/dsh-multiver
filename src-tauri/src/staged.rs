@@ -259,10 +259,7 @@ pub fn take_over_pending_at(root: &Path, p: &Pending, target: &Path) -> Option<S
     crate::logging::write_line(
         &root.join("logs"),
         "maintenance.log",
-        &format!(
-            "暂存更新 {} 已就位，下次启动生效（当前进程仍以旧代码运行）",
-            p.version
-        ),
+        &format!("暂存更新 {} 已安装，正在重启生效", p.version),
     );
 
     Some(p.version.clone())

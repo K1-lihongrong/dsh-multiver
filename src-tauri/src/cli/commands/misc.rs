@@ -465,7 +465,7 @@ pub fn cmd_setup_runtime(dry_run: bool, json: bool) -> i32 {
 /// `update`：检查并执行自动更新。
 ///
 /// - `--dry-run`：只检查是否有新版，不下载
-/// - 正常：下载 → 校验 → 生成替换批处理 → 退出（由批处理替换并重启）
+/// - 正常：下载 → 校验 → 进程内替换 → 安排延迟重启
 pub fn cmd_update(dry_run: bool, json: bool) -> i32 {
     let info = crate::updater::check();
     if !info.has_update {
@@ -533,17 +533,25 @@ pub fn cmd_update(dry_run: bool, json: bool) -> i32 {
             return 1;
         }
     };
-    match crate::updater::spawn_replacer(&new_exe, &target) {
+    if let Err(e) = crate::updater::install_replace(&new_exe, &target) {
+        out_result(json, false, &format!("替换失败：{}", e));
+        return 1;
+    }
+    match crate::updater::spawn_relaunch_after_exit(&target) {
         Ok(_) => {
             out_result(
                 json,
                 true,
-                &format!("更新就绪（v{}），管理器将退出以完成替换", latest),
+                &format!("更新已安装（v{}），管理器将退出并自动重启", latest),
             );
             0
         }
         Err(e) => {
-            out_result(json, false, &format!("启动替换程序失败：{}", e));
+            out_result(
+                json,
+                false,
+                &format!("新版本已替换，但安排自动重启失败：{}；请手动重新打开", e),
+            );
             1
         }
     }

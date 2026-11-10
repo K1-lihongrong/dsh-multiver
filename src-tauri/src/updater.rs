@@ -45,13 +45,31 @@ fn failure(current: &str, error: String) -> UpdateInfo {
 /// GitHub 仓库（用于查询 Releases）
 const REPO: &str = "K1-lihongrong/dsh-multiver";
 
+/// GitHub API 根地址。默认生产地址；本地验收/自动化测试可用
+/// `DSH_MULTIVER_UPDATE_API_BASE` 指向 mock server。
+fn api_base() -> String {
+    std::env::var("DSH_MULTIVER_UPDATE_API_BASE")
+        .ok()
+        .map(|s| s.trim().trim_end_matches('/').to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "https://api.github.com".to_string())
+}
+
+fn release_latest_url(base: &str) -> String {
+    format!(
+        "{}/repos/{}/releases/latest",
+        base.trim_end_matches('/'),
+        REPO
+    )
+}
+
 /// 查询最新 Release，与当前版本比对。
 ///
 /// 网络 / 解析失败时返回 `has_update: false`（静默失败，不打扰用户）。
 pub fn check() -> UpdateInfo {
     let current = crate::cli::VERSION.to_string();
 
-    let url = format!("https://api.github.com/repos/{}/releases/latest", REPO);
+    let url = release_latest_url(&api_base());
     let client = match crate::runtime::blocking_client_ua(
         std::time::Duration::from_secs(10),
         Some("dsh-multiver"),
@@ -172,56 +190,143 @@ fn sha256_file(path: &std::path::Path) -> Result<String, String> {
     Ok(digest.iter().map(|b| format!("{:02x}", b)).collect())
 }
 
-/// 生成"替换自身 exe"的辅助批处理并启动它。
+/// 在进程内完成自身 exe 替换。
 ///
-/// Windows 上运行中的 exe 不能被覆盖，故用批处理：
-/// 1. 等主进程（pid）退出
-/// 2. 把新 exe 复制到原位置（覆盖旧 exe）
-/// 3. 删除自身批处理
-/// 4. 重启新 exe
-///
-/// 失败时不损坏旧 exe（复制是最后一步，且复制前旧 exe 仍在）。
-/// 返回批处理的路径（调用方随后应退出主进程）。
-#[cfg(windows)]
-pub fn spawn_replacer(
+/// Windows 允许重命名正在运行的 exe，因此不再依赖外部批处理。
+pub fn install_replace(
     new_exe: &std::path::Path,
     target_exe: &std::path::Path,
-) -> Result<std::path::PathBuf, String> {
-    let pid = std::process::id();
-    let bat = std::env::temp_dir().join(format!("dsh-multiver-replace-{}.bat", pid));
-    let new_s = new_exe.to_string_lossy().to_string();
+) -> Result<(), String> {
+    if !new_exe.is_file() {
+        return Err(format!("新版本文件不存在：{}", new_exe.display()));
+    }
+    if !target_exe.is_file() {
+        return Err(format!("当前程序不存在：{}", target_exe.display()));
+    }
+    let dir = target_exe
+        .parent()
+        .ok_or_else(|| "无法确定当前程序所在目录".to_string())?;
+    let staged = dir.join(format!(".dsh-multiver-update-{}.new", std::process::id()));
+    let backup = target_exe.with_extension("exe.old");
+    let _ = std::fs::remove_file(&staged);
+    std::fs::copy(new_exe, &staged).map_err(|e| format!("复制新版本到程序目录失败：{}", e))?;
+
+    let _ = std::fs::remove_file(&backup);
+    if let Err(e) = std::fs::rename(target_exe, &backup) {
+        let _ = std::fs::remove_file(&staged);
+        return Err(format!("备份当前程序失败：{}", e));
+    }
+    if let Err(e) = std::fs::rename(&staged, target_exe) {
+        let rolled = std::fs::rename(&backup, target_exe).is_ok();
+        let _ = std::fs::remove_file(&staged);
+        return Err(format!(
+            "放入新版本失败：{}；{}",
+            e,
+            if rolled {
+                "已回滚到旧版本"
+            } else {
+                "回滚失败，请手动把 dsh-multiver.exe.old 改回 dsh-multiver.exe"
+            }
+        ));
+    }
+    let _ = std::fs::remove_file(new_exe);
+    Ok(())
+}
+
+/// 生成退出后延迟重启的 Windows 批处理脚本。
+///
+/// 不要使用 tasklist | findstr 等待进程退出：detached 隐藏窗口下
+/// findstr 可能一直等不到管道 EOF，导致更新卡死、管理器退出后不重启。
+/// 改为固定延迟：调用方退出后约 3 秒再 start 新 exe，避开单实例锁。
+#[cfg(windows)]
+fn relaunch_script(target_exe: &std::path::Path, log_file: &std::path::Path) -> String {
     let tgt_s = target_exe.to_string_lossy().to_string();
-    // 批处理内容：
-    //  - 等待主进程退出（循环 tasklist 检测 pid）
-    //  - 复制新 exe 覆盖
-    //  - 删除自身
-    //  - 重启新 exe（start "" "路径"）
-    let script = format!(
-        "@echo off\r\n         setlocal enabledelayedexpansion\r\n         set /a tries=0\r\n         :wait\r\n         set /a tries+=1\r\n         if !tries! GTR 60 goto replace\r\n         tasklist /FI \"PID eq {pid}\" /NH 2>NUL | findstr /R /C:\"^dsh-multiver\" >NUL\r\n         if not errorlevel 1 (\r\n         \x20 ping -n 2 127.0.0.1 >NUL\r\n         \x20 goto wait\r\n         )\r\n         :replace\r\n         copy /Y \"{new_s}\" \"{tgt_s}\" >NUL\r\n         del \"{new_s}\" >NUL 2>&1\r\n         del \"%~f0\"\r\n         start \"\" \"{tgt_s}\"\r\n",
-        pid = pid,
-        new_s = new_s,
-        tgt_s = tgt_s,
-    );
-    std::fs::write(&bat, script).map_err(|e| e.to_string())?;
-    // 以隐藏窗口启动批处理（CREATE_NO_WINDOW），detached
+    let dir_s = target_exe
+        .parent()
+        .map(|p| p.to_string_lossy().to_string())
+        .unwrap_or_default();
+    let log_s = log_file.to_string_lossy().to_string();
+    format!(
+        "@echo off\r\n\
+         setlocal\r\n\
+         ping -n 4 127.0.0.1 >NUL\r\n\
+         if not exist \"{tgt}\" (\r\n\
+         \x20 echo [%date% %time%] target missing: {tgt}>>\"{log}\"\r\n\
+         \x20 exit /b 1\r\n\
+         )\r\n\
+         start \"\" /B /D \"{dir}\" \"{tgt}\"\r\n\
+         if errorlevel 1 echo [%date% %time%] start failed>>\"{log}\"\r\n\
+         del \"%~f0\" >NUL 2>&1\r\n",
+        tgt = tgt_s,
+        dir = dir_s,
+        log = log_s,
+    )
+}
+
+/// 安排当前进程退出后重启新 exe。
+///
+/// 返回批处理路径（Windows）或 shell 脚本路径（Unix），供测试/日志使用。
+#[cfg(windows)]
+pub fn spawn_relaunch_after_exit(
+    target_exe: &std::path::Path,
+) -> Result<std::path::PathBuf, String> {
+    if !target_exe.is_file() {
+        return Err(format!("重启目标不存在：{}", target_exe.display()));
+    }
+    let pid = std::process::id();
+    let bat = std::env::temp_dir().join(format!("dsh-multiver-relaunch-{}.bat", pid));
+    let log = std::env::temp_dir().join("dsh-multiver-relaunch.log");
+    std::fs::write(&bat, relaunch_script(target_exe, &log))
+        .map_err(|e| format!("写入重启脚本失败：{}", e))?;
+
     use std::os::windows::process::CommandExt;
     const CREATE_NO_WINDOW: u32 = 0x08000000;
     const DETACHED_PROCESS: u32 = 0x00000008;
     std::process::Command::new("cmd")
         .arg("/C")
         .arg(&bat)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
         .creation_flags(CREATE_NO_WINDOW | DETACHED_PROCESS)
         .spawn()
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| format!("启动重启脚本失败：{}", e))?;
     Ok(bat)
 }
 
-#[cfg(not(windows))]
-pub fn spawn_replacer(
-    _new_exe: &std::path::Path,
+#[cfg(unix)]
+pub fn spawn_relaunch_after_exit(
+    target_exe: &std::path::Path,
+) -> Result<std::path::PathBuf, String> {
+    use std::os::unix::fs::PermissionsExt;
+    if !target_exe.is_file() {
+        return Err(format!("重启目标不存在：{}", target_exe.display()));
+    }
+    let pid = std::process::id();
+    let sh = std::env::temp_dir().join(format!("dsh-multiver-relaunch-{}.sh", pid));
+    std::fs::write(&sh, "#!/bin/sh\nsleep 2\nexec \"$1\"\n")
+        .map_err(|e| format!("写入重启脚本失败：{}", e))?;
+    let mut perms = std::fs::metadata(&sh)
+        .map_err(|e| e.to_string())?
+        .permissions();
+    perms.set_mode(0o755);
+    std::fs::set_permissions(&sh, perms).map_err(|e| e.to_string())?;
+    std::process::Command::new("sh")
+        .arg(&sh)
+        .arg(target_exe)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .map_err(|e| format!("启动重启脚本失败：{}", e))?;
+    Ok(sh)
+}
+
+#[cfg(not(any(windows, unix)))]
+pub fn spawn_relaunch_after_exit(
     _target_exe: &std::path::Path,
 ) -> Result<std::path::PathBuf, String> {
-    Err("当前平台不支持自动替换（仅 Windows）".to_string())
+    Err("当前平台不支持自动重启".to_string())
 }
 
 /// 语义化版本比较：`candidate` 是否比 `current` 新。
@@ -291,6 +396,14 @@ mod tests {
         assert!(!is_newer("", "0.2.5"));
     }
 
+    #[test]
+    fn release_latest_url_joins_base() {
+        assert_eq!(
+            release_latest_url("http://127.0.0.1:1234/"),
+            "http://127.0.0.1:1234/repos/K1-lihongrong/dsh-multiver/releases/latest"
+        );
+    }
+
     /// sha256_file：对已知内容验证摘要。
     #[test]
     fn sha256_file_matches_known_digest() {
@@ -315,5 +428,111 @@ mod tests {
         let a = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
         let b = "BA7816BF8F01CFEA414140DE5DAE2223B00361A396177A9CB410FF61F20015AD";
         assert!(a.eq_ignore_ascii_case(b));
+    }
+
+    fn update_tmp_dir(name: &str) -> std::path::PathBuf {
+        let p = std::env::temp_dir().join(format!(
+            "dsh-multiver-update-test-{}-{}-{}",
+            name,
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let _ = std::fs::remove_dir_all(&p);
+        std::fs::create_dir_all(&p).unwrap();
+        p
+    }
+
+    #[test]
+    fn install_replace_swaps_target_and_keeps_backup() {
+        let dir = update_tmp_dir("success");
+        let target = dir.join("dsh-multiver.exe");
+        let new_exe = dir.join("downloaded.exe");
+        std::fs::write(&target, b"old exe").unwrap();
+        std::fs::write(&new_exe, b"new exe").unwrap();
+
+        install_replace(&new_exe, &target).unwrap();
+
+        assert_eq!(std::fs::read(&target).unwrap(), b"new exe");
+        assert_eq!(
+            std::fs::read(target.with_extension("exe.old")).unwrap(),
+            b"old exe"
+        );
+        assert!(!new_exe.exists(), "下载临时文件应被清理");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn install_replace_missing_new_keeps_target() {
+        let dir = update_tmp_dir("missing-new");
+        let target = dir.join("dsh-multiver.exe");
+        std::fs::write(&target, b"old exe").unwrap();
+
+        let err = install_replace(&dir.join("no-such.exe"), &target).unwrap_err();
+        assert!(err.contains("新版本文件不存在"));
+        assert_eq!(std::fs::read(&target).unwrap(), b"old exe");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn install_replace_missing_target_does_not_create_one() {
+        let dir = update_tmp_dir("missing-target");
+        let new_exe = dir.join("downloaded.exe");
+        std::fs::write(&new_exe, b"new exe").unwrap();
+
+        let err = install_replace(&new_exe, &dir.join("dsh-multiver.exe")).unwrap_err();
+        assert!(err.contains("当前程序不存在"));
+        assert!(new_exe.exists(), "失败时不应删除下载文件");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn relaunch_script_has_no_process_probe_pipeline() {
+        let script = relaunch_script(
+            std::path::Path::new(r"C:\Program Files\DSH\dsh-multiver.exe"),
+            std::path::Path::new(r"C:\Temp\dsh-multiver-relaunch.log"),
+        );
+        assert!(script.contains("start \"\" /B /D"));
+        assert!(!script.contains("tasklist"), "不应再用 tasklist 探测进程");
+        assert!(!script.contains("findstr"), "不应再用 findstr 管道");
+        assert!(!script.contains('|'), "detached 批处理禁止管道");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn install_replace_can_replace_running_exe() {
+        let dir = update_tmp_dir("running-exe");
+        let target = dir.join("dsh-multiver.exe");
+        let new_exe = dir.join("downloaded.exe");
+        let system_root = std::env::var("SystemRoot").unwrap();
+        let powershell = std::path::Path::new(&system_root)
+            .join("System32")
+            .join("WindowsPowerShell")
+            .join("v1.0")
+            .join("powershell.exe");
+        let cmd = std::path::Path::new(&system_root)
+            .join("System32")
+            .join("cmd.exe");
+        std::fs::copy(&powershell, &target).unwrap();
+        std::fs::copy(&cmd, &new_exe).unwrap();
+
+        let mut child = std::process::Command::new(&target)
+            .args(["-NoProfile", "-Command", "Start-Sleep -Seconds 10"])
+            .spawn()
+            .unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(500));
+
+        install_replace(&new_exe, &target).unwrap();
+        assert_eq!(
+            std::fs::read(&target).unwrap(),
+            std::fs::read(&cmd).unwrap()
+        );
+        assert!(target.with_extension("exe.old").is_file());
+        let _ = child.kill();
+        let _ = child.wait();
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

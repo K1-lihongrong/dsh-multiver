@@ -274,16 +274,44 @@ pub fn run() {
 
     // 暂存更新（staged update）：内嵌窗口里更新的 exe 已下载并校验。
     // 在此刻（GUI 尚未初始化）完成替换最安全——重命名 + 放入，无需等待进程退出。
-    // 替换后**继续正常启动**（当前进程仍以已加载的旧代码运行），下次启动即新版。
+    // 替换成功后必须立即安排重启，否则当前进程仍以旧代码运行，用户会误以为
+    // 更新失败、打开还是旧版，要手动开第二次才会生效。
     {
         let mdir = manager_dir_plain();
         let root = Config::load(&mdir).resolve_root(&mdir);
+        let had_pending = staged::load_pending(&root).is_some();
+        let mut relaunching = false;
         if let Some(v) = staged::take_over_pending(&root) {
-            // 有控制台时可见；GUI 无控制台则只留日志
-            eprintln!("暂存更新 {} 已就位，下次启动生效", v);
+            let target = std::env::current_exe()
+                .map_err(|e| format!("无法定位当前 exe：{}", e))
+                .and_then(|exe| crate::updater::spawn_relaunch_after_exit(&exe));
+            match target {
+                Ok(_) => {
+                    // 有控制台时可见；GUI 无控制台则只留日志
+                    eprintln!("暂存更新 {} 已安装，正在重启生效", v);
+                    relaunching = true;
+                }
+                Err(e) => {
+                    crate::logging::write_line(
+                        &root.join("logs"),
+                        "maintenance.log",
+                        &format!(
+                            "暂存更新 {} 已安装，但安排自动重启失败：{}；请手动重新打开",
+                            v, e
+                        ),
+                    );
+                }
+            }
         }
-        // 清理上一轮留下的备份（当时被占用删不掉，现在已空闲）
-        staged::cleanup_backup();
+        if relaunching {
+            // 延迟脚本会在本进程退出约 2 秒后拉起新 exe；直接退出，避免单实例把新进程吞掉。
+            std::process::exit(0);
+        }
+        // 只有本轮没有待安装更新时才清理备份。若暂存安装失败/重启失败，
+        // .old 可能是唯一可回滚副本，必须保留。
+        if !had_pending {
+            staged::cleanup_backup();
+        }
     }
 
     // v0.2.9 批 2：WebView2 早期检测（必须在 Tauri 初始化前——GUI 本体依赖它）。
