@@ -10,7 +10,7 @@
 [CmdletBinding()]
 param(
     [string]$BaseExe = '',
-    [string]$PayloadExe = 'E:\.Vibe_Coding\deepseek-Desktop\dsh-multiver-alpha.2.exe',
+    [string]$PayloadExe = '',
     [string]$OutputDir = '',
     [string]$MockTag = 'v0.4.1',
     [int]$TimeoutSec = 120,
@@ -23,8 +23,17 @@ $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'acceptance-common.ps1')
 
 $repoRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
+if (-not $PayloadExe) {
+    $PayloadExe = Join-Path $PSScriptRoot '..\..\.cuckoo\archive\releases\dsh-multiver-alpha.2.exe'
+}
 if (-not $BaseExe) {
-    $BaseExe = Join-Path $repoRoot 'src-tauri\target\release\dsh-multiver.exe'
+    $builtExe = Join-Path $repoRoot 'src-tauri\target\release\dsh-multiver.exe'
+    if (Test-Path -LiteralPath $builtExe) {
+        $BaseExe = $builtExe
+    }
+    else {
+        $BaseExe = 'E:\.Vibe_Coding\deepseek-Desktop\dsh-multiver.exe'
+    }
 }
 if (-not $OutputDir) {
     $OutputDir = Join-Path $repoRoot '.tmp\acceptance-update'
