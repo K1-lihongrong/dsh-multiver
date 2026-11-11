@@ -55,6 +55,7 @@ $result = [ordered]@{
     scan_cancelled = $null
     launch_version = $null
     launch_window = $null
+    launch_ready = $null
     launch_closed = $null
     residual_processes = @()
     log_errors = @()
@@ -222,11 +223,20 @@ try {
             catch {}
         }
         if ($null -eq $runButton) { throw "Run button not found for $LaunchVersion" }
+        $frontendLog = Join-Path $logDir 'frontend.log'
+        $frontendOffset = if (Test-Path -LiteralPath $frontendLog) { (Get-Item -LiteralPath $frontendLog).Length } else { 0 }
         $null = Invoke-DshElement -Element $runButton
 
         $launchTitle = '^DSH\s+' + [regex]::Escape($LaunchVersion) + '\s*$'
         $dshWindow = Wait-DshWindow -ProcessId $appProcess.Id -TitlePattern $launchTitle -TimeoutSec $LaunchTimeoutSec
         $result.launch_window = $true
+        $readyPattern = '\[topbar\] injected ver=' + [regex]::Escape($LaunchVersion)
+        $result.launch_ready = Wait-DshCondition -TimeoutSec $LaunchTimeoutSec -Message "launch ready: $LaunchVersion" -Condition {
+            $appended = Read-AppendedText -Path $frontendLog -Offset $frontendOffset
+            $appended -match $readyPattern
+        }
+        Start-Sleep -Seconds 2
+        Write-Host "Launch ready: $($result.launch_ready)"
         try {
             $shot = Save-DshScreenshot -Window $dshWindow -Path (Join-Path $OutputDir 'launch-window.png')
             $result.screenshots += $shot
@@ -272,7 +282,7 @@ try {
                 Write-Warning $_.Exception.Message
             }
         }
-        Write-Host "Launch window/closed: $($result.launch_window)/$($result.launch_closed)"
+        Write-Host "Launch window/ready/closed: $($result.launch_window)/$($result.launch_ready)/$($result.launch_closed)"
     }
 }
 catch {
@@ -342,7 +352,7 @@ finally {
     )
     if (-not $SkipPlugin) { $checks += [bool]$result.plugin_panel }
     if (-not $SkipScan) { $checks += [bool]$result.scan_started; $checks += [bool]$result.scan_cancelled }
-    if (-not $SkipLaunch) { $checks += [bool]$result.launch_window; $checks += [bool]$result.launch_closed }
+    if (-not $SkipLaunch) { $checks += [bool]$result.launch_window; $checks += [bool]$result.launch_ready; $checks += [bool]$result.launch_closed }
     $checks += ($result.log_errors.Count -eq 0)
     if (-not $KeepAppOpen) { $checks += ($result.residual_processes.Count -eq 0) }
 
