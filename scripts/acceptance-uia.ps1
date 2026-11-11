@@ -1,4 +1,4 @@
-﻿# Native UI acceptance for a packaged dsh-multiver.exe.
+# Native UI acceptance for a packaged dsh-multiver.exe.
 # This drives the real Tauri window and real Rust backend.
 #
 # Typical use:
@@ -11,7 +11,7 @@
 param(
     [string]$ExePath = 'E:\.LLM-AGENTS\deepseek-harness\dsh-multiver.exe',
     [string]$WorkingDirectory = 'E:\.LLM-AGENTS\deepseek-harness',
-    [string]$ExpectedVersion = '0.4.0-alpha.3',
+    [string]$ExpectedVersion = '0.4.0',
     [string]$LaunchVersion = '0.2.2-rc.1',
     [string]$OutputDir = '',
     [int]$StartupTimeoutSec = 30,

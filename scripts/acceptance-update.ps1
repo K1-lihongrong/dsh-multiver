@@ -1,4 +1,4 @@
-﻿# End-to-end update pipeline smoke test.
+# End-to-end update pipeline smoke test.
 #
 # It copies the release exe to .tmp, points DSH_MULTIVER_UPDATE_API_BASE at a
 # local mock server, runs `update --json`, and verifies:
@@ -195,7 +195,7 @@ try {
         ($result.replaced_sha256 -ne $baseHash),
         ($result.old_backup_sha256 -eq $baseHash),
         ($null -ne $result.post_update_version),
-        ($result.post_update_version -ne '0.4.0-alpha.3')
+        ($result.post_update_version -ne '0.4.0')
     )
     $result.ok = -not ($checks -contains $false)
 }

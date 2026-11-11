@@ -13,38 +13,17 @@ on:
         required: true
         type: string
 
-# 发布需要写权限
 permissions:
   contents: write
 
 jobs:
-  # ── 构建（Windows + Linux 并行）──
+  # ── Windows 单 exe + 插件 tgz ──
+  # Linux 明确不打包、不发布；Linux 只保留 ci.yml 的编译/测试。
   build:
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: windows-latest
-            platform: windows
-          - os: ubuntu-22.04   # 用较旧的 LTS 构建，保证 glibc 向后兼容
-            platform: linux
-    runs-on: ${{ matrix.os }}
-
+    runs-on: windows-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
-      # ── Linux 系统依赖（Tauri / WebKitGTK）──
-      - name: Install Linux deps
-        if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            libwebkit2gtk-4.1-dev \
-            build-essential curl wget file \
-            libxdo-dev libssl-dev \
-            libayatana-appindicator3-dev \
-            librsvg2-dev
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
@@ -70,30 +49,20 @@ jobs:
 
       # ── Windows：单 exe（便携）──
       - name: Build (Windows)
-        if: runner.os == 'Windows'
         run: pnpm tauri build --no-bundle
 
-      - name: Rename artifact (Windows)
-        if: runner.os == 'Windows'
+      - name: Rename artifact
         run: Copy-Item "src-tauri\target\release\dsh-multiver.exe" "dsh-multiver.exe"
 
-      # ── 打包 dsh 插件（只在 Windows 跑一次）──
+      # ── 打包 dsh 插件 ──
       # 插件是纯 JS + JSON，与平台无关；用 pnpm pack 保证 tarball 内容与 npm 通道一致
       - name: Pack dsh plugin
-        if: runner.os == 'Windows'
         working-directory: dsh-plugin
         run: |
           pnpm pack
           Get-ChildItem *.tgz | ForEach-Object { "打包产物：$($_.Name) / $($_.Length) 字节" }
 
-      # ── Linux：AppImage + deb ──
-      - name: Build (Linux)
-        if: runner.os == 'Linux'
-        run: pnpm tauri build --bundles appimage,deb
-
-      # ── 上传各平台构建产物 ──
-      - name: Upload artifact (Windows)
-        if: runner.os == 'Windows'
+      - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: dsh-multiver-windows
@@ -101,16 +70,7 @@ jobs:
             dsh-multiver.exe
             dsh-plugin/*.tgz
 
-      - name: Upload artifact (Linux)
-        if: runner.os == 'Linux'
-        uses: actions/upload-artifact@v4
-        with:
-          name: dsh-multiver-linux
-          path: |
-            src-tauri/target/release/bundle/appimage/*.AppImage
-            src-tauri/target/release/bundle/deb/*.deb
-
-  # ── 发布：等两个平台都构建完，统一创建 Release ──
+  # ── 发布：Windows 构建完成后创建 Release ──
   release:
     needs: build
     if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
@@ -120,7 +80,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Download all artifacts
+      - name: Download artifact
         uses: actions/download-artifact@v4
         with:
           path: artifacts
@@ -141,9 +101,6 @@ jobs:
             while IFS= read -r -d '' f; do
               (cd "$(dirname "$f")" && sha256sum "$(basename "$f")")
             done < <(find dsh-multiver-windows -type f -name '*.tgz' -print0)
-            while IFS= read -r -d '' f; do
-              (cd "$(dirname "$f")" && sha256sum "$(basename "$f")")
-            done < <(find dsh-multiver-linux -type f \( -name '*.AppImage' -o -name '*.deb' \) -print0)
           } > SHA256SUMS.txt
           cat SHA256SUMS.txt
 
@@ -155,8 +112,6 @@ jobs:
           files: |
             artifacts/dsh-multiver-windows/dsh-multiver.exe
             artifacts/dsh-multiver-windows/**/*.tgz
-            artifacts/dsh-multiver-linux/**/*.AppImage
-            artifacts/dsh-multiver-linux/**/*.deb
             artifacts/SHA256SUMS.txt
           body_path: RELEASE_NOTES.md
           draft: false

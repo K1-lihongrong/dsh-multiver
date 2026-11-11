@@ -11,6 +11,7 @@
 - 🚫 **失败版本标记**：依赖已下架的版本自动标灰，避免反复踩坑
 - ☑️ **批量操作**：多选版本一键批量卸载（含防呆禁用）
 - 🔒 **可选数据隔离**：每个版本可用独立数据目录，测试插件不污染主力环境
+- 🧬 **同版本多实例**：一份数据可挂多个版本；同一版本可开多个独立实例窗口，运行状态跨版本可见
 - 🔗 **可复用官方配置**：一键复用 dsh 官方 `~/.dsh`（会话/凭据/插件立即可用），默认关闭、随时可退
 - 🔄 **自动更新**：启动后检查新版本；确认后可下载、SHA256 校验并替换自身 exe 后重启（GitHub 直连失败时自动回退镜像）
 - 🧩 **推荐插件页**：内置一份社区插件清单，分类筛选 + 星标置顶；清单从远端拉取、带 30 分钟节流，断网时回退编译期内置副本
@@ -42,18 +43,18 @@
 | 平台 | 文件 | 说明 |
 | :--- | :--- | :--- |
 | **Windows** | `dsh-multiver.exe` | 便携版，放到任意目录双击运行（需 WebView2，Win11 及 Win10 1803+ 自带） |
-| **Linux（通用）** | `dsh-multiver_*_amd64.AppImage` | 免安装，`chmod +x` 后运行（需 WebKitGTK） |
-| **Linux（Debian/Ubuntu）** | `dsh-multiver_*_amd64.deb` | `sudo dpkg -i` 安装 |
+
+> Linux 当前**不打包、不发布**（AppImage/deb 均不提供）；仅保留 CI 编译与单测。未来条件合适再恢复。
 
 📖 **完整操作说明见 [使用手册](docs/使用手册.md)** —— 含环境准备、各项功能、常见问题排查。
 
 🔍 **遇到问题？见 [问题日志查看指南](docs/问题日志查看指南.md)** —— 日志在哪、各记录什么、按现象怎么查。
 
-🐧 **Linux**：原生支持，产物为 AppImage 与 deb；编译、GUI、CLI、进程清理已在容器/WSL 验证，**真桌面矩阵尚未完整验收**。详见 [使用手册 · Linux 支持](docs/使用手册.md#十三linux-支持)。
+🐧 **Linux**：当前不打包、不发布；仅保留源码编译与 CI 测试。实例功能未在 Linux 真桌面验收。
 
 ## 使用
 
-1. 启动程序（Windows 双击 `dsh-multiver.exe`；Linux 运行 AppImage 或安装 deb 后启动）
+1. 启动程序（Windows 双击 `dsh-multiver.exe`）
 2. 界面顶部会**自动检查环境**（Node / pnpm / 磁盘 / 源）；缺失项会给出下载链接与安装步骤
 3. 点「刷新列表」从 npm 拉取可安装的版本
 4. 点版本号安装，观察阶段式进度；失败时按类别提示，网络问题可换源重试
@@ -143,6 +144,9 @@ dsh-multiver.exe install <版本> [--registry <url>]       # 无头安装
 dsh-multiver.exe uninstall <版本>                        # 无头卸载
 dsh-multiver.exe set-default <版本>                      # 设默认版本
 dsh-multiver.exe maintenance [--cleanup|--prune]         # 无头维护
+dsh-multiver.exe instance create --name 对比用 --attach <版本>   # 创建实例
+dsh-multiver.exe instance list --json                    # 实例列表（含孤儿）
+dsh-multiver.exe run <版本> --instance <id>              # 指定实例启动
 dsh-multiver.exe install <版本> --dry-run                # 只预览，不执行
 dsh-multiver.exe help                                    # 帮助
 ```
@@ -210,8 +214,8 @@ pnpm tauri dev
 # Windows：打包便携版单 exe
 pnpm tauri build --no-bundle
 
-# Linux：打包 AppImage + deb
-pnpm tauri build --bundles appimage,deb
+# Linux：仅开发调试，不打包发布
+pnpm tauri dev
 
 # 重新生成图标（修改 icon-source.svg 后）
 node gen-icons.mjs
@@ -219,13 +223,13 @@ node gen-icons.mjs
 
 产物位置：
 - Windows：`src-tauri/target/release/dsh-multiver.exe`
-- Linux：`src-tauri/target/release/bundle/{appimage,deb}/`
+- Linux：不产出发布物（仅 CI 编译/测试）
 
 ### 环境要求
 
 **运行（使用现成产物）**：
 - Windows：WebView2（Win11 / Win10 1803+ 自带）
-- Linux：WebKitGTK 4.1、libayatana-appindicator3 等（AppImage 已内含大部分）
+- Linux：无现成产物；仅源码开发/CI 使用 WebKitGTK 4.1 等依赖
 
 **开发 / 从源码构建**：
 - Node.js `^22.19.0` 或 `>=24.2`
@@ -252,14 +256,12 @@ node gen-icons.mjs
 - 部分早期 dsh 版本依赖已下架的私有包，任何源都无法安装（界面会标灰并提示换版本）
 - 使用 npm 官方源时，国内下载可能较慢；淘宝镜像同步滞后，可能出现子包缺失（安装失败可换官方源重试）
 - **单实例**：重复启动会聚焦已运行的管理器窗口；版本快捷方式在管理器运行时会在其中打开对应版本的内嵌窗口；CLI 不受影响
-- **macOS 暂未支持**（Windows 与 Linux 均已支持）
-- **Linux 内嵌窗口「重新连接中」已修复**（v0.2.4，根因是管理器进程管理缺陷，非平台差异）
-- Linux 构建产物为 AppImage / deb（暂无 rpm、Snap、Flatpak）
-- **Linux 真桌面矩阵尚未完整验收**（GNOME/KDE/XFCE、Wayland 输入法与剪贴板、分数缩放等），容器与 WSL 内已验证主要链路；详见 [使用手册 · Linux 支持](docs/使用手册.md#十三linux-支持)
+- **macOS 暂未支持**
+- **Linux 当前不打包、不发布**（不提供 AppImage / deb）；仅保留 CI 编译与单测，真桌面多实例验收暂缓（GAP-020）
 
 ## 征求协助（非 Windows 平台）
 
-本项目主要在 Windows 上开发，**Linux 已通过容器与 WSL 验证**，但**真实 Linux 桌面与 macOS 尚未验证**。
+本项目主要在 Windows 上开发；Linux 当前**不打包、不发布**（仅保留 CI 编译/测试），真实 Linux 桌面与 macOS 尚未验证。
 若你有对应环境，欢迎帮忙实测或适配，详见 **[征求协助](docs/征求协助.md)**。
 
 ## 致谢
