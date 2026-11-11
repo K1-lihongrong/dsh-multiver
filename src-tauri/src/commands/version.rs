@@ -144,16 +144,12 @@ pub(crate) async fn uninstall_version(
 ) -> Result<String, String> {
     let mdir = ctx.manager_dir().clone();
     let (cfg, dirs) = ctx.config_dirs();
-    // 如果卸载的是默认版本 / 隔离版本，清理引用；同时记录不再被任何版本使用的实例 home
+    // 如果卸载的是默认版本 / 隔离版本，清理引用；实例本体保留为孤儿，不在这里删数据。
     let mut cfg = cfg;
-    let (refs_changed, orphan_ids) = cfg.remove_version_refs_and_collect_orphans(&version);
+    let refs_changed = cfg.remove_version_refs(&version);
     if refs_changed {
         let _ = cfg.save(&mdir);
     }
-    let orphan_homes: Vec<std::path::PathBuf> = orphan_ids
-        .iter()
-        .map(|id| dirs.homes.join(id.as_str()))
-        .collect();
     // 卸载可能清掉了默认版本 / 隔离标记：重生成转发脚本（无默认版本时会删除 dsh.cmd）
     crate::paths::regenerate_forward_script(&mdir, &cfg);
     // 快速卸载：把版本目录 rename 到回收站（瞬时），实际删除交给后台线程。
@@ -163,9 +159,6 @@ pub(crate) async fn uninstall_version(
     let trash = dirs.trash.clone();
     let versions_dir = dirs.versions.clone();
     let (ok, msg) = tauri::async_runtime::spawn_blocking(move || {
-        for home in orphan_homes {
-            let _ = std::fs::remove_dir_all(home);
-        }
         let result = versions::uninstall_fast(&versions_dir, &trash, &version);
         // 版本目录已 rename 走后，webview 目录也 rename 进回收站（失败不影响卸载结果）
         if result.0 && webview_dir.exists() {

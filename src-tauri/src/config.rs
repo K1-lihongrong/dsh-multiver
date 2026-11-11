@@ -260,28 +260,15 @@ impl Config {
 
     /// 计算某版本 + 可选实例对应的 home 类型。
     ///
-    /// 优先显式实例；否则看 selected_target；旧 isolated_versions 仍作为迁移前兼容回退。
+    /// 规则：显式实例 > selected_target 的显式值 > 共享/官方默认。
+    /// selected_target 缺失或为 null 都回共享 home，不做「回落到第一个挂载实例」
+    /// 的隐式推断——主按钮开哪份数据必须由配置明确表达。
     pub fn home_ref_for(&self, version: &VersionId, instance: Option<&InstanceId>) -> HomeRef {
         if let Some(id) = instance {
             return HomeRef::Instance(id.clone());
         }
-        if let Some(target) = self.selected_target.get(version) {
-            return match target {
-                Some(id) => HomeRef::Instance(id.clone()),
-                None => self.default_home_ref(),
-            };
-        }
-        if let Some(ids) = self.version_instances.get(version) {
-            if let Some(id) = ids.first() {
-                return HomeRef::Instance(id.clone());
-            }
-        }
-        if self.isolated_versions.iter().any(|v| v == version.as_str()) {
-            if let Some(ids) = self.version_instances.get(version) {
-                if let Some(id) = ids.first() {
-                    return HomeRef::Instance(id.clone());
-                }
-            }
+        if let Some(Some(id)) = self.selected_target.get(version) {
+            return HomeRef::Instance(id.clone());
         }
         self.default_home_ref()
     }
@@ -302,13 +289,20 @@ impl Config {
         root: &Path,
     ) -> Result<InstanceId, String> {
         if let Some(ids) = self.version_instances.get(version) {
-            if let Some(id) = ids.first() {
-                self.selected_target
-                    .insert(version.clone(), Some(id.clone()));
+            if let Some(first) = ids.first() {
+                // 已有映射时只补「主按钮为共享」的情况；用户显式选过的实例不能被重置。
+                let target = match self.selected_target.get(version) {
+                    Some(Some(id)) => id.clone(),
+                    _ => {
+                        self.selected_target
+                            .insert(version.clone(), Some(first.clone()));
+                        first.clone()
+                    }
+                };
                 if !self.isolated_versions.iter().any(|v| v == version.as_str()) {
                     self.isolated_versions.push(version.to_string());
                 }
-                return Ok(id.clone());
+                return Ok(target);
             }
         }
         let id = self.alloc_instance_id()?;
@@ -384,9 +378,26 @@ impl Config {
         if deleting.is_empty() {
             return Ok(false);
         }
+        let dirs = Dirs::new(root.to_path_buf());
         for id in &deleting {
-            let home = Dirs::new(root.to_path_buf()).homes.join(id.as_str());
-            if home.exists() {
+            let home = dirs.homes.join(id.as_str());
+            if !home.exists() {
+                continue;
+            }
+            let _ = SystemFs.create_dir_all(&dirs.trash);
+            let stamp = crate::logging::now_secs();
+            let mut dest = dirs
+                .trash
+                .join(format!("instance-{}-{}", id.as_str(), stamp));
+            let mut n = 1u32;
+            while dest.exists() {
+                dest = dirs
+                    .trash
+                    .join(format!("instance-{}-{}-{}", id.as_str(), stamp, n));
+                n += 1;
+            }
+            // trash 中转：同一卷内改名是瞬时的，目录内容不搬；失败才退化为直接删。
+            if SystemFs.rename(&home, &dest).is_err() {
                 SystemFs
                     .remove_dir_all(&home)
                     .map_err(|e| format!("删除实例 home 失败（{}）：{e}", home.display()))?;
@@ -441,13 +452,29 @@ impl Config {
             let name = self.unique_instance_name("默认隔离");
             let src = dirs.versions.join(version.as_str()).join("home");
             let dst = dirs.homes.join(id.as_str());
-            if dst.exists() {
-                return Err(format!(
-                    "迁移目标已存在，拒绝覆盖：{}",
-                    dst.to_string_lossy()
-                ));
+            let dst_existed = dst.exists();
+            if dst_existed && !dst.is_dir() {
+                return Err(format!("迁移目标不是目录，拒绝使用：{}", dst.display()));
             }
-            if src.exists() {
+            if dst_existed {
+                // 典型场景：上次改名成功但 config.json 没保存。重新分配到同一个 id，
+                // 目标目录里就是用户数据；复用并留痕，不阻塞升级，也不覆盖源目录。
+                let extra = if src.exists() {
+                    format!("；源目录仍保留在 {}，请人工确认", src.display())
+                } else {
+                    String::new()
+                };
+                crate::logging::write_line(
+                    &root.join("logs"),
+                    "app.log",
+                    &format!(
+                        "迁移 {}：复用已存在的实例目录 {}{}",
+                        version.as_str(),
+                        dst.display(),
+                        extra
+                    ),
+                );
+            } else if src.exists() {
                 if SystemFs.rename(&src, &dst).is_err() {
                     let (ok, msg, _) =
                         crate::versions::isolated::copy_shared_to_isolated(&src, &dst);
@@ -502,19 +529,12 @@ impl Config {
         }
     }
 
-    /// 卸载某版本时清理配置中对它的引用：默认版本、隔离标记。
+    /// 卸载某版本时清理配置中对它的引用：默认版本、隔离镜像、挂载与主按钮目标。
+    ///
+    /// 实例本体保留为孤儿：它可能仍被其他版本挂载，也可能只剩这一份数据；
+    /// 是否删除由用户在全局面板决定，卸载版本不代替用户做数据删除。
     /// 返回配置是否发生变化。
-    #[cfg(test)]
     pub fn remove_version_refs(&mut self, version: &str) -> bool {
-        self.remove_version_refs_and_collect_orphans(version).0
-    }
-
-    /// 清理版本引用，并返回因本次卸载而不再被任何版本使用的实例 id。
-    /// 调用方负责删除这些实例的 homes/<id> 目录。
-    pub fn remove_version_refs_and_collect_orphans(
-        &mut self,
-        version: &str,
-    ) -> (bool, Vec<InstanceId>) {
         let mut changed = false;
         if self.default_version.as_deref() == Some(version) {
             self.default_version = None;
@@ -524,34 +544,15 @@ impl Config {
             self.isolated_versions.retain(|v| v != version);
             changed = true;
         }
-        let mut mapped = Vec::new();
         if let Ok(vid) = VersionId::new(version) {
-            if let Some(ids) = self.version_instances.remove(&vid) {
-                mapped = ids;
+            if self.version_instances.remove(&vid).is_some() {
                 changed = true;
             }
             if self.selected_target.remove(&vid).is_some() {
                 changed = true;
             }
         }
-        if mapped.is_empty() {
-            return (changed, Vec::new());
-        }
-        let still_used: std::collections::HashSet<InstanceId> = self
-            .version_instances
-            .values()
-            .flat_map(|ids| ids.iter().cloned())
-            .chain(self.selected_target.values().filter_map(|id| id.clone()))
-            .collect();
-        let orphans: Vec<InstanceId> = mapped
-            .into_iter()
-            .filter(|id| !still_used.contains(id))
-            .collect();
-        if !orphans.is_empty() {
-            self.instances.retain(|i| !orphans.contains(&i.id));
-            changed = true;
-        }
-        (changed, orphans)
+        changed
     }
 }
 
@@ -1036,7 +1037,82 @@ mod tests {
     }
 
     #[test]
-    fn removing_version_collects_only_orphan_instances() {
+    fn ensure_default_instance_keeps_explicit_target() {
+        let manager = tmp("ensure-target");
+        let root = manager.join("root");
+        let vid = VersionId::new("0.1.0").unwrap();
+        let mut cfg = Config::default();
+        let first = cfg.ensure_default_instance(&vid, &root).unwrap();
+        let second = InstanceId::new("i2").unwrap();
+        cfg.instances.push(Instance {
+            id: second.clone(),
+            name: "对比用".into(),
+            created_at: 0,
+            state: InstanceState::Ready,
+        });
+        cfg.version_instances
+            .get_mut(&vid)
+            .unwrap()
+            .push(second.clone());
+        cfg.selected_target
+            .insert(vid.clone(), Some(second.clone()));
+
+        let target = cfg.ensure_default_instance(&vid, &root).unwrap();
+        assert_eq!(target, second, "已有显式选择时应返回它，而不是首个实例");
+        assert_eq!(cfg.selected_target.get(&vid), Some(&Some(second)));
+        assert_ne!(target, first);
+        let _ = std::fs::remove_dir_all(&manager);
+    }
+
+    #[test]
+    fn migration_reuses_existing_instance_home() {
+        let manager = tmp("migrate-reuse");
+        let root = manager.join("root");
+        let dst = root.join("homes").join("i1");
+        std::fs::create_dir_all(&dst).unwrap();
+        std::fs::write(dst.join("marker.txt"), b"kept").unwrap();
+        write_old_config(&manager, &root, &["0.1.0"]);
+
+        let cfg = Config::load_checked(&manager);
+        assert_eq!(cfg.schema_version, CURRENT_SCHEMA_VERSION);
+        assert_eq!(cfg.instances.len(), 1);
+        assert_eq!(cfg.instances[0].id.to_string(), "i1");
+        assert_eq!(
+            std::fs::read(dst.join("marker.txt")).unwrap(),
+            b"kept",
+            "复用的实例目录内容不能被清掉"
+        );
+        let _ = std::fs::remove_dir_all(&manager);
+    }
+
+    #[test]
+    fn migration_keeps_source_when_destination_exists() {
+        let manager = tmp("migrate-reuse-both");
+        let root = manager.join("root");
+        let src = root.join("versions").join("0.1.0").join("home");
+        let dst = root.join("homes").join("i1");
+        std::fs::create_dir_all(&src).unwrap();
+        std::fs::create_dir_all(&dst).unwrap();
+        std::fs::write(src.join("src.txt"), b"src").unwrap();
+        std::fs::write(dst.join("dst.txt"), b"dst").unwrap();
+        write_old_config(&manager, &root, &["0.1.0"]);
+
+        let cfg = Config::load_checked(&manager);
+        assert_eq!(cfg.instances.len(), 1);
+        assert_eq!(
+            std::fs::read(dst.join("dst.txt")).unwrap(),
+            b"dst",
+            "目标目录应被复用"
+        );
+        assert!(
+            src.exists(),
+            "源目录与目标同时存在时不删源，留给用户人工确认"
+        );
+        let _ = std::fs::remove_dir_all(&manager);
+    }
+
+    #[test]
+    fn uninstall_keeps_orphan_instance() {
         let mut cfg = Config::default();
         let shared_id = InstanceId::new("i1").unwrap();
         cfg.instances.push(Instance {
@@ -1049,13 +1125,13 @@ mod tests {
             cfg.version_instances
                 .insert(VersionId::new(v).unwrap(), vec![shared_id.clone()]);
         }
-        let (changed, orphans) = cfg.remove_version_refs_and_collect_orphans("0.1.0");
-        assert!(changed);
-        assert!(orphans.is_empty(), "仍被 0.2.0 使用，不应删除实例");
-        let (changed, orphans) = cfg.remove_version_refs_and_collect_orphans("0.2.0");
-        assert!(changed);
-        assert_eq!(orphans, vec![shared_id]);
-        assert!(cfg.instances.is_empty());
+        assert!(cfg.remove_version_refs("0.1.0"));
+        assert_eq!(cfg.instances.len(), 1, "仍被 0.2.0 挂载，必须保留");
+        assert!(cfg.remove_version_refs("0.2.0"));
+        assert_eq!(cfg.instances.len(), 1, "孤儿实例保留，由用户决定是否删除");
+        assert_eq!(cfg.instances[0].id, shared_id);
+        assert!(cfg.version_instances.is_empty());
+        assert!(cfg.selected_target.is_empty());
     }
 
     #[test]
@@ -1087,8 +1163,25 @@ mod tests {
         assert!(loaded.instances.is_empty());
         assert!(loaded.version_instances.is_empty());
         assert!(loaded.selected_target.is_empty());
-        assert!(!home.exists());
+        assert!(!home.exists(), "原 home 必须已移走");
         assert_eq!(loaded.instance_seq, 7, "序号仍不复用");
+
+        // 删除走 trash 中转：目录应被改名到 trash/instance-i7-*，内容保留。
+        let trash = Dirs::new(root.clone()).trash;
+        let entries: Vec<String> = std::fs::read_dir(&trash)
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().to_string())
+            .collect();
+        let moved = entries
+            .iter()
+            .find(|n| n.starts_with("instance-i7-"))
+            .unwrap_or_else(|| panic!("trash 中应存在实例目录，实际 {entries:?}"));
+        assert_eq!(
+            std::fs::read(trash.join(moved).join("x")).unwrap(),
+            b"x",
+            "改名不应丢内容"
+        );
         let _ = std::fs::remove_dir_all(&manager);
     }
 

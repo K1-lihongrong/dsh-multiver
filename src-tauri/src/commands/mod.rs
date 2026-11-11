@@ -259,6 +259,18 @@ mod tests {
     }
 
     #[test]
+    fn resolve_home_missing_selected_target_uses_shared() {
+        let mut cfg = Config::default();
+        cfg.version_instances.insert(
+            crate::domain::VersionId::new("0.1.0").unwrap(),
+            vec![crate::domain::InstanceId::new("i1").unwrap()],
+        );
+        let dirs = Dirs::new(std::env::temp_dir().join("dsh-rh-missing-target"));
+        let h = crate::paths::resolve_home(&cfg, &dirs, "0.1.0");
+        assert_eq!(h, dirs.home, "selected_target 缺失时不得隐式选第一个实例");
+    }
+
+    #[test]
     fn resolve_home_isolated_only_for_listed_version() {
         let cfg = Config {
             isolated_versions: vec!["0.1.0".to_string()],

@@ -163,8 +163,9 @@ pub fn cmd_uninstall(version: &str, dry_run: bool, json: bool) -> i32 {
         return 0;
     }
 
-    // 卸载的是默认版本 / 隔离版本 → 同步清配置，并重生成转发脚本
-    let (refs_changed, orphan_ids) = ctx.cfg.remove_version_refs_and_collect_orphans(version);
+    // 卸载的是默认版本 / 隔离版本 → 同步清配置，并重生成转发脚本。
+    // 实例本体保留为孤儿，卸载版本不删用户数据。
+    let refs_changed = ctx.cfg.remove_version_refs(version);
     if refs_changed {
         let _ = ctx.cfg.save(&ctx.mdir);
     }
@@ -173,9 +174,6 @@ pub fn cmd_uninstall(version: &str, dry_run: bool, json: bool) -> i32 {
     // 快速卸载：rename 到回收站（瞬时），后台再删；CLI 为一次性进程，故同步删回收站
     let (ok, msg) = versions::uninstall_fast(&ctx.dirs.versions, &ctx.dirs.trash, version);
     if ok {
-        for id in orphan_ids {
-            let _ = std::fs::remove_dir_all(ctx.dirs.homes.join(id.as_str()));
-        }
         // 顺带把该版本的 WebView2 数据目录也移入回收站
         let wv = ctx.dirs.webview.join(version);
         if wv.exists() {
