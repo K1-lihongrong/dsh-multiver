@@ -4,21 +4,24 @@ use super::*;
 
 /// 导入预览：读备份文件，返回将改动的字段（不应用）。
 #[tauri::command]
+#[specta::specta]
 pub(crate) fn preview_import(
-    app: tauri::AppHandle,
+    ctx: tauri::State<'_, crate::AppCtx>,
     file: String,
 ) -> Result<crate::backup::ImportPreview, String> {
-    let mdir = manager_dir(&app);
-    let cfg = Config::load(&mdir);
-    let dirs = Dirs::new(cfg.resolve_root(&mdir));
+    let (cfg, dirs) = ctx.config_dirs();
     crate::backup::preview_import(std::path::Path::new(&file), &cfg, &dirs.versions)
 }
 
 /// 应用导入：把备份文件的配置字段写入当前配置。
 #[tauri::command]
-pub(crate) fn apply_import(app: tauri::AppHandle, file: String) -> Result<Vec<String>, String> {
-    let mdir = manager_dir(&app);
-    let mut cfg = Config::load(&mdir);
+#[specta::specta]
+pub(crate) fn apply_import(
+    ctx: tauri::State<'_, crate::AppCtx>,
+    file: String,
+) -> Result<Vec<String>, String> {
+    let mdir = ctx.manager_dir().clone();
+    let (mut cfg, _dirs) = ctx.config_dirs();
     let applied = crate::backup::apply_import(std::path::Path::new(&file), &mut cfg)?;
     cfg.save(&mdir)
         .map_err(|e| format!("保存配置失败：{}", e))?;
@@ -29,10 +32,12 @@ pub(crate) fn apply_import(app: tauri::AppHandle, file: String) -> Result<Vec<St
 
 /// 导出配置 + 版本清单到指定文件。返回写入路径。
 #[tauri::command]
-pub(crate) fn export_backup(app: tauri::AppHandle, file: String) -> Result<String, String> {
-    let mdir = manager_dir(&app);
-    let cfg = Config::load(&mdir);
-    let dirs = Dirs::new(cfg.resolve_root(&mdir));
+#[specta::specta]
+pub(crate) fn export_backup(
+    ctx: tauri::State<'_, crate::AppCtx>,
+    file: String,
+) -> Result<String, String> {
+    let (cfg, dirs) = ctx.config_dirs();
     let out = std::path::PathBuf::from(file);
     crate::backup::export_to_file(&cfg, &dirs.versions, &out)
 }

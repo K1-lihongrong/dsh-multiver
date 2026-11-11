@@ -6,6 +6,7 @@
 //! - port_in_use：端口占用探测
 
 use super::diagnose::{parse_url, read_recent_errors};
+use crate::ports::DshLauncher;
 use std::io::{BufRead, BufReader};
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
@@ -115,8 +116,8 @@ fn spawn_web_inner(
     // spawn 前：平台相关配置（Unix 下设为新进程组；Windows 无操作）
     crate::jobobj::configure_command(&mut cmd);
 
-    let mut child = cmd
-        .spawn()
+    let mut child = crate::ports::ProcessDshLauncher
+        .spawn_command(&mut cmd)
         .map_err(|e| format!("启动 dsh web 失败: {}", e))?;
 
     // spawn 后：加入进程守卫。

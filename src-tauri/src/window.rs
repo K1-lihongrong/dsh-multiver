@@ -2,27 +2,11 @@
 //!
 //! 从 lib.rs 抽出（GAP-003，纯移动，无逻辑改动）。
 
-/// 由版本号生成合法的窗口 label 前缀（不含代次）。
-/// Tauri 要求 label 只含字母数字和 `-` `/` `:` `_`，而版本号含 `.`，故替换为 `_`。
-pub(crate) fn window_label_prefix(version: &str) -> String {
-    let sanitized: String = version
-        .chars()
-        .map(|c| {
-            if c.is_ascii_alphanumeric() || matches!(c, '-' | '/' | ':' | '_') {
-                c
-            } else {
-                '_'
-            }
-        })
-        .collect();
-    format!("dsh-{}", sanitized)
-}
-
 /// 带代次的**唯一**窗口 label。
 /// 用唯一 label 从根本上避免 "a webview with label ... already exists"：
 /// close()/destroy() 都是异步投递，不能保证旧窗口立即消失，故不再复用 label。
-pub(crate) fn window_label_gen(version: &str, gen: u64) -> String {
-    format!("{}-{}", window_label_prefix(version), gen)
+pub(crate) fn window_label_gen(proc_key: &crate::domain::ProcKey, gen: u64) -> String {
+    format!("{}-{}", proc_key.label_prefix(), gen)
 }
 
 /// 从命令行参数解析出 --launch-version <版本>（精简启动模式用）
@@ -227,10 +211,13 @@ pub(crate) fn ensure_main_window(app: &tauri::AppHandle) -> Result<&'static str,
     // 会读到 V 而进入「启动态」，但 `launch-mode-start` / `launch-progress` 事件
     // 只在首次启动流程发出，重建窗口收不到 → 永远卡在「正在启动」。
     {
-        let mut intent = crate::lock_launch_intent();
-        intent.mode = None;
-        // 同理清掉上一轮的启动错误，避免重建窗口后仍显示旧错误
-        intent.error = None;
+        use tauri::Manager;
+        if let Some(ctx) = app.try_state::<crate::AppCtx>() {
+            let mut intent = ctx.lock_intent();
+            intent.mode = None;
+            // 同理清掉上一轮的启动错误，避免重建窗口后仍显示旧错误
+            intent.error = None;
+        }
     }
 
     let config = app

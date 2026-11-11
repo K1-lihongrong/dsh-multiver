@@ -1,87 +1,60 @@
-# v0.3.7
+﻿# v0.4.0-alpha.3
 
-本次为**安全与契约加固版**：修复 v0.3.6 内嵌 dsh 窗口事件桥的来源校验缺失，拆分 capability，合并启动意图状态，并补上 i18n、外部契约与自更新失败路径测试。无用户可见交互变化。
+本次为 alpha 验证版，重点修复一键更新替换卡死与不重启，并收口 alpha.2 留下的 DSH adapter 和 Job 事件技术债。没有新增实例 UI，也不改变现有插件命令语义。
 
----
+## 一键更新修复
 
-## 内嵌窗口事件监听按窗口绑定
+此前一键更新可能退出管理器后不自动重启，用户手动再打开仍是旧版。根因是隐藏窗口里的替换批处理使用管道探测旧进程，管道等待导致后续复制和重启步骤没有执行。
 
-v0.3.6 用全局 `app.listen_any` 接收 topbar 事件，并信任 payload 里的 `version` 字段。任意 dsh 页面（含第三方插件代码）都能伪造版本号，关闭或重启其他版本的窗口。
+本次改为：
 
-- 删除 4 个全局 topbar 监听器，改到 `launch_window` 内用 `window.listen` 绑定当前窗口。
-- 版本号与进程映射由闭包捕获，payload 里的 `version` 不再被采信。
-- topbar 从全局 `emit` 改为 `emit_to` 当前窗口 label，避免广播到所有窗口。
-- 每个窗口注入随机 128-bit token；四个监听器都校验 token，页面内代码无法读取其他窗口的闭包 token，跨窗口伪造事件被拒绝。
-- 监听器在窗口显示前注册，避免页面首帧事件早于监听。
+- 在当前进程内完成 exe 替换：复制临时文件、旧 exe 改名 `.old`、新 exe 改名到目标。
+- 任一步失败自动回滚，旧 exe 保持可启动。
+- 替换成功后使用无管道的延迟脚本，等当前进程退出约 3 秒后启动新 exe，避开单实例锁。
+- 暂存更新安装后立即安排重启，不再需要用户手动打开第二次。
+- 增加 `DSH_MULTIVER_UPDATE_API_BASE`，便于本地 mock 更新源验收。
 
-**用户可见变化**：无。两版本并行时，关闭/重启/主题切换只作用于当前窗口。
+**用户可见变化**：更新失败会显示真实错误且不退出；更新成功后自动重启为新版本，不再出现退出后仍旧版。
+## DSH adapter 与 Job 事件收口
 
-## capability 拆两份
+- DSH 版本差异集中到 adapter：识别 v0.1 / v0.3，未知版本走保守默认。
+- 插件命令按版本能力门控，不再对未知版本误开专属能力。
+- 新增统一 JobEventSink：任务进度、完成和失败都发完整快照加增量字段。
+- Job 增加开始时间、取消 token 和 64 条历史上限。
+- 扫描取消同时接入 Job token 和旧全局标记。
+- 启动、扫描、安装、插件、批量更新和共享 home 体检迁移到统一 `job:*` 事件，旧事件继续保留。
 
-原 `default.json` 同时覆盖主窗口和 `dsh-*`，把 `core:default`、`opener`、`dialog` 与窗口三键全部授给加载第三方内容的窗口。
+**用户可见变化**：后台任务进度和取消行为保持兼容；插件面板的按钮恢复和错误提示不应受事件收敛影响。
 
-- 拆为 `capabilities/main.json`（主窗口）与 `capabilities/dsh.json`（内嵌窗口），删除合并版。
-- 内嵌窗口只保留 `core:event:allow-emit-to` 与 `core:window:allow-start-dragging`。
-- 三键/重启/主题由 Rust 侧处理，不需要给 dsh 页面 JS 窗口权限；`opener` / `dialog` / `core:default` 已移除。
+## 兼容矩阵
 
-**用户可见变化**：无。内嵌窗口拖拽、三键、重启、主题跟随保持可用。
+2026-11-11 对 11 个 DSH 版本重新执行隔离兼容测试：
 
-## LaunchIntent 合并启动状态
+- plugin add / remove / add
+- `dsh web` 启动
+- `state` 返回 200 且 `ok=true`
+- 无 cookie POST 返回 401
+- 有 cookie GET 返回 405
+- 真实数据根 `config.json` SHA256 前后一致
 
-把 `LAUNCH_MODE` / `LAUNCH_ERROR` / `OPEN_SETTINGS` 三个 static 合并为 `LaunchIntent`，由一把锁管理三个字段。
-
-- 写入/读取时机与语义不变，只减少重复状态与 lock 函数。
-- `window.rs` 重建主窗口时同时清空 `mode` 与 `error`。
-
-**用户可见变化**：无。
-
-## i18n key 校验
-
-新增 `scripts/check-i18n.mjs`，以 zh-CN 为基准检查其余 4 种语言 key 是否齐全；CI 在 frontend build 后执行。
-
-- 当前 5 种语言均为 361 key。
-- 缺 key 时运行期会静默回退中文，构建不会报错，因此必须由 CI 拦截。
-
-**用户可见变化**：无。
-
-## 契约测试（A5）
-
-新增 `src-tauri/tests/contracts.rs` 与独立 CI job：
-
-- fake pnpm 输出驱动生产 `ProgressParser`，锁住阶段、明细与 fraction。
-- pnpm 错误文本分类对拍。
-- `pnpm view --json` 三种输出形态解析对拍。
-- 真实 GBK 字节解码。
-- 真实 pnpm view 联网对拍（`#[ignore]`，独立 job 显式运行）。
-
-**用户可见变化**：无。
-
-## staged 自更新失败路径测试（A6）
-
-抽出 `take_over_pending_at` 以注入被替换 exe 路径，新增 `src-tauri/tests/staged_failures.rs`：
-
-- 目标 exe 缺失时中止并保留唯一可用的 `.old`。
-- target rename 失败时保留原 exe、暂存与 pending 标记。
-- 放入新 exe 失败时回滚旧 exe。
-- 成功路径消费暂存与 pending 标记。
-
-**用户可见变化**：无。
-
----
-
+结果：**11/11 通过**。该结果是安装、启动和协议冒烟验证，不等同于所有插件功能和 UI 行为的完整验收。
 ## 验证
 
-- Rust 单测 **202 passed / 1 ignored**
-- staged 失败路径 **4 passed**
-- 契约测试 **4 passed / 1 ignored**；真实 pnpm 对拍 **1 passed**
-- `cargo clippy --all-targets -- -D warnings` 0 warning；`cargo fmt --check` 通过
-- `pnpm build` 通过；5 语 i18n 各 361 key 全绿
-- `pnpm tauri build --no-bundle` 本地打包通过
-- 实机并行两个版本（0.2.2-rc.1 / 0.2.2-alpha.3）：
-  - 最小化 rc.1 后 alpha.3 仍正常；
-  - 关闭 alpha.3 后 rc.1 窗口仍在、进程未退出；
-  - 「重启」后窗口不消失、dsh node PID 更换、topbar 重新注入；
-  - 最小化 / 最大化 / 还原 / 关闭三键均实测可用；
-  - 标题栏拖拽实测可用；
-  - 主题切换实测：标题栏背景 `rgb(247,247,248)` ↔ `rgb(31,35,40)`，DWM 深色属性 20 在 0/1 间同步。
-- 主题跟随建议验收时切换 dsh 深浅色再确认一次（事件通道与窗口权限已随三键/重启一并验证）。
+- Rust 单测 **256 passed / 1 ignored**
+- E2E **63 passed**
+- `cargo fmt --check` 通过
+- `cargo check --all-targets` 通过
+- `cargo clippy --all-targets -- -D warnings` 通过
+- `pnpm check:commands` 通过
+- `pnpm build` 通过
+- `pnpm tauri build --no-bundle` 在本地验收阶段执行
+- 原生 UIA 验收脚本通过
+- 本地 mock 更新链路脚本通过
+- 11 版本兼容矩阵 11/11 通过
+
+## 已知边界
+
+- 不包含 v0.4.0 的跨版本实例聚合 UI。
+- 不承诺所有第三方插件在全部 DSH 版本功能完整。
+- 兼容矩阵是冒烟测试，最终仍需人工验收关键流程。
+- 本地验收通过前不合并 main、不打 tag、不推 CI 发布。

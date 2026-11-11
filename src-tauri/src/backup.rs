@@ -66,7 +66,7 @@ pub fn export_to_file(cfg: &Config, versions_dir: &Path, out: &Path) -> Result<S
 }
 
 /// 导入预览：读备份文件，返回"将改动的字段"（不应用）。
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, specta::Type)]
 pub struct ImportPreview {
     /// 备份里的管理器版本
     pub backup_manager_version: String,

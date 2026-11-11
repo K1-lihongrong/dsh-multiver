@@ -3,9 +3,10 @@
 use super::*;
 
 #[tauri::command]
-pub(crate) fn log_frontend(app: tauri::AppHandle, msg: String) {
-    let mdir = manager_dir(&app);
-    let root = Config::load(&mdir).resolve_root(&mdir);
+#[specta::specta]
+pub(crate) fn log_frontend(ctx: tauri::State<'_, crate::AppCtx>, msg: String) {
+    let (_cfg, dirs) = ctx.config_dirs();
+    let root = dirs.root;
     // v0.2.13 启动打点：若前端首屏打点（[boot]），附加"进程启动→窗口就绪"耗时
     let msg = if msg.starts_with("[boot]") {
         if let Some(ms) = crate::WIN_READY_MS.get() {
@@ -20,6 +21,7 @@ pub(crate) fn log_frontend(app: tauri::AppHandle, msg: String) {
 }
 
 #[tauri::command]
+#[specta::specta]
 pub(crate) fn open_url(url: String) -> Result<(), String> {
     if !url.starts_with("http://") && !url.starts_with("https://") {
         return Err("只允许打开 http/https 链接".to_string());
@@ -33,10 +35,9 @@ pub(crate) fn open_url(url: String) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub(crate) fn open_dir(app: tauri::AppHandle, which: String) -> Result<(), String> {
-    let mdir = manager_dir(&app);
-    let cfg = Config::load(&mdir);
-    let dirs = Dirs::new(cfg.resolve_root(&mdir));
+#[specta::specta]
+pub(crate) fn open_dir(ctx: tauri::State<'_, crate::AppCtx>, which: String) -> Result<(), String> {
+    let (_cfg, dirs) = ctx.config_dirs();
     let target = dirs.resolve(&which);
     let (ok, msg) = actions::open_folder(&target);
     if ok {

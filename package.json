@@ -1,7 +1,7 @@
 {
   "name": "dsh-multiver",
   "private": true,
-  "version": "0.3.7",
+  "version": "0.4.0-alpha.3",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -10,7 +10,12 @@
     "tauri": "tauri",
     "test:e2e": "playwright test",
     "test:e2e:ui": "playwright test --ui",
-    "test:e2e:report": "playwright show-report"
+    "test:e2e:report": "playwright show-report",
+    "check:commands": "node scripts/check-commands.mjs",
+    "test:acceptance:ui": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/acceptance-uia.ps1",
+    "test:acceptance:update": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/acceptance-update.ps1",
+    "test:compat": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/compat-matrix.ps1",
+    "bindings:generate": "cargo run --manifest-path src-tauri/Cargo.toml --bin generate_bindings -- src/api/bindings.ts"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.12.0",

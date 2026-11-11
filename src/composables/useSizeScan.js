@@ -11,7 +11,7 @@
 // 动效时序以 docs/v0.2.13-动效规范.md 为准。
 
 import { ref, nextTick, onUnmounted } from "vue";
-import { invoke } from "@tauri-apps/api/core";
+import { scanVersions, cancelScan as cancelScanApi } from "../api/scan.js";
 import { listen } from "@tauri-apps/api/event";
 
 /// 闪烁动画时长（与 CSS scan-flash 对齐）
@@ -130,7 +130,7 @@ export function useSizeScan() {
     fadingOut.value = false;
     try {
       await ensureListener();
-      await invoke("scan_versions", { versions });
+      await scanVersions(versions);
     } finally {
       scanning.value = false;
       queue.value = [];
@@ -145,7 +145,7 @@ export function useSizeScan() {
   /// 取消：立即请求中断。
   async function cancelScan() {
     if (!scanning.value) return;
-    try { await invoke("cancel_scan"); } catch (_) {}
+    try { await cancelScanApi(); } catch (_) {}
   }
 
   onUnmounted(() => {

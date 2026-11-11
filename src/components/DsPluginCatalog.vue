@@ -1,6 +1,7 @@
 <script setup>
 import { ref, computed, watch, onMounted, onUnmounted } from "vue";
-import { invoke } from "@tauri-apps/api/core";
+import { dsPluginCatalog, dsPluginCatalogCheck } from "../api/plugins.js";
+import { openUrl } from "../api/app.js";
 import { t, langMode } from "../composables/useI18n.js";
 import { useToast } from "../composables/useToast.js";
 
@@ -30,7 +31,7 @@ async function loadCatalogLocal() {
   catalogLoading.value = true;
   catalogError.value = "";
   try {
-    catalog.value = await invoke("ds_plugin_catalog");
+    catalog.value = await dsPluginCatalog();
   } catch (e) {
     catalogError.value = "" + e;
   } finally {
@@ -44,7 +45,7 @@ async function checkCatalogRemote(force) {
   catalogChecking.value = true;
   catalogCheckError.value = "";
   try {
-    const r = await invoke("ds_plugin_catalog_check", { force: !!force });
+    const r = await dsPluginCatalogCheck(force);
     if (r?.updated) {
       await loadCatalogLocal();
     } else if (r?.error) {
@@ -195,7 +196,7 @@ function onTabsClickCapture(e) {
 async function openExternal(url) {
   if (!url) return;
   try {
-    await invoke("open_url", { url });
+    await openUrl(url);
   } catch (e) {
     notify(String(e));
   }

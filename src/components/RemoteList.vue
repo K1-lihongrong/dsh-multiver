@@ -1,6 +1,6 @@
 <script setup>
 import { ref, computed, onMounted, onUnmounted } from "vue";
-import { invoke } from "@tauri-apps/api/core";
+import { listRemote, clearBroken as clearBrokenApi, installVersion } from "../api/versions.js";
 import { listen } from "@tauri-apps/api/event";
 import { useToast } from "../composables/useToast.js";
 import NotesPanel from "./NotesPanel.vue";
@@ -104,7 +104,7 @@ const filteredRemote = computed(() => {
 async function loadRemote() {
   loading.value = true;
   try {
-    remote.value = await invoke("list_remote");
+    remote.value = await listRemote();
   } catch (e) {
     notify(t("remote.fetchFailed") + ": " + e);
   } finally {
@@ -145,7 +145,7 @@ async function clearBroken() {
     return notify(t("remote.noBrokenMarks"));
   }
   try {
-    await invoke("clear_broken", { version: null });
+    await clearBrokenApi(null);
     emit("refresh");
     notify(t("remote.clearedMarks"));
   } catch (e) {
@@ -183,10 +183,7 @@ async function doInstall(ver, registry) {
   loading.value = true;
   installStage.value = t("remote.preparing");
   try {
-    const msg = await invoke("install_version", {
-      version: ver,
-      registry: registry || null,
-    });
+    const msg = await installVersion(ver, registry || null);
     notify(msg);
     emit("refresh");
   } catch (e) {

@@ -3,39 +3,58 @@
 use super::*;
 
 #[tauri::command]
+#[specta::specta]
 pub(crate) async fn scan_versions(
     app: tauri::AppHandle,
+    ctx: tauri::State<'_, crate::AppCtx>,
     versions: Vec<String>,
 ) -> Result<(), String> {
     use tauri::Emitter;
-    let mdir = manager_dir(&app);
-    let cfg = Config::load(&mdir);
-    let root = cfg.resolve_root(&mdir);
-    let dirs = Dirs::new(root.clone());
+    let dirs = ctx.dirs_snapshot();
+    let root = dirs.root.clone();
     let versions_dir = dirs.versions.clone();
     let store = dirs.store.clone();
     let app2 = app.clone();
 
-    // 清除上次的取消标志
-    SCAN_CANCEL.store(false, std::sync::atomic::Ordering::SeqCst);
+    // A2-5: one Job per scan, while keeping the legacy scan-size-progress events.
+    let job_target = format!("{} versions", versions.len());
+    let sink = ctx.job_sink(app.clone());
+    let job_id = sink.create("scan", &job_target);
+    let token = sink.token(&job_id).unwrap_or_default();
 
-    tauri::async_runtime::spawn_blocking(move || {
+    // Keep the legacy global flag in sync for compatibility; the scan loop
+    // itself uses the job's CancellationToken.
+    let legacy_cancel = ctx.scan_cancel_handle();
+    legacy_cancel.store(false, std::sync::atomic::Ordering::SeqCst);
+
+    let job_for_scan = job_id.clone();
+    let sink_for_scan = sink.clone();
+    let scan = tauri::async_runtime::spawn_blocking(move || {
+        use tauri::Emitter;
         let names: Vec<String> = versions;
         let total = names.len();
         let store_mtime = sizecache::dir_mtime(&store);
         let mut cache = sizecache::load(&root);
-        // D13：清掉已卸载版本留下的死条目，保证写回时只含当前实际安装的版本
+        // D13: drop cache entries for versions that no longer exist.
         sizecache::prune(&mut cache, |v| versions_dir.join(v).exists());
+        let mut cancelled = false;
+
+        let cancel = {
+            let token = token.clone();
+            let legacy = legacy_cancel.clone();
+            move || token.is_cancelled() || legacy.load(std::sync::atomic::Ordering::SeqCst)
+        };
 
         for (i, n) in names.iter().enumerate() {
-            // 取消检查（每个版本开始前）
-            if SCAN_CANCEL.load(std::sync::atomic::Ordering::SeqCst) {
+            // Cancellation check before each version.
+            if cancel() {
+                cancelled = true;
                 break;
             }
             let idx = i + 1;
             let dir_mtime = sizecache::dir_mtime(&versions_dir.join(n));
 
-            // 缓存命中：逐个 emit（间隔 80ms），让"复用"有节奏感
+            // Cache hit: emit one event per version, preserving the legacy 80ms cadence.
             if sizecache::is_valid(&cache, n, dir_mtime, store_mtime) {
                 if let Some(info) = sizecache::get_info(&cache, n) {
                     let _ = app2.emit(
@@ -51,6 +70,17 @@ pub(crate) async fn scan_versions(
                             "cached": true,
                         }),
                     );
+                    sink_for_scan.progress(
+                        &job_for_scan,
+                        "detail",
+                        idx as u64,
+                        Some(total as u64),
+                        Some(serde_json::json!({
+                            "version": n,
+                            "index": idx,
+                            "cached": true,
+                        })),
+                    );
                     if total > 1 {
                         std::thread::sleep(std::time::Duration::from_millis(80));
                     }
@@ -58,7 +88,7 @@ pub(crate) async fn scan_versions(
                 continue;
             }
 
-            // 第一段开始：发 counting 事件（前端显示不确定进度条）
+            // First pass starts: legacy counting event plus the unified job event.
             let _ = app2.emit(
                 "scan-size-progress",
                 serde_json::json!({
@@ -72,13 +102,21 @@ pub(crate) async fn scan_versions(
                     "cached": false,
                 }),
             );
+            sink_for_scan.progress(
+                &job_for_scan,
+                "counting",
+                i as u64,
+                Some(total as u64),
+                Some(serde_json::json!({
+                    "version": n,
+                    "index": idx,
+                })),
+            );
 
-            // 取消检查闭包
-            let cancel = || SCAN_CANCEL.load(std::sync::atomic::Ordering::SeqCst);
-
-            // 第一段（合并遍历）：收集文件列表 + 总量。带进度与取消。
             let app_c = app2.clone();
             let vname_c = n.clone();
+            let job_c = job_for_scan.clone();
+            let sink_c = sink_for_scan.clone();
             let cb_count = move |done: u64, _tot: u64| {
                 let _ = app_c.emit(
                     "scan-size-progress",
@@ -93,15 +131,26 @@ pub(crate) async fn scan_versions(
                         "cached": false,
                     }),
                 );
+                sink_c.progress(
+                    &job_c,
+                    "counting",
+                    i as u64,
+                    Some(total as u64),
+                    Some(serde_json::json!({
+                        "version": vname_c,
+                        "index": idx,
+                        "files": done,
+                    })),
+                );
             };
             let Some(fl) =
                 versions::collect_files(&versions_dir.join(n), Some(&cb_count), Some(&cancel))
             else {
-                break; // 被取消
+                cancelled = true;
+                break;
             };
             let file_count = fl.files.len() as u64;
 
-            // 第一段完成：发总量（stage="total"）
             let first = versions::SizeInfo {
                 total: fl.total,
                 shared_size: 0,
@@ -121,10 +170,22 @@ pub(crate) async fn scan_versions(
                     "cached": false,
                 }),
             );
+            sink_for_scan.progress(
+                &job_for_scan,
+                "counting",
+                i as u64,
+                Some(total as u64),
+                Some(serde_json::json!({
+                    "version": n,
+                    "index": idx,
+                    "fileTotal": file_count,
+                })),
+            );
 
-            // 第二段：用文件列表读 nlink（带进度与取消）
             let app3 = app2.clone();
             let vname = n.clone();
+            let job_d = job_for_scan.clone();
+            let sink_d = sink_for_scan.clone();
             let cb = move |done: u64, ftot: u64| {
                 let _ = app3.emit(
                     "scan-size-progress",
@@ -139,11 +200,24 @@ pub(crate) async fn scan_versions(
                         "cached": false,
                     }),
                 );
+                sink_d.progress(
+                    &job_d,
+                    "detail",
+                    i as u64,
+                    Some(total as u64),
+                    Some(serde_json::json!({
+                        "version": vname,
+                        "index": idx,
+                        "files": done,
+                        "fileTotal": if ftot > 0 { ftot } else { file_count },
+                    })),
+                );
             };
             let Some(info) =
                 versions::detail_from_files(&fl.files, fl.total, Some(&cb), Some(&cancel))
             else {
-                break; // 被取消
+                cancelled = true;
+                break;
             };
 
             let _ = app2.emit(
@@ -159,31 +233,63 @@ pub(crate) async fn scan_versions(
                     "cached": false,
                 }),
             );
+            sink_for_scan.progress(
+                &job_for_scan,
+                "detail",
+                idx as u64,
+                Some(total as u64),
+                Some(serde_json::json!({
+                    "version": n,
+                    "index": idx,
+                    "fileTotal": file_count,
+                })),
+            );
             sizecache::put(&mut cache, n, dir_mtime, store_mtime, info);
         }
         let _ = sizecache::save(&root, &cache);
+        cancelled
     })
-    .await
-    .map_err(|e| format!("扫描失败: {}", e))?;
-    Ok(())
+    .await;
+
+    match scan {
+        Ok(true) => {
+            sink.cancel(&job_id, "scan cancelled", None);
+            Ok(())
+        }
+        Ok(false) => {
+            sink.finish(&job_id, "scan done", None);
+            Ok(())
+        }
+        Err(e) => {
+            let msg = format!("扫描失败: {}", e);
+            sink.fail(&job_id, "scan_failed", &msg, None);
+            Err(msg)
+        }
+    }
 }
 
 /// v0.2.13：请求取消正在进行的扫描。置位全局标志，扫描循环会在当前版本中断后停止。
 #[tauri::command]
-pub(crate) fn cancel_scan() -> Result<(), String> {
-    SCAN_CANCEL.store(true, std::sync::atomic::Ordering::SeqCst);
+#[specta::specta]
+pub(crate) fn cancel_scan(ctx: tauri::State<'_, crate::AppCtx>) -> Result<(), String> {
+    ctx.scan_cancel()
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    if let Some(id) = ctx.jobs().latest_running_id("scan") {
+        if let Some(token) = ctx.jobs().token(&id) {
+            token.cancel();
+        }
+    }
     Ok(())
 }
 
 #[tauri::command]
+#[specta::specta]
 pub(crate) async fn scan_isolated_size(
-    app: tauri::AppHandle,
+    ctx: tauri::State<'_, crate::AppCtx>,
     version: String,
 ) -> Result<u64, String> {
-    let mdir = manager_dir(&app);
-    let cfg = Config::load(&mdir);
-    let dirs = Dirs::new(cfg.resolve_root(&mdir));
-    let home = versions::isolated_home(&dirs.versions, &version);
+    let (cfg, dirs) = ctx.config_dirs();
+    let home = crate::paths::resolve_home(&cfg, &dirs, &version);
     // 目录扫描可能很慢，放到后台线程
     let size = tauri::async_runtime::spawn_blocking(move || versions::dir_size(&home))
         .await
@@ -193,9 +299,13 @@ pub(crate) async fn scan_isolated_size(
 
 /// 设置自动维护开关。
 #[tauri::command]
-pub(crate) fn set_auto_maintenance(app: tauri::AppHandle, enabled: bool) -> Result<(), String> {
-    let mdir = manager_dir(&app);
-    let mut cfg = Config::load(&mdir);
+#[specta::specta]
+pub(crate) fn set_auto_maintenance(
+    ctx: tauri::State<'_, crate::AppCtx>,
+    enabled: bool,
+) -> Result<(), String> {
+    let mdir = ctx.manager_dir().clone();
+    let (mut cfg, _dirs) = ctx.config_dirs();
     cfg.maintenance.auto_enabled = enabled;
     cfg.save(&mdir).map_err(|e| format!("保存配置失败: {}", e))
 }
@@ -203,11 +313,14 @@ pub(crate) fn set_auto_maintenance(app: tauri::AppHandle, enabled: bool) -> Resu
 /// 手动执行维护。kind: "cleanup"（孤立 webview）| "prune"（依赖仓库）| "all"。
 /// 返回人类可读的结果描述。
 #[tauri::command]
-pub(crate) async fn run_maintenance(app: tauri::AppHandle, kind: String) -> Result<String, String> {
-    let mdir = manager_dir(&app);
-    let mut cfg = Config::load(&mdir);
-    let root = cfg.resolve_root(&mdir);
-    let dirs = Dirs::new(root.clone());
+#[specta::specta]
+pub(crate) async fn run_maintenance(
+    ctx: tauri::State<'_, crate::AppCtx>,
+    kind: String,
+) -> Result<String, String> {
+    let mdir = ctx.manager_dir().clone();
+    let (mut cfg, dirs) = ctx.config_dirs();
+    let root = dirs.root.clone();
     let _ = dirs.ensure();
     let mdir2 = mdir.clone();
 

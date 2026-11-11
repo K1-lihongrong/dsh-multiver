@@ -1,10 +1,12 @@
 <script setup>
-import { ref, computed, inject, onUnmounted } from "vue";
-import { invoke } from "@tauri-apps/api/core";
+import { ref, computed, inject, onMounted, onUnmounted } from "vue";
+import { dsCheckUpdates, dsPluginUpdateBatch, dsPluginAction } from "../api/plugins.js";
+import { listen } from "@tauri-apps/api/event";
 import { ask } from "@tauri-apps/plugin-dialog";
 import { t } from "../composables/useI18n.js";
 import { useToast } from "../composables/useToast.js";
 import { actionErrorText } from "../composables/useDsPluginErrors.js";
+import { withTimeout } from "../composables/useAsyncTimeout.js";
 import { DS_PLUGIN_LOG_KEY } from "../composables/useDsPluginLog.js";
 
 // 「已安装」标签页：筛选、卸载、检查更新、更新。
@@ -63,16 +65,53 @@ const filteredPlugins = computed(() => {
 
 // 可更新插件（包名 → 最新版本信息）
 const updates = ref({});
+const checkingUpdates = ref(false);
+const checkElapsed = ref(0);
+let checkTimer = null;
+const batchRunning = ref(false);
+const batchProgress = ref(null);
+let unlistenBatch = null;
+
+const batchableUpdates = computed(() => {
+  const list = [];
+  for (const u of Object.values(updates.value)) {
+    const pl = props.plugins.find((p) => p.name === u.name);
+    if (pl && !isOfficial(pl)) list.push(u);
+  }
+  return list;
+});
+const updateCount = computed(() => batchableUpdates.value.length);
+
+function phaseText(phase) {
+  const map = {
+    removing: "updatePhaseRemoving",
+    installing: "updatePhaseInstalling",
+    rolling_back: "updatePhaseRollingBack",
+    done: "updatePhaseDone",
+    updated: "updatePhaseDone",
+    rolled_back: "updatePhaseRolledBack",
+    failed: "updatePhaseFailed",
+    rollback_failed: "updatePhaseRollbackFailed",
+  };
+  return t("dsplugins." + (map[phase] || "updatePhaseInstalling"));
+}
 
 // B1-13：检查可更新插件（dsh CLI `outdated --json`）
 async function checkUpdates() {
   if (!props.profile) return;
   emit("update:busy", true);
+  checkingUpdates.value = true;
+  checkElapsed.value = 0;
+  clearInterval(checkTimer);
+  checkTimer = setInterval(() => {
+    checkElapsed.value += 1;
+  }, 1000);
   try {
-    const list = await invoke("ds_check_updates", {
-      version: props.version,
-      profile: props.profile,
-    });
+    const list = await withTimeout(
+      dsCheckUpdates(props.version, props.profile),
+      55000,
+      t("dsplugins.checkTimeout"),
+    );
     const map = {};
     for (const u of list || []) map[u.name] = u;
     updates.value = map;
@@ -80,12 +119,19 @@ async function checkUpdates() {
   } catch (e) {
     notify("" + e);
   } finally {
+    clearInterval(checkTimer);
+    checkTimer = null;
+    checkingUpdates.value = false;
     emit("update:busy", false);
   }
 }
 
 // B1-13：更新 = 官方语义「先卸载再安装新版」
 async function updatePlugin(pl) {
+  if (isOfficial(pl)) {
+    notify(t("dsplugins.bundleLocked"));
+    return;
+  }
   const u = updates.value[pl.name];
   if (!u) return;
   const ok = await ask(t("dsplugins.updateConfirm", { p: pl.name, v: u.latest }), {
@@ -95,26 +141,76 @@ async function updatePlugin(pl) {
   if (!ok) return;
   emit("update:busy", true);
   logLines.value = [];
+  showLog.value = true;
   try {
-    await invoke("ds_plugin_action", {
-      version: props.version,
-      profile: props.profile,
-      action: "remove",
-      package: pl.name,
-    });
-    await invoke("ds_plugin_action", {
-      version: props.version,
-      profile: props.profile,
-      action: "add",
-      package: `${pl.name}@${u.latest}`,
-    });
-    notify(t("dsplugins.updated", { p: pl.name, v: u.latest }));
+    const results = await withTimeout(
+      dsPluginUpdateBatch(props.version, props.profile, [{ name: pl.name, latest: u.latest }]),
+      300000,
+      t("dsplugins.operationTimeout"),
+    );
+    const r = (results || [])[0];
+    if (r?.status === "updated") {
+      notify(t("dsplugins.updated", { p: pl.name, v: u.latest }));
+    } else {
+      notify(t("dsplugins.updateFailed", { p: pl.name }));
+      if (r?.message) logLines.value.push("[" + pl.name + "] " + r.message);
+      if (r?.rollback_error) logLines.value.push("[" + pl.name + "] " + r.rollback_error);
+    }
     emit("reload");
-    await checkUpdates();
+    updates.value = {};
   } catch (e) {
     notify(actionErrorText(e));
     showLog.value = true;
   } finally {
+    emit("update:busy", false);
+  }
+}
+
+async function updateAll() {
+  const list = batchableUpdates.value;
+  if (!list.length) {
+    notify(t("dsplugins.updateAllNone"));
+    return;
+  }
+  const ok = await ask(t("dsplugins.updateAllConfirm", { n: list.length }), {
+    title: t("dsplugins.updateAll"),
+    kind: "warning",
+  });
+  if (!ok) return;
+  emit("update:busy", true);
+  batchRunning.value = true;
+  logLines.value = [];
+  showLog.value = true;
+  try {
+    const results = await withTimeout(
+      dsPluginUpdateBatch(props.version, props.profile, list.map((u) => ({ name: u.name, latest: u.latest }))),
+      300000,
+      t("dsplugins.operationTimeout"),
+    );
+    const updated = (results || []).filter((r) => r.status === "updated").length;
+    const failed = (results || []).length - updated;
+    notify(
+      failed
+        ? t("dsplugins.updateAllPartial", { updated, failed })
+        : t("dsplugins.updateAllDone", { n: updated }),
+    );
+    for (const r of results || []) {
+      if (r.message || r.rollback_error) {
+        logLines.value.push(
+          "[" + r.name + "] " + (r.message || "") +
+            (r.rollback_error ? " / " + r.rollback_error : ""),
+        );
+      }
+    }
+    if (failed) showLog.value = true;
+    emit("reload");
+    updates.value = {};
+  } catch (e) {
+    notify(actionErrorText(e));
+    showLog.value = true;
+  } finally {
+    batchRunning.value = false;
+    batchProgress.value = null;
     emit("update:busy", false);
   }
 }
@@ -150,12 +246,11 @@ async function runAction(action, pkg, locked) {
   // 立即展开日志区：卸载大插件要几十秒，不能等结束才让用户看到进度。
   showLog.value = true;
   try {
-    await invoke("ds_plugin_action", {
-      version: props.version,
-      profile: props.profile,
-      action,
-      package: name,
-    });
+    await withTimeout(
+      dsPluginAction(props.version, props.profile, action, name),
+      300000,
+      t("dsplugins.operationTimeout"),
+    );
     notify(t(action === "add" ? "dsplugins.installed" : "dsplugins.removed", { p: name }));
     emit("action-done");
     if (logLines.value.length) showLog.value = true;
@@ -173,9 +268,31 @@ async function runAction(action, pkg, locked) {
 
 // 工具栏的「检查更新」按钮在壳里，通过 ref 调用本方法；
 // 「允许构建脚本后重试」也由壳通过 ref 调用 runAction。
-onUnmounted(stopPending);
+onMounted(async () => {
+  try {
+    unlistenBatch = await listen("plugin-update-progress", (e) => {
+      const p = e?.payload;
+      if (!p || p.version !== props.version || p.profile !== props.profile) return;
+      batchProgress.value = {
+        i: p.index,
+        n: p.total,
+        name: p.name,
+        phase: p.phase === "done" ? p.status : p.phase,
+      };
+    });
+  } catch (_) {
+    // 非 Tauri 环境（E2E mock）忽略
+  }
+});
 
-defineExpose({ checkUpdates, runAction });
+onUnmounted(() => {
+  if (unlistenBatch) unlistenBatch();
+  clearInterval(checkTimer);
+  checkTimer = null;
+  stopPending();
+});
+
+defineExpose({ checkUpdates, updateAll, runAction });
 </script>
 
 <template>
@@ -193,6 +310,25 @@ defineExpose({ checkUpdates, runAction });
         :placeholder="t('dsplugins.searchPlaceholder')"
         :aria-label="t('dsplugins.searchPlaceholder')"
       />
+      <button
+        v-if="updateCount"
+        class="dp-btn dp-btn-primary dp-btn-sm dp-filter-action"
+        @click="updateAll"
+        :disabled="busy || batchRunning"
+      >
+        {{ t("dsplugins.updateAll") }} ({{ updateCount }})
+      </button>
+    </div>
+    <div v-if="checkingUpdates" class="dp-check-progress">
+      <div class="dp-check-progress-label">
+        <span class="dp-spinner dp-check-spinner"></span>
+        <span>{{ t("dsplugins.checkingUpdates", { s: checkElapsed }) }}</span>
+      </div>
+      <div class="dp-check-bar"><span class="dp-check-bar-fill"></span></div>
+    </div>
+    <div v-if="batchProgress" class="dp-batch-progress">
+      {{ t("dsplugins.updateAllRunning", { i: batchProgress.i, n: batchProgress.n, p: batchProgress.name }) }}
+      · {{ phaseText(batchProgress.phase) }}
     </div>
     <ul v-if="filteredPlugins.length" class="dp-list">
       <li
@@ -219,11 +355,11 @@ defineExpose({ checkUpdates, runAction });
           >v{{ pl.version }}</span>
           <span class="dp-badge" :class="isOfficial(pl) ? 'dp-badge-bundle' : 'dp-badge-user'">{{ srcLabel(pl) }}</span>
           <span class="dp-badge dp-badge-kind" v-if="!pl.declares_bundle">{{ kindLabel(pl) }}</span>
-          <span class="dp-badge dp-badge-update" v-if="updates[pl.name]">
+          <span class="dp-badge dp-badge-update" v-if="updates[pl.name] && !isOfficial(pl)">
             {{ t("dsplugins.newVersion", { v: updates[pl.name].latest }) }}
           </span>
           <button
-            v-if="updates[pl.name]"
+            v-if="updates[pl.name] && !isOfficial(pl)"
             class="dp-btn dp-btn-primary dp-btn-sm"
             @click="updatePlugin(pl)"
             :disabled="busy"

@@ -1,6 +1,7 @@
 <script setup>
 import { ref, onMounted, onUnmounted } from "vue";
-import { invoke } from "@tauri-apps/api/core";
+import { openIsolatedDir, copySharedToIsolated, clearIsolatedData } from "../api/isolated.js";
+import { scanIsolatedSize } from "../api/scan.js";
 import { ask } from "@tauri-apps/plugin-dialog";
 import { useToast } from "../composables/useToast.js";
 import { t } from "../composables/useI18n.js";
@@ -41,7 +42,7 @@ function fmtSize(bytes) {
 async function scanSize() {
   scanning.value = true;
   try {
-    size.value = await invoke("scan_isolated_size", { version: props.version });
+    size.value = await scanIsolatedSize(props.version);
   } catch (e) {
     notify("" + e);
   } finally {
@@ -51,7 +52,7 @@ async function scanSize() {
 
 async function openDir() {
   close();
-  try { await invoke("open_isolated_dir", { version: props.version }); }
+  try { await openIsolatedDir(props.version); }
   catch (e) { notify("" + e); }
 }
 
@@ -59,7 +60,7 @@ async function copyShared() {
   close();
   if (!(await ask(t("iso.copySharedConfirm"), { title: t("iso.copyShared"), kind: "warning" }))) return;
   try {
-    notify(await invoke("copy_shared_to_isolated", { version: props.version }));
+    notify(await copySharedToIsolated(props.version));
     size.value = undefined;
   } catch (e) { notify("" + e); }
 }
@@ -68,7 +69,7 @@ async function clearIsolated() {
   close();
   if (!(await ask(t("iso.clearConfirm"), { title: t("iso.clear"), kind: "warning" }))) return;
   try {
-    notify(await invoke("clear_isolated_data", { version: props.version }));
+    notify(await clearIsolatedData(props.version));
     size.value = 0;
   } catch (e) { notify("" + e); }
 }

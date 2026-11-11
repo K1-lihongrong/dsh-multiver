@@ -3,7 +3,7 @@
 use super::*;
 
 /// 「路径设置」里额外展示的目录项（默认收起，点"展开"才显示）。
-#[derive(Serialize)]
+#[derive(Serialize, specta::Type)]
 pub(crate) struct ExtraDir {
     /// 目录名（同时是 open_dir 的 which 值）
     name: String,
@@ -14,7 +14,7 @@ pub(crate) struct ExtraDir {
 }
 
 /// 一次返回给前端的完整状态
-#[derive(Serialize)]
+#[derive(Serialize, specta::Type)]
 pub(crate) struct AppState {
     /// 管理器自身版本号（来自 Cargo.toml）
     version: String,
@@ -43,11 +43,11 @@ pub(crate) struct AppState {
 }
 
 #[tauri::command]
-pub(crate) fn get_state(app: tauri::AppHandle) -> AppState {
-    let mdir = manager_dir(&app);
-    let cfg = Config::load(&mdir);
-    let root = cfg.resolve_root(&mdir);
-    let dirs = Dirs::new(root.clone());
+#[specta::specta]
+pub(crate) fn get_state(ctx: tauri::State<'_, crate::AppCtx>) -> AppState {
+    let mdir = ctx.manager_dir().clone();
+    let (cfg, dirs) = ctx.config_dirs();
+    let root = dirs.root.clone();
     // D19：记录 ensure 结果供前端横幅使用（不再静默忽略）
     let ensure_err = dirs.ensure().err().map(|e| e.to_string());
     let extra_dirs = vec![
@@ -55,6 +55,11 @@ pub(crate) fn get_state(app: tauri::AppHandle) -> AppState {
             name: "logs".into(),
             desc: "管理器与 dsh 的运行日志".into(),
             path: dirs.resolve("logs").to_string_lossy().to_string(),
+        },
+        ExtraDir {
+            name: "homes".into(),
+            desc: "实例隔离 home（每个实例一份）".into(),
+            path: dirs.homes.to_string_lossy().to_string(),
         },
         ExtraDir {
             name: "webview".into(),
@@ -95,22 +100,23 @@ pub(crate) fn get_state(app: tauri::AppHandle) -> AppState {
 }
 
 #[tauri::command]
+#[specta::specta]
 pub(crate) fn set_isolated(
-    app: tauri::AppHandle,
+    ctx: tauri::State<'_, crate::AppCtx>,
     version: String,
     isolated: bool,
 ) -> Result<String, String> {
-    let mdir = manager_dir(&app);
-    let mut cfg = Config::load(&mdir);
-    let dirs = Dirs::new(cfg.resolve_root(&mdir));
+    let mdir = ctx.manager_dir().clone();
+    let (mut cfg, dirs) = ctx.config_dirs();
+    let root = dirs.root.clone();
     if !versions::exists(&dirs.versions, &version) {
         return Err(format!("版本 {} 未安装", version));
     }
-    cfg.isolated_versions.retain(|v| v != &version);
+    let vid = crate::domain::VersionId::new(&version)?;
     if isolated {
-        cfg.isolated_versions.push(version.clone());
-        // 预创建隔离目录
-        let _ = std::fs::create_dir_all(dirs.versions.join(&version).join("home"));
+        cfg.ensure_default_instance(&vid, &root)?;
+    } else {
+        cfg.detach_version(&vid);
     }
     cfg.save(&mdir).map_err(|e| e.to_string())?;
     // 隔离状态变了：若改的是当前默认版本，重生成转发脚本（DSH_HOME 会变）

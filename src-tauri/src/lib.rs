@@ -1,21 +1,29 @@
 mod actions;
 mod backup;
+mod bindings;
 mod catalog;
 mod cli;
 mod commands;
 mod config;
 mod console_decode;
+mod domain;
+mod dsh_adapter;
 mod dsplugins;
 mod envcheck;
+mod install_service;
 mod jobobj;
+mod jobs;
 mod launcher;
 mod logging;
 mod maintenance;
 mod net;
 mod paths;
+mod plugin_failure;
+mod ports;
 #[cfg(unix)]
 mod procreg;
 mod runtime;
+mod shared_home;
 mod sizecache;
 mod staged;
 mod updater;
@@ -26,14 +34,22 @@ use config::{Config, Dirs};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::process::Child;
-use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, RwLock};
+
+/// A2-8: 生成 TypeScript bindings 的稳定入口。
+/// 由 `cargo run --bin generate_bindings -- ../src/api/bindings.ts` 调用；
+/// 生成物入库，`scripts/check-commands.mjs` 负责一致性校验。
+pub fn generate_bindings(path: &str) -> Result<(), String> {
+    bindings::export(path)
+}
 
 /// 「版本号 → (窗口 label, 代次, dsh 子进程, Job 持有句柄)」映射。
 /// - label 唯一化（带代次），避免 "a webview with label ... already exists"；
 /// - 代次用于解决窗口替换时的 Destroyed 回调竞态：回调只在自己那一代仍是当前项时才 kill；
 /// - Job 句柄用于"管理器退出即杀光子进程"：持有到进程被移除/窗口关闭时。
 pub(crate) type ProcEntry = (String, u64, Child, Option<jobobj::ProcessGuard>);
-pub(crate) type ProcMapInner = HashMap<String, ProcEntry>;
+pub(crate) type ProcMapInner = HashMap<crate::domain::ProcKey, ProcEntry>;
 pub(crate) type ProcMap = Arc<Mutex<ProcMapInner>>;
 
 /// 锁定进程表；若锁已中毒（某线程持锁时 panic），忽略中毒继续使用内部数据。
@@ -43,9 +59,6 @@ pub(crate) type ProcMap = Arc<Mutex<ProcMapInner>>;
 pub(crate) fn lock_procs(procs: &ProcMap) -> std::sync::MutexGuard<'_, ProcMapInner> {
     procs.lock().unwrap_or_else(|e| e.into_inner())
 }
-
-/// 全局单调递增的代次计数器（用于区分同名窗口的不同实例）
-pub(crate) static NEXT_GEN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
 
 /// 进程启动时刻（run() 第一行）。用于启动耗时打点（v0.2.13）。
 pub(crate) static PROC_START: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
@@ -76,16 +89,81 @@ pub(crate) struct LaunchIntent {
     pub open_settings: Option<String>,
 }
 
-pub(crate) static LAUNCH_INTENT: std::sync::Mutex<LaunchIntent> =
-    std::sync::Mutex::new(LaunchIntent {
-        mode: None,
-        error: None,
-        open_settings: None,
-    });
+/// 应用运行期状态单一所有者（v0.4.0-alpha.1）。
+///
+/// 用 Arc 包裹可变字段，使 AppCtx 可 Clone 给单实例回调/后台任务，
+/// 同时由 Tauri managed state 持有同一份数据。
+#[derive(Clone)]
+pub(crate) struct AppCtx {
+    manager_dir: PathBuf,
+    pub procs: ProcMap,
+    intent: Arc<Mutex<LaunchIntent>>,
+    dirs: Arc<RwLock<Dirs>>,
+    scan_cancel: Arc<AtomicBool>,
+    generation: Arc<AtomicU64>,
+    jobs: jobs::JobRegistry,
+}
 
-/// 锁定 `LAUNCH_INTENT`；中毒时继续用内部数据（同 `lock_procs` 的理由）。
-pub(crate) fn lock_launch_intent() -> std::sync::MutexGuard<'static, LaunchIntent> {
-    LAUNCH_INTENT.lock().unwrap_or_else(|e| e.into_inner())
+impl AppCtx {
+    pub(crate) fn new(manager_dir: PathBuf, dirs: Dirs) -> Self {
+        Self {
+            manager_dir,
+            procs: Arc::new(Mutex::new(HashMap::new())),
+            intent: Arc::new(Mutex::new(LaunchIntent {
+                mode: None,
+                error: None,
+                open_settings: None,
+            })),
+            dirs: Arc::new(RwLock::new(dirs)),
+            scan_cancel: Arc::new(AtomicBool::new(false)),
+            generation: Arc::new(AtomicU64::new(1)),
+            jobs: jobs::JobRegistry::default(),
+        }
+    }
+
+    pub(crate) fn manager_dir(&self) -> &PathBuf {
+        &self.manager_dir
+    }
+
+    pub(crate) fn lock_intent(&self) -> std::sync::MutexGuard<'_, LaunchIntent> {
+        self.intent.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    pub(crate) fn dirs_snapshot(&self) -> Dirs {
+        self.dirs.read().unwrap_or_else(|e| e.into_inner()).clone()
+    }
+
+    // A2-11: read-only config + dirs helper.
+    pub(crate) fn config_dirs(&self) -> (Config, Dirs) {
+        let cfg = Config::load(&self.manager_dir);
+        let dirs = Dirs::new(cfg.resolve_root(&self.manager_dir));
+        (cfg, dirs)
+    }
+
+    pub(crate) fn set_dirs(&self, next: Dirs) {
+        *self.dirs.write().unwrap_or_else(|e| e.into_inner()) = next;
+    }
+
+    pub(crate) fn scan_cancel(&self) -> &AtomicBool {
+        &self.scan_cancel
+    }
+
+    pub(crate) fn scan_cancel_handle(&self) -> Arc<AtomicBool> {
+        self.scan_cancel.clone()
+    }
+
+    pub(crate) fn jobs(&self) -> &jobs::JobRegistry {
+        &self.jobs
+    }
+
+    /// A2-4: unified job event sink bound to this app handle and registry.
+    pub(crate) fn job_sink(&self, app: tauri::AppHandle) -> jobs::JobEventSink {
+        jobs::JobEventSink::new(app, self.jobs.clone())
+    }
+
+    pub(crate) fn next_generation(&self) -> u64 {
+        self.generation.fetch_add(1, Ordering::Relaxed)
+    }
 }
 
 /// 集成测试使用的窄公开门面（doc(hidden)，不构成稳定 API）。
@@ -142,8 +220,11 @@ pub(crate) fn is_same_exe(second: &str, current: &std::path::Path) -> bool {
 }
 
 /// 管理器自身所在目录（config.json 的存放处）
-pub(crate) fn manager_dir(_app: &tauri::AppHandle) -> PathBuf {
-    manager_dir_plain()
+pub(crate) fn manager_dir(app: &tauri::AppHandle) -> PathBuf {
+    use tauri::Manager;
+    app.try_state::<AppCtx>()
+        .map(|ctx| ctx.manager_dir().clone())
+        .unwrap_or_else(manager_dir_plain)
 }
 
 /// 同上，但不依赖 AppHandle——供无头 CLI 模式使用。
@@ -198,16 +279,44 @@ pub fn run() {
 
     // 暂存更新（staged update）：内嵌窗口里更新的 exe 已下载并校验。
     // 在此刻（GUI 尚未初始化）完成替换最安全——重命名 + 放入，无需等待进程退出。
-    // 替换后**继续正常启动**（当前进程仍以已加载的旧代码运行），下次启动即新版。
+    // 替换成功后必须立即安排重启，否则当前进程仍以旧代码运行，用户会误以为
+    // 更新失败、打开还是旧版，要手动开第二次才会生效。
     {
         let mdir = manager_dir_plain();
         let root = Config::load(&mdir).resolve_root(&mdir);
+        let had_pending = staged::load_pending(&root).is_some();
+        let mut relaunching = false;
         if let Some(v) = staged::take_over_pending(&root) {
-            // 有控制台时可见；GUI 无控制台则只留日志
-            eprintln!("暂存更新 {} 已就位，下次启动生效", v);
+            let target = std::env::current_exe()
+                .map_err(|e| format!("无法定位当前 exe：{}", e))
+                .and_then(|exe| crate::updater::spawn_relaunch_after_exit(&exe));
+            match target {
+                Ok(_) => {
+                    // 有控制台时可见；GUI 无控制台则只留日志
+                    eprintln!("暂存更新 {} 已安装，正在重启生效", v);
+                    relaunching = true;
+                }
+                Err(e) => {
+                    crate::logging::write_line(
+                        &root.join("logs"),
+                        "maintenance.log",
+                        &format!(
+                            "暂存更新 {} 已安装，但安排自动重启失败：{}；请手动重新打开",
+                            v, e
+                        ),
+                    );
+                }
+            }
         }
-        // 清理上一轮留下的备份（当时被占用删不掉，现在已空闲）
-        staged::cleanup_backup();
+        if relaunching {
+            // 延迟脚本会在本进程退出约 3 秒后拉起新 exe；直接退出，避免单实例把新进程吞掉。
+            std::process::exit(0);
+        }
+        // 只有本轮没有待安装更新时才清理备份。若暂存安装失败/重启失败，
+        // .old 可能是唯一可回滚副本，必须保留。
+        if !had_pending {
+            staged::cleanup_backup();
+        }
     }
 
     // v0.2.9 批 2：WebView2 早期检测（必须在 Tauri 初始化前——GUI 本体依赖它）。
@@ -218,11 +327,16 @@ pub fn run() {
         std::process::exit(0);
     }
 
+    let mdir = manager_dir_plain();
+    let cfg = Config::load(&mdir);
+    let dirs = Dirs::new(cfg.resolve_root(&mdir));
+    let ctx = AppCtx::new(mdir, dirs);
+
     // v0.2.14：启动模式必须在窗口/前端创建**之前**记录。
     // Tauri 在 setup 前就建了主窗口、前端可能早于 setup 完成 onMounted，
     // 故在此（run 开头）就 set，确保前端 get_launch_mode 一定查得到。
     if let Some(version) = window::parse_launch_version(&std::env::args().collect::<Vec<_>>()) {
-        let mut intent = lock_launch_intent();
+        let mut intent = ctx.lock_intent();
         intent.mode = Some(version);
         // 新一次启动，清掉上一轮可能残留的错误
         intent.error = None;
@@ -231,30 +345,32 @@ pub fn run() {
     // v0.3.2：--open-settings=<section> 同样必须在窗口创建前记录
     // （前端可能早于 setup 完成 onMounted，事件靠不住）。
     if let Some(section) = window::parse_open_settings(&std::env::args().collect::<Vec<_>>()) {
-        lock_launch_intent().open_settings = Some(section);
+        ctx.lock_intent().open_settings = Some(section);
     }
 
     // 进程级 AUMID 必须在任何窗口创建之前设置（Tauri 在 setup 回调前就建了主窗口）。
     // 否则任务栏会退化为"找指向本 exe 的快捷方式取图标"，被桌面 dsh 快捷方式污染。
     window::set_process_aumid();
 
-    let procs: ProcMap = Arc::new(Mutex::new(HashMap::new()));
-    let procs_setup = procs.clone();
+    let ctx_setup = ctx.clone();
+    let ctx_run = ctx.clone();
+    // A2-8: 同一份命令清单同时用于运行时 invoke handler 与 TS bindings 生成。
+    let specta_builder = bindings::builder();
     tauri::Builder::default()
         // M2m：单实例锁必须是第一个注册的 plugin（Tauri 要求）。
         // 回调在第二实例被检测到时于已运行实例内执行：
         //  - 带 --launch-version V → 转发给 launch_window 打开该版本内嵌窗口（保留版本快捷方式语义）
         //  - 否则 → 确保主窗口存在并聚焦（主窗口可能已被 launch-version 流程 close）
         .plugin(tauri_plugin_single_instance::init({
-            let procs_for_si = procs.clone();
+            let ctx_for_si = ctx.clone();
             move |app, args, _cwd| {
                 // M2m（B3）：release 版 `windows_subsystem = "windows"` 没有控制台，
                 // eprintln! 会全部丢失。关键失败路径一律同时写 `logs/app.log`。
-                let log_app = |ctx: &str, msg: &str| {
+                let log_app = |scope: &str, msg: &str| {
                     let mdir = manager_dir(app);
                     let root = Config::load(&mdir).resolve_root(&mdir);
-                    logging::log_app_error(&root, ctx, msg);
-                    eprintln!("[dsh-multiver] {}: {}", ctx, msg);
+                    logging::log_app_error(&root, scope, msg);
+                    eprintln!("[dsh-multiver] {}: {}", scope, msg);
                 };
 
                 // M2m（B5）：单实例锁按 app identifier 全局生效，同一用户下两个不同
@@ -310,7 +426,7 @@ pub fn run() {
                     // 顺序要紧：ensure_main_window 在重建分支里会清空 LaunchIntent.mode（B1 修复，
                     // 防止重建窗口卡在「正在启动」），所以必须先 ensure、后设值。
                     let app_handle = app.clone();
-                    let procs_for_launch = procs_for_si.clone();
+                    let ctx_for_launch = ctx_for_si.clone();
                     let version_for_launch = version.clone();
 
                     match window::ensure_main_window(app) {
@@ -331,7 +447,7 @@ pub fn run() {
 
                     // 设启动态 + 通知前端进加载页（前端 main.js 首帧读 prop，事件作兜底）
                     {
-                        let mut intent = lock_launch_intent();
+                        let mut intent = ctx_for_launch.lock_intent();
                         intent.mode = Some(version_for_launch.clone());
                         intent.error = None;
                     }
@@ -346,7 +462,7 @@ pub fn run() {
                     tauri::async_runtime::spawn(async move {
                         match commands::launch_window(
                             app_handle.clone(),
-                            procs_for_launch,
+                            ctx_for_launch.clone(),
                             version_for_launch.clone(),
                         )
                         .await
@@ -390,7 +506,7 @@ pub fn run() {
                                 // 同时写入 LaunchIntent.error：本路径下 launch_window 可能在前端挂载
                                 // 之前就失败（「版本未安装」是同步检查），事件会丢失，
                                 // 前端首帧靠 get_launch_error() 兜底。
-                                lock_launch_intent().error = Some(e.to_string());
+                                ctx_for_launch.lock_intent().error = Some(e.to_string());
                                 {
                                     use tauri::Emitter;
                                     let _ = app_handle.emit(
@@ -419,7 +535,7 @@ pub fn run() {
                             log_app("single-instance", &format!("open-settings 前重建主窗口失败: {}", e));
                         }
                     }
-                    lock_launch_intent().open_settings = Some(section.clone());
+                    ctx_for_si.lock_intent().open_settings = Some(section.clone());
                     {
                         use tauri::Emitter;
                         let _ = app.emit(
@@ -441,64 +557,8 @@ pub fn run() {
         }))
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
-        .manage(procs.clone())
-        .invoke_handler(tauri::generate_handler![
-            commands::get_state,
-            commands::list_installed,
-            commands::list_remote,
-            commands::install_version,
-            commands::clear_broken,
-            commands::uninstall_version,
-            commands::set_default,
-            commands::run_version,
-            commands::open_in_browser,
-            commands::create_shortcut,
-            commands::restart_version,
-            commands::set_root,
-            commands::open_dir,
-            commands::open_url,
-            commands::check_env,
-            commands::runtime_status,
-            commands::setup_runtime,
-            commands::dismiss_runtime_prompt,
-            commands::set_isolated,
-            commands::set_use_official_home,
-            commands::get_official_home,
-            commands::scan_versions,
-            commands::cancel_scan,
-            commands::run_maintenance,
-            commands::set_auto_maintenance,
-            commands::scan_isolated_size,
-            commands::copy_shared_to_isolated,
-            commands::clear_isolated_data,
-            commands::open_isolated_dir,
-            commands::log_frontend,
-            commands::check_update,
-            commands::perform_update,
-            commands::exit_app,
-            commands::export_backup,
-            commands::preview_import,
-            commands::apply_import,
-            commands::get_launch_mode,
-            commands::get_launch_error,
-            commands::take_open_settings,
-            commands::show_main_window,
-            commands::is_version_open,
-            commands::list_running_versions,
-            commands::ds_list_plugins,
-            commands::ds_plugin_action,
-            commands::ds_init_profile,
-            commands::ds_open_profile_dir,
-            commands::ds_profile_info,
-            commands::ds_exemption_action,
-            commands::ds_approve_builds,
-            commands::ds_open_plugin_logs,
-            commands::ds_check_updates,
-            commands::ds_inspect_spec,
-            commands::ds_probe_registries,
-            commands::ds_plugin_catalog,
-            commands::ds_plugin_catalog_check,
-        ])
+        .manage(ctx.clone())
+        .invoke_handler(specta_builder.invoke_handler())
         .setup(move |app| {
             use tauri::Manager;
             // 窗口就绪打点：进程启动 → 此处（含 WebView2 初始化 + 窗口创建）
@@ -549,12 +609,12 @@ pub fn run() {
                 }
                 // launch_window 是 async 的；setup 是同步闭包，用 async_runtime 起任务
                 let app_handle = app.handle().clone();
-                let procs_for_launch = procs_setup.clone();
+                let ctx_for_launch = ctx_setup.clone();
                 let version_for_launch = version.clone();
                 tauri::async_runtime::spawn(async move {
                     match commands::launch_window(
                         app_handle.clone(),
-                        procs_for_launch,
+                        ctx_for_launch.clone(),
                         version_for_launch.clone(),
                     )
                     .await
@@ -685,7 +745,7 @@ pub fn run() {
         .run(move |_app, event| {
             if let tauri::RunEvent::ExitRequested { .. } = event {
                 // 退出时兜底清理所有 dsh 子进程，避免残留
-                let mut map = lock_procs(&procs);
+                let mut map = lock_procs(&ctx_run.procs);
                 for (_, _, child, _job) in map.values_mut() {
                     // Unix：正常退出能跑到这里，注销登记（避免下次启动误清）
                     #[cfg(unix)]
@@ -699,4 +759,35 @@ pub fn run() {
                 map.clear();
             }
         });
+}
+
+#[cfg(test)]
+mod app_ctx_tests {
+    use super::*;
+
+    #[test]
+    fn app_ctx_clones_share_the_same_state() {
+        let root = std::env::temp_dir().join(format!(
+            "dsh-appctx-{}-{}",
+            std::process::id(),
+            logging::now_secs()
+        ));
+        let dirs = Dirs::new(root.clone());
+        let ctx = AppCtx::new(root.clone(), dirs.clone());
+        let clone = ctx.clone();
+
+        clone.lock_intent().mode = Some("0.2.2-rc.1".into());
+        assert_eq!(ctx.lock_intent().mode.as_deref(), Some("0.2.2-rc.1"));
+
+        clone
+            .scan_cancel()
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        assert!(ctx.scan_cancel().load(std::sync::atomic::Ordering::SeqCst));
+
+        assert_eq!(ctx.next_generation(), 1);
+        assert_eq!(clone.next_generation(), 2);
+
+        clone.set_dirs(Dirs::new(root.join("next")));
+        assert_eq!(ctx.dirs_snapshot().root, root.join("next"));
+    }
 }

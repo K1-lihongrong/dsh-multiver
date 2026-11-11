@@ -1,4 +1,4 @@
-# 更新日志
+﻿# 更新日志
 
 本文件记录 DSH 版本管理器（dsh-multiver）各版本的变更。
 最新版本的详细说明见 [Releases](https://github.com/K1-lihongrong/dsh-multiver/releases)。
@@ -6,6 +6,92 @@
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
 ---
+
+## [0.4.0-alpha.3] - 2026-11-11
+
+### 一键更新修复
+
+- 修复一键更新后管理器退出但不重启、手动打开仍是旧版的问题。
+- 根因是 detached 隐藏窗口里的替换批处理使用 `tasklist | findstr` 等待进程退出，`findstr` 会卡在管道 EOF，永远走不到复制和重启。
+- 改为进程内替换自身 exe：复制到目标同目录临时名，旧 exe 改名 `.old`，再改名到目标；任一步失败回滚，旧 exe 保持可启动。
+- 替换成功后再安排延迟重启；重启脚本不再使用管道和进程探测，退出约 3 秒后启动新 exe，避开单实例锁。
+- 暂存更新安装后立即安排重启，不再需要用户手动打开第二次。
+- 新增 `DSH_MULTIVER_UPDATE_API_BASE`，用于本地 mock server 更新验收。
+- 新增运行中 exe 替换、回滚、重启脚本无管道等回归测试。
+
+**用户可见变化**：更新失败会显示真实错误且不退出；更新成功后自动重启为新版本，不再出现退出后仍旧版。
+
+### A2 技术债收口
+
+- dsh_adapter 拆分为 detect / v0_1 / v0_3 / mod，统一 CLI 入口、profile 目录和版本能力门控。
+- 未知版本走安全适配器，不误开 allow-version 等新版本专属能力。
+- 新增 JobEventSink、CancellationToken、started_at 和 64 条历史上限；淘汰 Job 时同步清理 token。
+- launch、scan、install、插件操作、批量更新和共享 home 体检迁移到统一 job:* 事件。
+- 旧进度/取消事件继续保留，扫描取消同时接入 Job token 与旧全局标记。
+- 修复插件操作 spawn_blocking 返回类型错误，并收口 clippy 告警。
+
+**用户可见变化**：后台任务进度和取消行为保持兼容；插件命令按 DSH 版本能力门控，未知版本走保守默认。
+
+### 自动化验收
+
+- 新增 `scripts/acceptance-uia.ps1`：真实原生窗口 UIA 验收启动、版本、插件面板、扫描取消、DSH 版本启动/关闭、日志和残留进程。
+- 新增 `scripts/acceptance-update.ps1`：本地 mock API 驱动的真实更新链路验收，覆盖 SHA256、替换、`.old` 备份、退出和自动重启。
+- 新增 `scripts/compat-matrix.ps1`：11 版本隔离兼容矩阵，默认 dry-run，`-Execute` 才执行。
+- `package.json` 增加 `test:acceptance:ui`、`test:acceptance:update`、`test:compat` 入口。
+
+### 兼容矩阵与验证
+
+- 2026-11-11 兼容矩阵回归：11 个 DSH 版本全部通过。
+- 每个版本验证 plugin add/remove/add、dsh web 启动、state 200/ok、无 cookie 401、带 cookie GET 405。
+- 真实数据根 config.json 的 SHA256 前后一致；测试 home 全部位于 %TEMP%。
+- Rust 单测 256 passed / 1 ignored。
+- E2E 63 passed。
+- cargo fmt --check、cargo check --all-targets、cargo clippy --all-targets -D warnings、pnpm build 通过。
+
+---
+
+## [0.4.0-alpha.2] - 2026-11-09
+
+### 第一批
+
+- 新增共享 home 体检：只读扫描 profiles/node_modules 的旧版本 junction、悬空链接和重复来源，不自动删除。
+- 新增插件安装失败分类器：覆盖版本兼容、发布保护期、文件锁、网络、环境、peer 警告、构建脚本、未知 8 类；完整保留 pnpm/dsh 原始输出。
+- 新增 JobRegistry 基础、`list_jobs` 命令；批量更新开始发 `job:*` 事件。
+- 新增 dsh_adapter 基础识别与 allow-version 能力门控。
+- GUI/CLI set_root 共用路径校验。
+- 新增 install_service 完成账本，GUI/CLI 共用 broken_versions 维护。
+- 单插件安装/卸载接入 `job:*` 事件。
+- 更新完成后不再自动触发一次完整检查更新，避免「添加插件 / 检查更新 / 体检」按钮长时间置灰；需要刷新时手动点「检查更新」。
+
+---
+
+## [0.4.0-alpha.1] - 2026-11-09
+
+### 类型与状态收口
+
+- 引入 `VersionId` / `InstanceId` / `HomeRef` / `ProcKey` / `LaunchTicket`，接入配置、路径、进程表与窗口 label。
+- `config.json` 新增 `schema_version`、实例表、挂载表、主按钮目标与实例序号；旧 `isolated_versions` 自动迁移到 `homes/iN`，保留兼容镜像。
+- `AppCtx` 统一持有进程表、启动意图、目录快照、扫描取消标志与窗口代次；状态敏感命令已迁移。
+- 新增 `Clock` / `FileSystem` / `PnpmRunner` / `DshLauncher` 端口与生产 adapter；`DshLauncher::spawn_command` 已接入内嵌 dsh 启动路径。
+
+### 插件批量更新与失败回滚
+
+- 新增 `ds_plugin_update_batch`：当前版本 + 当前 profile 的可更新插件可一键逐项更新。
+- 单插件更新改为 `remove → add → verify` 事务；add 或校验失败时按原依赖 spec 回滚。
+- 回滚失败返回原错误、回滚错误与人工恢复线索，不再让插件静默停留在已卸载状态。
+- 前端新增「全部更新」按钮、批量进度、成功/失败汇总；官方随附 bundle 不参与批量更新。
+- 检查更新改为 `pnpm outdated` + 非官方插件逐项 `pnpm view <pkg> version` 兜底，修复 hoisted profile 漏报 `dsh-ops 0.5.1 -> 0.5.2`；用 semver 比较过滤官方随附包的 prerelease 误报。
+- 检查更新和插件操作增加前后端超时兜底：后端限制单次检查时长，前端超时后恢复「添加插件 / 检查更新」按钮，避免永久 busy。
+- 检查更新时显示实时耗时与不确定进度条，避免长时间无反馈。
+- 安装失败输出中出现不兼容插件时，界面解析出包版本 + DSH 版本，一键调用官方 `dsh plugin allow-version ... --accept-risk` 后重试；profile 信息区可查看/撤销已有精确版本豁免。
+- 单插件「更新」也复用事务命令，不再走前端裸 remove+add。
+
+### 验证
+
+- Rust 单测 **227 passed / 1 ignored**
+- E2E **61 passed**
+- i18n 5 语 × 386 key
+- `cargo fmt --check`、`cargo clippy -D warnings`、`pnpm build`、`pnpm tauri build --no-bundle` 通过
 
 ## [0.3.7] - 2026-11-09
 

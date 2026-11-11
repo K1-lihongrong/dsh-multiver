@@ -8,6 +8,7 @@
 
 use crate::actions;
 use crate::config::{Config, Dirs};
+use crate::domain::{HomeRef, InstanceId, VersionId};
 use std::path::{Path, PathBuf};
 
 /// 根据当前配置，重生成（或删除）终端 dsh 转发脚本。
@@ -122,16 +123,38 @@ pub(crate) fn official_dsh_home() -> Option<PathBuf> {
 /// 2. 复用官方 → ~/.dsh（use_official_dsh_home = true 时）
 /// 3. 管理器共享 → <根>/home（默认）
 pub(crate) fn resolve_home(cfg: &Config, dirs: &Dirs, version: &str) -> PathBuf {
-    if cfg.isolated_versions.iter().any(|v| v == version) {
-        let isolated_home = dirs.versions.join(version).join("home");
-        let _ = std::fs::create_dir_all(&isolated_home);
-        return isolated_home;
-    }
-    if cfg.use_official_dsh_home {
-        if let Some(oh) = official_dsh_home() {
-            let _ = std::fs::create_dir_all(&oh);
-            return oh;
+    let version = VersionId::new(version).unwrap_or_else(|_| VersionId::new("invalid").unwrap());
+    let home_ref = cfg.home_ref_for(&version, None);
+    resolve_home_ref(dirs, &home_ref)
+}
+
+/// 显式带实例目标的路径解析；None = 该版本默认目标。
+pub(crate) fn resolve_home_for(
+    cfg: &Config,
+    dirs: &Dirs,
+    version: &VersionId,
+    instance: Option<&InstanceId>,
+) -> PathBuf {
+    let home_ref = cfg.home_ref_for(version, instance);
+    resolve_home_ref(dirs, &home_ref)
+}
+
+/// 按 HomeRef 解析实际目录。Shared / Official / Instance 三选一，语义不再靠字符串猜测。
+pub(crate) fn resolve_home_ref(dirs: &Dirs, home_ref: &HomeRef) -> PathBuf {
+    match home_ref {
+        HomeRef::Instance(id) => {
+            let home = dirs.homes.join(id.as_str());
+            let _ = std::fs::create_dir_all(&home);
+            home
         }
+        HomeRef::Official => {
+            if let Some(oh) = official_dsh_home() {
+                let _ = std::fs::create_dir_all(&oh);
+                oh
+            } else {
+                dirs.home.clone()
+            }
+        }
+        HomeRef::Shared => dirs.home.clone(),
     }
-    dirs.home.clone()
 }

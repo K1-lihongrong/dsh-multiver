@@ -1,34 +1,68 @@
 //! 启动与窗口命令（D6 拆分）：launch_window / run_version / create_shortcut / open_in_browser / restart_version / build_topbar_script。
 #![allow(unused_imports)]
 use super::*;
+use crate::domain::{LaunchTicket, ProcKey, VersionId};
+
+fn emit_launch_job_progress(sink: &crate::jobs::JobEventSink, job_id: &str, stage: &str) {
+    sink.progress(job_id, stage, 0, None, None);
+}
+
+fn finish_launch_job(sink: &crate::jobs::JobEventSink, job_id: &str, message: &str) {
+    sink.finish(job_id, message, None);
+}
+
+fn fail_launch_job(sink: &crate::jobs::JobEventSink, job_id: &str, code: &str, message: &str) {
+    sink.fail(job_id, code, message, None);
+}
 
 pub(crate) async fn launch_window(
     app: tauri::AppHandle,
-    procs: ProcMap,
+    ctx: crate::AppCtx,
     version: String,
 ) -> Result<String, String> {
     use tauri::{Manager, WebviewUrl, WebviewWindowBuilder};
+    let procs = ctx.procs.clone();
 
-    let mdir = manager_dir(&app);
-    let cfg = Config::load(&mdir);
-    let dirs = Dirs::new(cfg.resolve_root(&mdir));
-    let vdir = dirs.versions.join(&version);
+    // A2-5: one Job per launch. The legacy launch-progress event is kept below.
+    let sink = ctx.job_sink(app.clone());
+    let job_id = sink.create("launch", &version);
+
+    let (cfg, dirs) = ctx.config_dirs();
+    let version_id = match VersionId::new(&version) {
+        Ok(v) => v,
+        Err(e) => {
+            fail_launch_job(&sink, &job_id, "invalid_version", &e);
+            return Err(e);
+        }
+    };
+    let proc_key = match ProcKey::shared(version_id.as_str()) {
+        Ok(v) => v,
+        Err(e) => {
+            fail_launch_job(&sink, &job_id, "invalid_version", &e);
+            return Err(e);
+        }
+    };
+    let vdir = dirs.versions.join(version_id.as_str());
     if !vdir.join("node_modules").exists() {
-        return Err(format!("版本 {} 未安装", version));
+        let msg = format!("版本 {} 未安装", version);
+        fail_launch_job(&sink, &job_id, "not_installed", &msg);
+        return Err(msg);
     }
-    let home = crate::paths::resolve_home(&cfg, &dirs, &version);
+    let home = crate::paths::resolve_home_for(&cfg, &dirs, &version_id, None);
 
     // v0.2.14：该版本窗口已开 → 直接聚焦，不重启（幂等，避免误点导致"杀掉重开"）。
     // 在起 dsh 进程之前判断，避免白起一个进程。
     {
         let existing = lock_procs(&procs)
-            .get(&version)
+            .get(&proc_key)
             .map(|(label, _, _, _)| label.clone());
         if let Some(lbl) = existing {
             if let Some(win) = app.get_webview_window(&lbl) {
                 let _ = win.show();
                 let _ = win.unminimize();
                 let _ = win.set_focus();
+                emit_launch_job_progress(&sink, &job_id, "ready");
+                finish_launch_job(&sink, &job_id, "focused existing window");
                 return Ok(format!("已聚焦 DSH {} 的窗口", version));
             }
         }
@@ -40,6 +74,7 @@ pub(crate) async fn launch_window(
     //   waiting   —— 进程已起、正在等 dsh 打印 URL（最慢，最坏 90s）
     // 这里直接发 waiting：spawn_blocking 内部即"起进程 + 等 URL"，属"等待"。
     // （preparing 由前端进入启动态时自行设定，无需后端再发。）
+    emit_launch_job_progress(&sink, &job_id, "waiting");
     {
         use tauri::Emitter;
         let _ = app.emit(
@@ -49,6 +84,8 @@ pub(crate) async fn launch_window(
     }
 
     // 阻塞部分（起进程 + 等端口/URL，最多 90s，见 launcher 的超时常量）丢到后台线程，避免冻结界面
+    emit_launch_job_progress(&sink, &job_id, "starting");
+
     let vdir2 = vdir.clone();
     let home2 = home.clone();
     let store2 = dirs.store.clone();
@@ -57,16 +94,24 @@ pub(crate) async fn launch_window(
     let spawned = tauri::async_runtime::spawn_blocking(move || {
         launcher::spawn_web_hidden(&vdir2, &home2, &store2, &cache2, &state2)
     })
-    .await
-    .map_err(|e| {
-        let m = format!("启动任务失败: {}", e);
-        logging::log_app_error(&dirs.root, "launch_window", &format!("{} ({})", version, m));
-        m
-    })?;
-    let (child, url, job) = spawned.map_err(|e| {
-        logging::log_app_error(&dirs.root, "launch_window", &format!("{} ({})", version, e));
-        e
-    })?;
+    .await;
+    let spawned = match spawned {
+        Ok(v) => v,
+        Err(e) => {
+            let m = format!("启动任务失败: {}", e);
+            logging::log_app_error(&dirs.root, "launch_window", &format!("{} ({})", version, m));
+            fail_launch_job(&sink, &job_id, "spawn_failed", &m);
+            return Err(m);
+        }
+    };
+    let (child, url, job) = match spawned {
+        Ok(v) => v,
+        Err(e) => {
+            logging::log_app_error(&dirs.root, "launch_window", &format!("{} ({})", version, e));
+            fail_launch_job(&sink, &job_id, "spawn_failed", &e);
+            return Err(e);
+        }
+    };
 
     // Unix：登记该 dsh 的进程组，供"管理器被强杀后下次启动清理"兜底（GAP-010）。
     // Windows 无此需要（Job Object 是 OS 级保障）。
@@ -75,7 +120,7 @@ pub(crate) async fn launch_window(
 
     // 回到主线程建窗。
     // 先结束该版本的旧窗口/旧进程（若有）。
-    let old = lock_procs(&procs).remove(&version);
+    let old = lock_procs(&procs).remove(&proc_key);
     if let Some((old_label, _old_gen, mut old_child, _old_job)) = old {
         // 结束旧进程及其子进程树（kill 不 wait，避免阻塞）
         #[cfg(unix)]
@@ -88,15 +133,29 @@ pub(crate) async fn launch_window(
     }
 
     // 生成唯一 label（带代次），从根本上避免 label 复用冲突
-    let generation = NEXT_GEN.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    let label = window::window_label_gen(&version, generation);
+    let generation = ctx.next_generation();
+    let label = window::window_label_gen(&proc_key, generation);
+    let ticket = LaunchTicket {
+        proc_key: proc_key.clone(),
+        label: label.clone(),
+        generation,
+        home: home.clone(),
+    };
+    debug_assert_eq!(ticket.home, home);
 
     let title = format!("DSH {}", version);
     let topbar_token = new_topbar_token();
     let init_script = build_topbar_script(&version, &url, &topbar_token);
-    let parsed = url.parse().map_err(|e| format!("URL 解析失败: {}", e))?;
+    let parsed = match url.parse() {
+        Ok(p) => p,
+        Err(e) => {
+            let msg = format!("URL 解析失败: {}", e);
+            fail_launch_job(&sink, &job_id, "window_failed", &msg);
+            return Err(msg);
+        }
+    };
 
-    let built = WebviewWindowBuilder::new(&app, &label, WebviewUrl::External(parsed))
+    let built = WebviewWindowBuilder::new(&app, &ticket.label, WebviewUrl::External(parsed))
         .title(&title)
         .inner_size(1100.0, 760.0)
         // 用常见 Edge UA，避免 dsh 把内嵌 WebView2 当"非浏览器"而对 bundle 返回 404
@@ -123,7 +182,9 @@ pub(crate) async fn launch_window(
                 "launch_window",
                 &format!("{} 创建窗口失败: {}", version, e),
             );
-            return Err(format!("创建窗口失败: {}", e));
+            let msg = format!("创建窗口失败: {}", e);
+            fail_launch_job(&sink, &job_id, "window_failed", &msg);
+            return Err(msg);
         }
     };
 
@@ -152,7 +213,10 @@ pub(crate) async fn launch_window(
     }
 
     // 先登记进程，供 topbar-restart 等窗口级监听器使用。
-    lock_procs(&procs).insert(version.clone(), (label.clone(), generation, child, job));
+    lock_procs(&procs).insert(
+        ticket.proc_key.clone(),
+        (ticket.label.clone(), ticket.generation, child, job),
+    );
 
     // ── topbar 事件监听（A1，v0.3.7）：绑定到本窗口 ──
     // 版本号由闭包捕获，payload 中的 version 字段不再被采信，从而杜绝
@@ -182,7 +246,7 @@ pub(crate) async fn launch_window(
         // topbar-restart：重启本版本的 dsh 进程（版本号来自闭包，非 payload）
         {
             let app_for_restart = app.clone();
-            let procs_for_restart = procs.clone();
+            let ctx_for_restart = ctx.clone();
             let version_for_restart = version.clone();
             let token_for_restart = topbar_token.clone();
             let _ = window.listen("topbar-restart", move |event| {
@@ -190,10 +254,10 @@ pub(crate) async fn launch_window(
                     return;
                 }
                 let app2 = app_for_restart.clone();
-                let procs2 = procs_for_restart.clone();
+                let ctx2 = ctx_for_restart.clone();
                 let ver = version_for_restart.clone();
                 tauri::async_runtime::spawn(async move {
-                    if let Err(e) = restart_version_impl(&app2, &procs2, &ver).await {
+                    if let Err(e) = restart_version_impl(&app2, &ctx2, &ver).await {
                         let mdir = manager_dir(&app2);
                         let root = Config::load(&mdir).resolve_root(&mdir);
                         logging::log_app_error(&root, "topbar-restart", &format!("{}: {}", ver, e));
@@ -251,19 +315,23 @@ pub(crate) async fn launch_window(
         );
     }
 
+    emit_launch_job_progress(&sink, &job_id, "ready");
+    finish_launch_job(&sink, &job_id, "launch ready");
+
     // 关窗回调里要注销进程登记，故提前把 root 算好（闭包不能捕获 app —— 它随后还要用）
     #[cfg(unix)]
     let root_for_unregister = dirs.root.clone();
 
     let procs2 = procs.clone();
-    let version2 = version.clone();
+    let proc_key2 = ticket.proc_key.clone();
     window.on_window_event(move |event| {
         if let tauri::WindowEvent::Destroyed = event {
             let mut map = lock_procs(&procs2);
             // 仅当该版本仍是"本代次"时才 kill，避免旧窗口滞后回调误杀新进程
-            let should_kill = matches!(map.get(&version2), Some((_, g, _, _)) if *g == generation);
+            let should_kill =
+                matches!(map.get(&proc_key2), Some((_, g, _, _)) if *g == ticket.generation);
             if should_kill {
-                if let Some((_, _, mut child, _job)) = map.remove(&version2) {
+                if let Some((_, _, mut child, _job)) = map.remove(&proc_key2) {
                     // Unix：正常关窗能跑到这里，注销登记（避免下次启动误清）
                     #[cfg(unix)]
                     crate::procreg::unregister(&root_for_unregister, child.id() as i32);
@@ -284,8 +352,9 @@ pub(crate) async fn launch_window(
         let app2 = app.clone();
         let procs3 = procs.clone();
         let version3 = version.clone();
-        let label3 = label.clone();
-        let gen3 = generation;
+        let proc_key3 = proc_key.clone();
+        let label3 = ticket.label.clone();
+        let gen3 = ticket.generation;
         let logs_dir = dirs.root.join("logs");
         std::thread::spawn(move || {
             std::thread::sleep(std::time::Duration::from_secs(3));
@@ -297,7 +366,7 @@ pub(crate) async fn launch_window(
             // ② 该版本进程还活着吗？（且仍是本代次）
             let dead = {
                 let mut map = lock_procs(&procs3);
-                match map.get_mut(&version3) {
+                match map.get_mut(&proc_key3) {
                     Some((_, g, child, _)) if *g == gen3 => {
                         // try_wait 返回 Ok(Some(_)) 表示已退出
                         matches!(child.try_wait(), Ok(Some(_)))
@@ -343,19 +412,22 @@ pub(crate) async fn launch_window(
 }
 
 #[tauri::command]
+#[specta::specta]
 pub(crate) async fn run_version(
     app: tauri::AppHandle,
-    procs: tauri::State<'_, ProcMap>,
+    ctx: tauri::State<'_, crate::AppCtx>,
     version: String,
 ) -> Result<String, String> {
-    launch_window(app, procs.inner().clone(), version).await
+    launch_window(app, ctx.inner().clone(), version).await
 }
 
 #[tauri::command]
-pub(crate) fn create_shortcut(app: tauri::AppHandle, version: String) -> Result<String, String> {
-    let mdir = manager_dir(&app);
-    let cfg = Config::load(&mdir);
-    let dirs = Dirs::new(cfg.resolve_root(&mdir));
+#[specta::specta]
+pub(crate) fn create_shortcut(
+    ctx: tauri::State<'_, crate::AppCtx>,
+    version: String,
+) -> Result<String, String> {
+    let (_cfg, dirs) = ctx.config_dirs();
     if !versions::exists(&dirs.versions, &version) {
         return Err(format!("版本 {} 未安装", version));
     }
@@ -368,7 +440,7 @@ pub(crate) fn create_shortcut(app: tauri::AppHandle, version: String) -> Result<
 /// home 与「运行」一致：非隔离用共享 home，隔离用独立 home。
 ///
 /// 交互：
-#[derive(serde::Serialize)]
+#[derive(serde::Serialize, specta::Type)]
 pub(crate) struct OpenInBrowserResult {
     pub url: Option<String>,
     pub opened: bool,
@@ -378,24 +450,24 @@ pub(crate) struct OpenInBrowserResult {
 /// - 若该版本已有内嵌窗口（ProcMap 中存在 dsh-<版本>），先弹原生对话框确认「再开一个？」
 /// - 端口固定 3080；若被占用，弹原生对话框让用户选择「换随机端口」或「取消」
 #[tauri::command]
+#[specta::specta]
 pub(crate) async fn open_in_browser(
     app: tauri::AppHandle,
-    procs: tauri::State<'_, ProcMap>,
+    ctx: tauri::State<'_, crate::AppCtx>,
     version: String,
 ) -> Result<OpenInBrowserResult, String> {
     use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
 
-    let mdir = manager_dir(&app);
-    let cfg = Config::load(&mdir);
-    let dirs = Dirs::new(cfg.resolve_root(&mdir));
+    let (cfg, dirs) = ctx.config_dirs();
     let vdir = dirs.versions.join(&version);
     if !vdir.join("node_modules").exists() {
         return Err(format!("版本 {} 未安装", version));
     }
-    let home = crate::paths::resolve_home(&cfg, &dirs, &version);
+    let version_id = VersionId::new(&version)?;
+    let home = crate::paths::resolve_home_for(&cfg, &dirs, &version_id, None);
 
     // 1) 互斥提示：该版本已有内嵌窗口在开
-    let has_window = lock_procs(procs.inner()).contains_key(&version);
+    let has_window = lock_procs(&ctx.procs).contains_key(&ProcKey::Shared(version_id.clone()));
     if has_window {
         let ok = app
             .dialog()
@@ -469,12 +541,13 @@ pub(crate) async fn open_in_browser(
 /// 重启某版本窗口对应的 dsh web 进程：
 /// kill 旧进程 → 用同版本起新进程（端口重分配）→ 窗口导航到新 URL。
 #[tauri::command]
+#[specta::specta]
 pub(crate) async fn restart_version(
     app: tauri::AppHandle,
-    procs: tauri::State<'_, ProcMap>,
+    ctx: tauri::State<'_, crate::AppCtx>,
     version: String,
 ) -> Result<(), String> {
-    restart_version_impl(&app, procs.inner(), &version).await
+    restart_version_impl(&app, ctx.inner(), &version).await
 }
 
 /// restart_version 的实现体：接受裸 &ProcMap 而非 tauri::State，
@@ -485,23 +558,24 @@ pub(crate) async fn restart_version(
 /// "所有窗口已关闭" 触发 Tauri 退出事件循环——表现为点「重启」程序直接关闭。
 pub(crate) async fn restart_version_impl(
     app: &tauri::AppHandle,
-    procs: &ProcMap,
+    ctx: &crate::AppCtx,
     version: &str,
 ) -> Result<(), String> {
+    let procs = &ctx.procs;
     use tauri::Manager;
 
-    let mdir = manager_dir(app);
-    let cfg = Config::load(&mdir);
-    let dirs = Dirs::new(cfg.resolve_root(&mdir));
+    let (cfg, dirs) = ctx.config_dirs();
     let vdir = dirs.versions.join(version);
     if !vdir.join("node_modules").exists() {
         return Err(format!("版本 {} 未安装", version));
     }
-    let home = crate::paths::resolve_home(&cfg, &dirs, version);
+    let version_id = VersionId::new(version)?;
+    let proc_key = ProcKey::Shared(version_id.clone());
+    let home = crate::paths::resolve_home_for(&cfg, &dirs, &version_id, None);
 
     // 找到该版本当前的窗口（label 带代次，从 map 里取）
     let (label, _old_gen, mut old_child, _old_job) = lock_procs(procs)
-        .remove(version)
+        .remove(&proc_key)
         .ok_or_else(|| format!("版本 {} 的窗口不存在", version))?;
     let window = app
         .get_webview_window(&label)
@@ -539,8 +613,8 @@ pub(crate) async fn restart_version_impl(
     })?;
 
     // 记录新进程（同一 label，代次更新）
-    let generation = NEXT_GEN.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    lock_procs(procs).insert(version.to_string(), (label.clone(), generation, child, job));
+    let generation = ctx.next_generation();
+    lock_procs(procs).insert(proc_key, (label.clone(), generation, child, job));
 
     window
         .navigate(url.parse().map_err(|e| format!("URL 解析失败: {}", e))?)
@@ -600,8 +674,9 @@ pub(crate) fn build_topbar_script(version: &str, url: &str, token: &str) -> Stri
 /// v0.2.14：供前端查询是否处于"启动模式"（命令行带 --launch-version）。
 /// 前端 onMounted 主动查，比事件可靠（setup emit 时前端可能还没监听）。
 #[tauri::command]
-pub(crate) fn get_launch_mode() -> Option<String> {
-    crate::lock_launch_intent().mode.clone()
+#[specta::specta]
+pub(crate) fn get_launch_mode(ctx: tauri::State<'_, crate::AppCtx>) -> Option<String> {
+    ctx.lock_intent().mode.clone()
 }
 
 /// 查询启动失败原因（若上一步启动已失败）。
@@ -610,8 +685,9 @@ pub(crate) fn get_launch_mode() -> Option<String> {
 /// 有错误则直接进错误态，不依赖 `launch-progress` 事件（那条在单实例转发路径里
 /// 可能早于前端监听而丢失）。
 #[tauri::command]
-pub(crate) fn get_launch_error() -> Option<String> {
-    crate::lock_launch_intent().error.clone()
+#[specta::specta]
+pub(crate) fn get_launch_error(ctx: tauri::State<'_, crate::AppCtx>) -> Option<String> {
+    ctx.lock_intent().error.clone()
 }
 
 /// v0.3.2：取走待处理的「打开设置区块」请求（取后即清）。
@@ -619,13 +695,15 @@ pub(crate) fn get_launch_error() -> Option<String> {
 /// 与 `get_launch_mode` 同样在首帧查询——setup 阶段 emit 的事件可能早于前端监听。
 /// 用「取走」而非「读取」：同一次启动只应滚动一次，重复挂载不应重复跳转。
 #[tauri::command]
-pub(crate) fn take_open_settings() -> Option<String> {
-    crate::lock_launch_intent().open_settings.take()
+#[specta::specta]
+pub(crate) fn take_open_settings(ctx: tauri::State<'_, crate::AppCtx>) -> Option<String> {
+    ctx.lock_intent().open_settings.take()
 }
 
 /// v0.2.14：前端渲染出"启动态"后调用，显示主窗口。
 /// （启动模式下 setup 里先 hide 主窗口，避免闪现主界面；前端就绪后由此命令 show。）
 #[tauri::command]
+#[specta::specta]
 pub(crate) fn show_main_window(app: tauri::AppHandle) {
     use tauri::Manager;
     if let Some(main) = app.get_webview_window("main") {
@@ -636,8 +714,11 @@ pub(crate) fn show_main_window(app: tauri::AppHandle) {
 /// v0.2.14：查询某版本是否已有内嵌窗口在开。
 /// 前端 run() 先查——已开则直接聚焦（不进启动态），避免"杀掉重开"的误导。
 #[tauri::command]
-pub(crate) fn is_version_open(procs: tauri::State<'_, ProcMap>, version: String) -> bool {
-    lock_procs(procs.inner()).contains_key(&version)
+#[specta::specta]
+pub(crate) fn is_version_open(ctx: tauri::State<'_, crate::AppCtx>, version: String) -> bool {
+    VersionId::new(version)
+        .map(|v| lock_procs(&ctx.procs).contains_key(&ProcKey::Shared(v)))
+        .unwrap_or(false)
 }
 
 /// M3b：列出当前有内嵌窗口在运行的版本号。
@@ -645,8 +726,15 @@ pub(crate) fn is_version_open(procs: tauri::State<'_, ProcMap>, version: String)
 /// 只覆盖 embedded 窗口——基于内存 ProcMap。console 启动与终端 dsh
 /// 没有进程内记录，不在本命令范围（已知限制，见 M3b 交接单）。
 #[tauri::command]
-pub(crate) fn list_running_versions(procs: tauri::State<'_, ProcMap>) -> Vec<String> {
-    let mut out: Vec<String> = lock_procs(procs.inner()).keys().cloned().collect();
+#[specta::specta]
+pub(crate) fn list_running_versions(ctx: tauri::State<'_, crate::AppCtx>) -> Vec<String> {
+    let mut out: Vec<String> = lock_procs(&ctx.procs)
+        .keys()
+        .map(|k| match k {
+            ProcKey::Shared(v) => v.to_string(),
+            ProcKey::Instance(id) => id.to_string(),
+        })
+        .collect();
     out.sort();
     out
 }

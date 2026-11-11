@@ -1,6 +1,6 @@
 <script setup>
 import { ref, computed, watch, onMounted, onUnmounted, provide, nextTick } from "vue";
-import { invoke } from "@tauri-apps/api/core";
+import { dsProfileInfo, dsListPlugins, dsOpenPluginLogs, dsInitProfile, dsOpenProfileDir } from "../api/plugins.js";
 import { listen } from "@tauri-apps/api/event";
 import { t } from "../composables/useI18n.js";
 import { useToast } from "../composables/useToast.js";
@@ -9,6 +9,7 @@ import DsPluginInstalled from "./DsPluginInstalled.vue";
 import DsPluginCatalog from "./DsPluginCatalog.vue";
 import DsPluginInstallDialog from "./DsPluginInstallDialog.vue";
 import DsPluginMeta from "./DsPluginMeta.vue";
+import SharedHomeHealth from "./SharedHomeHealth.vue";
 
 // v0.3.0 双向桥 B1：管理某 dsh 版本的插件（dsh profile 里的 npm 包）。
 // 通过 dsh CLI（dsh plugin --profile <p> add/remove <包>）执行。
@@ -30,6 +31,7 @@ const dshHome = ref("");
 const homeKind = ref("shared");
 const loading = ref(false);
 const busy = ref(false);
+function setBusy(v) { busy.value = v; }
 const activeProfile = ref("");
 const installing = ref(false);
 
@@ -44,6 +46,7 @@ provide(DS_PLUGIN_LOG_KEY, { logLines, showLog });
 
 // 阶段 4：已安装 / 推荐 两个标签页
 const tab = ref("installed"); // installed | catalog
+const showHealth = ref(false);
 
 const homeKindLabel = computed(() => {
   const m = { isolated: "dsplugins.homeIsolated", official: "dsplugins.homeOfficial", shared: "dsplugins.homeShared" };
@@ -70,10 +73,7 @@ async function refreshInfo() {
     return;
   }
   try {
-    const info = await invoke("ds_profile_info", {
-      version: props.version,
-      profile: activeProfile.value,
-    });
+    const info = await dsProfileInfo(props.version, activeProfile.value);
     profileInfo.value = {
       runtime_version: info?.runtime_version || null,
       exemptions: info?.exemptions || {},
@@ -88,7 +88,7 @@ async function refreshInfo() {
 async function load() {
   loading.value = true;
   try {
-    const res = await invoke("ds_list_plugins", { version: props.version });
+    const res = await dsListPlugins(props.version);
     profiles.value = res?.profiles || [];
     dshHome.value = res?.dsh_home || "";
     homeKind.value = res?.home_kind || "shared";
@@ -145,7 +145,7 @@ async function retryLastAction() {
 
 async function openLogs() {
   try {
-    await invoke("ds_open_plugin_logs", { version: props.version, profile: activeProfile.value });
+    await dsOpenPluginLogs(props.version, activeProfile.value);
   } catch (e) {
     notify("" + e);
   }
@@ -158,7 +158,7 @@ async function initProfile() {
   initializing.value = true;
   logLines.value = [];
   try {
-    await invoke("ds_init_profile", { version: props.version, profile: name });
+    await dsInitProfile(props.version, name);
     notify(t("dsplugins.initDone", { p: name }));
     if (logLines.value.length) showLog.value = true;
     activeProfile.value = name;
@@ -173,7 +173,7 @@ async function initProfile() {
 
 async function openDir() {
   try {
-    await invoke("ds_open_profile_dir", { version: props.version, profile: activeProfile.value });
+    await dsOpenProfileDir(props.version, activeProfile.value);
   } catch (e) {
     notify("" + e);
   }
@@ -281,6 +281,9 @@ onUnmounted(() => {
         >
           {{ t("dsplugins.checkUpdates") }}
         </button>
+        <button class="dp-btn" @click="showHealth = true" :disabled="busy">
+          🩺 {{ t("dsplugins.healthTitle") }}
+        </button>
       </div>
 
       <!-- 已安装标签页 -->
@@ -290,7 +293,8 @@ onUnmounted(() => {
         :version="version"
         :profile="activeProfile"
         :plugins="currentProfile()?.plugins || []"
-        v-model:busy="busy"
+        :busy="busy"
+        @update:busy="setBusy"
         @reload="reload"
         @refresh-info="refreshInfo"
         @action-failed="onActionFailed"
@@ -322,10 +326,12 @@ onUnmounted(() => {
         :profile-info="profileInfo"
         :busy="busy"
         @approved="retryLastAction"
+        @refresh="refreshInfo"
       />
     </template>
 
     <!-- 官方风格安装对话框：form → confirm → installing → done/failed -->
+    <SharedHomeHealth v-if="showHealth" :version="version" @close="showHealth = false" />
     <DsPluginInstallDialog
       ref="installRef"
       :version="version"

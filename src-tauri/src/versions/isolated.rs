@@ -1,11 +1,6 @@
 //! 数据隔离（D5 拆分：原 versions.rs 的 isolated 相关）。
 use std::path::Path;
 
-/// 隔离 home 的路径
-pub fn isolated_home(versions_dir: &Path, version: &str) -> std::path::PathBuf {
-    versions_dir.join(version).join("home")
-}
-
 /// 复制共享 home 到隔离 home（不覆盖已存在文件）
 pub fn copy_shared_to_isolated(shared_home: &Path, isolated: &Path) -> (bool, String, u64) {
     let mut copied = 0u64;
@@ -108,16 +103,15 @@ fn create_junction(link: &Path, target: &Path) -> std::io::Result<()> {
     }
 }
 
-/// 清理隔离 home（删除目录内容但保留目录本身）
-pub fn clear_isolated(versions_dir: &Path, version: &str) -> (bool, String) {
-    let home = isolated_home(versions_dir, version);
+/// 清理任意隔离 home（删除目录内容但保留目录本身）。
+pub fn clear_home_dir(home: &Path, label: &str) -> (bool, String) {
     if !home.exists() {
         return (true, "隔离目录不存在，无需清理".to_string());
     }
-    match std::fs::remove_dir_all(&home) {
+    match std::fs::remove_dir_all(home) {
         Ok(_) => {
-            let _ = std::fs::create_dir_all(&home);
-            (true, format!("已清理 {} 的隔离数据", version))
+            let _ = std::fs::create_dir_all(home);
+            (true, format!("已清理 {} 的隔离数据", label))
         }
         Err(e) => {
             let hint = if e.raw_os_error() == Some(32) {

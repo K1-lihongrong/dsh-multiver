@@ -3,7 +3,7 @@ use serde::Serialize;
 use std::path::Path;
 
 /// 单个已安装版本的信息
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, specta::Type)]
 pub struct VersionInfo {
     /// 版本号，如 0.1.5
     pub version: String,

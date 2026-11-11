@@ -1,9 +1,42 @@
+use crate::domain::{HomeRef, InstanceId, VersionId};
+use crate::ports::{Clock, FileSystem, SystemClock, SystemFs};
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
+/// 当前配置结构版本。旧配置缺省字段时按 1 处理并自动迁移。
+pub const CURRENT_SCHEMA_VERSION: u32 = 2;
+
+fn legacy_schema_version() -> u32 {
+    1
+}
+
+/// 实例状态。Deleting 是崩溃一致性中间态：启动扫描到就把删除续完。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum InstanceState {
+    #[default]
+    Ready,
+    Deleting,
+}
+
+/// 一个隔离实例（全局实体，不隶属于某个版本）。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Instance {
+    pub id: InstanceId,
+    pub name: String,
+    #[serde(default)]
+    pub created_at: u64,
+    #[serde(default)]
+    pub state: InstanceState,
+}
+
 /// 管理器配置，持久化到 <根目录>/config.json
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
+    /// 配置结构版本；缺失时按旧版 1 迁移。
+    #[serde(default = "legacy_schema_version")]
+    pub schema_version: u32,
     /// 数据根目录。为空时表示使用默认（exe 同目录）
     pub root_dir: Option<String>,
     /// 当前默认版本号（终端 dsh 指向的版本）
@@ -29,10 +62,42 @@ pub struct Config {
     /// 一旦忽略，不再自动弹横幅；用户仍可从环境检查面板手动准备运行时。
     #[serde(default)]
     pub runtime_prompt_dismissed: bool,
+
+    /// 全局实例表。
+    #[serde(default)]
+    pub instances: Vec<Instance>,
+    /// 版本 → 已挂载实例 id（顺序即展示顺序）。
+    #[serde(default)]
+    pub version_instances: BTreeMap<VersionId, Vec<InstanceId>>,
+    /// 每版本主按钮目标；缺失或 None 表示共享 home。
+    #[serde(default)]
+    pub selected_target: BTreeMap<VersionId, Option<InstanceId>>,
+    /// 实例 id 分配计数器（历史最大值，永不复用）。
+    #[serde(default)]
+    pub instance_seq: u64,
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        Self {
+            schema_version: CURRENT_SCHEMA_VERSION,
+            root_dir: None,
+            default_version: None,
+            isolated_versions: Vec::new(),
+            broken_versions: Vec::new(),
+            maintenance: MaintenanceConfig::default(),
+            use_official_dsh_home: false,
+            runtime_prompt_dismissed: false,
+            instances: Vec::new(),
+            version_instances: BTreeMap::new(),
+            selected_target: BTreeMap::new(),
+            instance_seq: 0,
+        }
+    }
 }
 
 /// 维护相关配置与状态。
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, specta::Type)]
 pub struct MaintenanceConfig {
     /// 是否启用启动时自动维护（默认开）。
     pub auto_enabled: bool,
@@ -58,6 +123,25 @@ impl Default for MaintenanceConfig {
     }
 }
 
+/// 校验用户输入的数据根路径（GUI 与 CLI 共用）。
+pub fn validate_root_path(raw: &str) -> Result<std::path::PathBuf, String> {
+    let raw = raw.trim();
+    if raw.is_empty() {
+        return Err("目录不能为空".into());
+    }
+    let path = std::path::PathBuf::from(raw);
+    if !path.is_absolute() {
+        return Err(format!("请提供绝对路径：{}", raw));
+    }
+    if path
+        .components()
+        .any(|c| matches!(c, std::path::Component::ParentDir))
+    {
+        return Err(format!("路径不能包含 ..：{}", raw));
+    }
+    Ok(path)
+}
+
 impl Config {
     /// 配置文件名
     pub const FILE_NAME: &'static str = "config.json";
@@ -68,7 +152,7 @@ impl Config {
     /// 需要「损坏时留痕」的启动路径应调用 [`Config::load_checked`]。
     pub fn load(manager_dir: &Path) -> Self {
         let path = manager_dir.join(Self::FILE_NAME);
-        if let Ok(text) = std::fs::read_to_string(&path) {
+        if let Ok(text) = SystemFs.read_to_string(&path) {
             if let Ok(cfg) = serde_json::from_str::<Config>(&text) {
                 return cfg;
             }
@@ -86,18 +170,63 @@ impl Config {
     /// 设计依据见 `docs/交互设计约定.md` §2.5。技术债 D18。
     pub fn load_checked(manager_dir: &Path) -> Self {
         let path = manager_dir.join(Self::FILE_NAME);
-        let text = match std::fs::read_to_string(&path) {
+        let text = match SystemFs.read_to_string(&path) {
             Ok(t) => t,
             // 文件不存在或读不了：首次启动的正常路径，不告警
             Err(_) => return Config::default(),
         };
         match serde_json::from_str::<Config>(&text) {
-            Ok(cfg) => cfg,
+            Ok(mut cfg) => {
+                // 旧配置（缺 schema_version）在此完成一次性迁移。
+                // 迁移失败时保留原文件并继续用旧配置运行，不覆盖用户现场。
+                if cfg.schema_version < CURRENT_SCHEMA_VERSION {
+                    let mut next = cfg.clone();
+                    match next.migrate_v0_4_0(manager_dir) {
+                        Ok(true) => {
+                            if let Err(e) = next.save(manager_dir) {
+                                crate::logging::write_line(
+                                    &manager_dir.join("logs"),
+                                    "app.log",
+                                    &format!("配置迁移写盘失败，继续使用旧配置：{e}"),
+                                );
+                            } else {
+                                cfg = next;
+                            }
+                        }
+                        Ok(false) => cfg = next,
+                        Err(e) => crate::logging::write_line(
+                            &manager_dir.join("logs"),
+                            "app.log",
+                            &format!("配置迁移失败，原文件保持不变：{e}"),
+                        ),
+                    }
+                }
+                // 上次删除实例中断：启动时续完。失败只写日志，不阻塞管理器。
+                let root = cfg.resolve_root(manager_dir);
+                match cfg.resume_deleting_instances(&root) {
+                    Ok(true) => {
+                        if let Err(e) = cfg.save(manager_dir) {
+                            crate::logging::write_line(
+                                &manager_dir.join("logs"),
+                                "app.log",
+                                &format!("续完实例删除后写盘失败：{e}"),
+                            );
+                        }
+                    }
+                    Ok(false) => {}
+                    Err(e) => crate::logging::write_line(
+                        &manager_dir.join("logs"),
+                        "app.log",
+                        &format!("续完实例删除失败，下次启动重试：{e}"),
+                    ),
+                }
+                cfg
+            }
             Err(e) => {
                 // 配置损坏：留痕 + 保留现场 + 回退默认
                 let ts = crate::logging::stamp_compact(crate::logging::now_secs());
                 let broken = manager_dir.join(format!("{}.broken-{}", Self::FILE_NAME, ts));
-                let rename_ok = std::fs::rename(&path, &broken).is_ok();
+                let rename_ok = SystemFs.rename(&path, &broken).is_ok();
                 let mut msg = format!("config.json 解析失败，已回退默认配置：{}", e);
                 if rename_ok {
                     msg.push_str(&format!("；原文件已保留为 {}", broken.display()));
@@ -114,7 +243,7 @@ impl Config {
     pub fn save(&self, manager_dir: &Path) -> std::io::Result<()> {
         let path = manager_dir.join(Self::FILE_NAME);
         let text = serde_json::to_string_pretty(self).unwrap_or_default();
-        std::fs::write(path, text)
+        SystemFs.write(&path, text.as_bytes())
     }
 
     /// 解析出实际的数据根目录
@@ -127,6 +256,227 @@ impl Config {
             Some(r) if !r.trim().is_empty() => PathBuf::from(r.trim()),
             _ => manager_dir.to_path_buf(),
         }
+    }
+
+    /// 计算某版本 + 可选实例对应的 home 类型。
+    ///
+    /// 优先显式实例；否则看 selected_target；旧 isolated_versions 仍作为迁移前兼容回退。
+    pub fn home_ref_for(&self, version: &VersionId, instance: Option<&InstanceId>) -> HomeRef {
+        if let Some(id) = instance {
+            return HomeRef::Instance(id.clone());
+        }
+        if let Some(target) = self.selected_target.get(version) {
+            return match target {
+                Some(id) => HomeRef::Instance(id.clone()),
+                None => self.default_home_ref(),
+            };
+        }
+        if let Some(ids) = self.version_instances.get(version) {
+            if let Some(id) = ids.first() {
+                return HomeRef::Instance(id.clone());
+            }
+        }
+        if self.isolated_versions.iter().any(|v| v == version.as_str()) {
+            if let Some(ids) = self.version_instances.get(version) {
+                if let Some(id) = ids.first() {
+                    return HomeRef::Instance(id.clone());
+                }
+            }
+        }
+        self.default_home_ref()
+    }
+
+    fn default_home_ref(&self) -> HomeRef {
+        if self.use_official_dsh_home {
+            HomeRef::Official
+        } else {
+            HomeRef::Shared
+        }
+    }
+
+    /// 给版本创建一个默认隔离实例，并设为该版本主按钮目标。
+    /// 保留 isolated_versions 镜像，供 alpha.1 仍在使用旧字段的 CLI/列表读取。
+    pub fn ensure_default_instance(
+        &mut self,
+        version: &VersionId,
+        root: &Path,
+    ) -> Result<InstanceId, String> {
+        if let Some(ids) = self.version_instances.get(version) {
+            if let Some(id) = ids.first() {
+                self.selected_target
+                    .insert(version.clone(), Some(id.clone()));
+                if !self.isolated_versions.iter().any(|v| v == version.as_str()) {
+                    self.isolated_versions.push(version.to_string());
+                }
+                return Ok(id.clone());
+            }
+        }
+        let id = self.alloc_instance_id()?;
+        let name = self.unique_instance_name("默认隔离");
+        let dirs = Dirs::new(root.to_path_buf());
+        let _ = dirs.ensure();
+        SystemFs
+            .create_dir_all(&dirs.homes.join(id.as_str()))
+            .map_err(|e| e.to_string())?;
+        self.instances.push(Instance {
+            id: id.clone(),
+            name,
+            created_at: SystemClock.now_secs(),
+            state: InstanceState::Ready,
+        });
+        self.version_instances
+            .insert(version.clone(), vec![id.clone()]);
+        self.selected_target
+            .insert(version.clone(), Some(id.clone()));
+        if !self.isolated_versions.iter().any(|v| v == version.as_str()) {
+            self.isolated_versions.push(version.to_string());
+        }
+        Ok(id)
+    }
+
+    /// 解除版本与全部实例的挂载关系；实例本体保留，供其他版本继续挂载。
+    pub fn detach_version(&mut self, version: &VersionId) {
+        self.version_instances.remove(version);
+        self.selected_target.remove(version);
+        self.isolated_versions.retain(|v| v != version.as_str());
+    }
+
+    fn alloc_instance_id(&mut self) -> Result<InstanceId, String> {
+        loop {
+            self.instance_seq = self
+                .instance_seq
+                .checked_add(1)
+                .ok_or_else(|| "实例序号耗尽".to_string())?;
+            let id = InstanceId::from_u64(self.instance_seq)?;
+            if !self.instances.iter().any(|i| i.id == id) {
+                return Ok(id);
+            }
+        }
+    }
+
+    fn unique_instance_name(&self, base: &str) -> String {
+        let used: std::collections::HashSet<String> = self
+            .instances
+            .iter()
+            .map(|i| i.name.to_lowercase())
+            .collect();
+        if !used.contains(&base.to_lowercase()) {
+            return base.to_string();
+        }
+        for n in 2..=9999 {
+            let candidate = format!("{base} {n}");
+            if !used.contains(&candidate.to_lowercase()) {
+                return candidate;
+            }
+        }
+        format!("{base} {}", SystemClock.now_secs())
+    }
+
+    /// 续完上次中断的实例删除：清掉 homes/<id>，移除实例与所有引用。
+    /// 失败时保留 state=deleting，下次启动继续；不阻塞主流程。
+    pub fn resume_deleting_instances(&mut self, root: &Path) -> Result<bool, String> {
+        let deleting: Vec<InstanceId> = self
+            .instances
+            .iter()
+            .filter(|i| i.state == InstanceState::Deleting)
+            .map(|i| i.id.clone())
+            .collect();
+        if deleting.is_empty() {
+            return Ok(false);
+        }
+        for id in &deleting {
+            let home = Dirs::new(root.to_path_buf()).homes.join(id.as_str());
+            if home.exists() {
+                SystemFs
+                    .remove_dir_all(&home)
+                    .map_err(|e| format!("删除实例 home 失败（{}）：{e}", home.display()))?;
+            }
+        }
+        self.instances.retain(|i| !deleting.contains(&i.id));
+        for ids in self.version_instances.values_mut() {
+            ids.retain(|id| !deleting.contains(id));
+        }
+        self.version_instances.retain(|_, ids| !ids.is_empty());
+        self.selected_target.retain(|_, target| {
+            target
+                .as_ref()
+                .map(|id| !deleting.contains(id))
+                .unwrap_or(true)
+        });
+        Ok(true)
+    }
+
+    /// v0.4.0 配置迁移：isolated_versions → 实例表 + homes/iN。
+    ///
+    /// 幂等：schema_version 已是当前版本时直接返回 false。
+    pub fn migrate_v0_4_0(&mut self, manager_dir: &Path) -> Result<bool, String> {
+        if self.schema_version >= CURRENT_SCHEMA_VERSION {
+            return Ok(false);
+        }
+        let root = self.resolve_root(manager_dir);
+        let dirs = Dirs::new(root.clone());
+        dirs.ensure()
+            .map_err(|e| format!("创建数据目录失败：{e}"))?;
+
+        // 先对齐已有实例的最大序号，避免手工改坏配置后产生重复 id。
+        if let Some(max_id) = self.instances.iter().map(|i| i.id.value()).max() {
+            if self.instance_seq < max_id {
+                self.instance_seq = max_id;
+            }
+        }
+
+        let legacy_versions = self.isolated_versions.clone();
+        let mut migrated = 0usize;
+        for raw in legacy_versions {
+            let version = VersionId::new(&raw)?;
+            if self
+                .version_instances
+                .get(&version)
+                .map(|ids| !ids.is_empty())
+                .unwrap_or(false)
+            {
+                continue;
+            }
+            let id = self.alloc_instance_id()?;
+            let name = self.unique_instance_name("默认隔离");
+            let src = dirs.versions.join(version.as_str()).join("home");
+            let dst = dirs.homes.join(id.as_str());
+            if dst.exists() {
+                return Err(format!(
+                    "迁移目标已存在，拒绝覆盖：{}",
+                    dst.to_string_lossy()
+                ));
+            }
+            if src.exists() {
+                if SystemFs.rename(&src, &dst).is_err() {
+                    let (ok, msg, _) =
+                        crate::versions::isolated::copy_shared_to_isolated(&src, &dst);
+                    if !ok {
+                        return Err(format!("迁移 home 失败：{msg}"));
+                    }
+                    let _ = SystemFs.remove_dir_all(&src);
+                }
+            } else {
+                SystemFs.create_dir_all(&dst).map_err(|e| e.to_string())?;
+            }
+            self.instances.push(Instance {
+                id: id.clone(),
+                name,
+                created_at: crate::logging::now_secs(),
+                state: InstanceState::Ready,
+            });
+            self.version_instances
+                .insert(version.clone(), vec![id.clone()]);
+            self.selected_target.insert(version, Some(id));
+            migrated += 1;
+        }
+        self.schema_version = CURRENT_SCHEMA_VERSION;
+        crate::logging::write_line(
+            &root.join("logs"),
+            "app.log",
+            &format!("配置已迁移到 v{CURRENT_SCHEMA_VERSION}：生成 {migrated} 个实例"),
+        );
+        Ok(true)
     }
 
     /// 根据一次安装结果维护 `broken_versions`：
@@ -154,7 +504,17 @@ impl Config {
 
     /// 卸载某版本时清理配置中对它的引用：默认版本、隔离标记。
     /// 返回配置是否发生变化。
+    #[cfg(test)]
     pub fn remove_version_refs(&mut self, version: &str) -> bool {
+        self.remove_version_refs_and_collect_orphans(version).0
+    }
+
+    /// 清理版本引用，并返回因本次卸载而不再被任何版本使用的实例 id。
+    /// 调用方负责删除这些实例的 homes/<id> 目录。
+    pub fn remove_version_refs_and_collect_orphans(
+        &mut self,
+        version: &str,
+    ) -> (bool, Vec<InstanceId>) {
         let mut changed = false;
         if self.default_version.as_deref() == Some(version) {
             self.default_version = None;
@@ -164,15 +524,45 @@ impl Config {
             self.isolated_versions.retain(|v| v != version);
             changed = true;
         }
-        changed
+        let mut mapped = Vec::new();
+        if let Ok(vid) = VersionId::new(version) {
+            if let Some(ids) = self.version_instances.remove(&vid) {
+                mapped = ids;
+                changed = true;
+            }
+            if self.selected_target.remove(&vid).is_some() {
+                changed = true;
+            }
+        }
+        if mapped.is_empty() {
+            return (changed, Vec::new());
+        }
+        let still_used: std::collections::HashSet<InstanceId> = self
+            .version_instances
+            .values()
+            .flat_map(|ids| ids.iter().cloned())
+            .chain(self.selected_target.values().filter_map(|id| id.clone()))
+            .collect();
+        let orphans: Vec<InstanceId> = mapped
+            .into_iter()
+            .filter(|id| !still_used.contains(id))
+            .collect();
+        if !orphans.is_empty() {
+            self.instances.retain(|i| !orphans.contains(&i.id));
+            changed = true;
+        }
+        (changed, orphans)
     }
 }
 
 /// 由根目录派生出的各个子目录
+#[derive(Debug, Clone)]
 pub struct Dirs {
     pub root: PathBuf,
     pub versions: PathBuf,
     pub home: PathBuf,
+    /// 实例 home 根：<root>/homes/<id>
+    pub homes: PathBuf,
     pub store: PathBuf,
     pub cache: PathBuf,
     pub state: PathBuf,
@@ -190,6 +580,7 @@ impl Dirs {
         Self {
             versions: root.join("versions"),
             home: root.join("home"),
+            homes: root.join("homes"),
             store: root.join("store"),
             cache: root.join("cache"),
             state: root.join("state"),
@@ -204,6 +595,7 @@ impl Dirs {
     pub fn ensure(&self) -> std::io::Result<()> {
         std::fs::create_dir_all(&self.versions)?;
         std::fs::create_dir_all(&self.home)?;
+        std::fs::create_dir_all(&self.homes)?;
         std::fs::create_dir_all(&self.store)?;
         std::fs::create_dir_all(&self.cache)?;
         std::fs::create_dir_all(&self.state)?;
@@ -217,6 +609,7 @@ impl Dirs {
         match which {
             "versions" => self.versions.clone(),
             "home" => self.home.clone(),
+            "homes" => self.homes.clone(),
             "store" => self.store.clone(),
             "cache" => self.cache.clone(),
             "state" => self.state.clone(),
@@ -308,6 +701,7 @@ mod tests {
             },
             use_official_dsh_home: true,
             runtime_prompt_dismissed: false,
+            ..Config::default()
         };
         cfg.save(&dir).unwrap();
         let back = Config::load(&dir);
@@ -319,6 +713,20 @@ mod tests {
         assert_eq!(back.maintenance.last_cleanup_count, 3);
         assert!(back.use_official_dsh_home);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn validate_root_path_rules() {
+        assert!(validate_root_path("  ").is_err());
+        assert!(validate_root_path("relative/path").is_err());
+        #[cfg(windows)]
+        assert!(validate_root_path("C:\\a\\..\\b").is_err());
+        #[cfg(not(windows))]
+        assert!(validate_root_path("/tmp/../etc").is_err());
+        #[cfg(windows)]
+        assert!(validate_root_path("C:\\data").is_ok());
+        #[cfg(not(windows))]
+        assert!(validate_root_path("/tmp/data").is_ok());
     }
 
     #[test]
@@ -516,6 +924,172 @@ mod tests {
     fn dirs_resolve_unknown_falls_back_to_root() {
         let d = Dirs::new(PathBuf::from("R"));
         assert_eq!(d.resolve("nope"), PathBuf::from("R"));
+    }
+
+    fn write_old_config(manager: &Path, root: &Path, isolated: &[&str]) {
+        let old = serde_json::json!({
+            "root_dir": root.to_string_lossy(),
+            "default_version": null,
+            "isolated_versions": isolated,
+            "broken_versions": [],
+            "maintenance": { "auto_enabled": false },
+            "use_official_dsh_home": false,
+            "runtime_prompt_dismissed": false
+        });
+        std::fs::write(
+            manager.join(Config::FILE_NAME),
+            serde_json::to_string_pretty(&old).unwrap(),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn migrates_single_isolated_version_to_instance_home() {
+        let manager = tmp("migrate-one");
+        let root = manager.join("root");
+        let old_home = root.join("versions").join("0.1.0").join("home");
+        std::fs::create_dir_all(&old_home).unwrap();
+        std::fs::write(old_home.join("marker.txt"), b"legacy").unwrap();
+        write_old_config(&manager, &root, &["0.1.0"]);
+
+        let cfg = Config::load_checked(&manager);
+        assert_eq!(cfg.schema_version, CURRENT_SCHEMA_VERSION);
+        assert_eq!(cfg.instances.len(), 1);
+        assert_eq!(cfg.instances[0].id.to_string(), "i1");
+        assert_eq!(
+            cfg.version_instances
+                .get(&VersionId::new("0.1.0").unwrap())
+                .unwrap(),
+            &vec![InstanceId::new("i1").unwrap()]
+        );
+        assert_eq!(
+            cfg.selected_target
+                .get(&VersionId::new("0.1.0").unwrap())
+                .unwrap(),
+            &Some(InstanceId::new("i1").unwrap())
+        );
+        let new_home = root.join("homes").join("i1");
+        assert_eq!(
+            std::fs::read(new_home.join("marker.txt")).unwrap(),
+            b"legacy"
+        );
+        assert!(!old_home.exists(), "旧 home 应已搬走");
+        let _ = std::fs::remove_dir_all(&manager);
+    }
+
+    #[test]
+    fn migrates_multiple_versions_with_unique_names_and_ids() {
+        let manager = tmp("migrate-many");
+        let root = manager.join("root");
+        for v in ["0.1.0", "0.2.0"] {
+            let old_home = root.join("versions").join(v).join("home");
+            std::fs::create_dir_all(&old_home).unwrap();
+            std::fs::write(old_home.join("v.txt"), v).unwrap();
+        }
+        write_old_config(&manager, &root, &["0.1.0", "0.2.0"]);
+
+        let cfg = Config::load_checked(&manager);
+        assert_eq!(cfg.instances.len(), 2);
+        assert_eq!(cfg.instance_seq, 2);
+        assert_ne!(cfg.instances[0].name, cfg.instances[1].name);
+        for (version, id) in [("0.1.0", "i1"), ("0.2.0", "i2")] {
+            let vid = VersionId::new(version).unwrap();
+            assert_eq!(
+                cfg.version_instances.get(&vid).unwrap(),
+                &vec![InstanceId::new(id).unwrap()]
+            );
+            assert_eq!(
+                std::fs::read(root.join("homes").join(id).join("v.txt")).unwrap(),
+                version.as_bytes()
+            );
+        }
+        let _ = std::fs::remove_dir_all(&manager);
+    }
+
+    #[test]
+    fn migration_is_idempotent_and_persisted() {
+        let manager = tmp("migrate-idem");
+        let root = manager.join("root");
+        std::fs::create_dir_all(root.join("versions").join("0.1.0").join("home")).unwrap();
+        write_old_config(&manager, &root, &["0.1.0"]);
+
+        let first = Config::load_checked(&manager);
+        let second = Config::load_checked(&manager);
+        assert_eq!(first.instances.len(), 1);
+        assert_eq!(second.instances.len(), 1);
+        assert_eq!(second.instance_seq, 1);
+        let reloaded = Config::load(&manager);
+        assert_eq!(reloaded.schema_version, CURRENT_SCHEMA_VERSION);
+        assert_eq!(reloaded.instances.len(), 1);
+        let _ = std::fs::remove_dir_all(&manager);
+    }
+
+    #[test]
+    fn migration_without_isolated_versions_is_noop() {
+        let manager = tmp("migrate-none");
+        let root = manager.join("root");
+        write_old_config(&manager, &root, &[]);
+        let cfg = Config::load_checked(&manager);
+        assert!(cfg.instances.is_empty());
+        assert_eq!(cfg.schema_version, CURRENT_SCHEMA_VERSION);
+        let _ = std::fs::remove_dir_all(&manager);
+    }
+
+    #[test]
+    fn removing_version_collects_only_orphan_instances() {
+        let mut cfg = Config::default();
+        let shared_id = InstanceId::new("i1").unwrap();
+        cfg.instances.push(Instance {
+            id: shared_id.clone(),
+            name: "共享实例".into(),
+            created_at: 0,
+            state: InstanceState::Ready,
+        });
+        for v in ["0.1.0", "0.2.0"] {
+            cfg.version_instances
+                .insert(VersionId::new(v).unwrap(), vec![shared_id.clone()]);
+        }
+        let (changed, orphans) = cfg.remove_version_refs_and_collect_orphans("0.1.0");
+        assert!(changed);
+        assert!(orphans.is_empty(), "仍被 0.2.0 使用，不应删除实例");
+        let (changed, orphans) = cfg.remove_version_refs_and_collect_orphans("0.2.0");
+        assert!(changed);
+        assert_eq!(orphans, vec![shared_id]);
+        assert!(cfg.instances.is_empty());
+    }
+
+    #[test]
+    fn resume_deleting_instance_cleans_home_and_refs() {
+        let manager = tmp("resume-delete");
+        let root = manager.join("root");
+        let id = InstanceId::new("i7").unwrap();
+        let home = Dirs::new(root.clone()).homes.join("i7");
+        std::fs::create_dir_all(&home).unwrap();
+        std::fs::write(home.join("x"), b"x").unwrap();
+        let mut cfg = Config {
+            root_dir: Some(root.to_string_lossy().to_string()),
+            ..Config::default()
+        };
+        cfg.instances.push(Instance {
+            id: id.clone(),
+            name: "待删除".into(),
+            created_at: 0,
+            state: InstanceState::Deleting,
+        });
+        cfg.version_instances
+            .insert(VersionId::new("0.1.0").unwrap(), vec![id.clone()]);
+        cfg.selected_target
+            .insert(VersionId::new("0.1.0").unwrap(), Some(id.clone()));
+        cfg.instance_seq = 7;
+        cfg.save(&manager).unwrap();
+
+        let loaded = Config::load_checked(&manager);
+        assert!(loaded.instances.is_empty());
+        assert!(loaded.version_instances.is_empty());
+        assert!(loaded.selected_target.is_empty());
+        assert!(!home.exists());
+        assert_eq!(loaded.instance_seq, 7, "序号仍不复用");
+        let _ = std::fs::remove_dir_all(&manager);
     }
 
     #[test]

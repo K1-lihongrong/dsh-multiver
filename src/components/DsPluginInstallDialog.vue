@@ -1,9 +1,11 @@
 <script setup>
 import { ref, computed, inject, watch } from "vue";
-import { invoke } from "@tauri-apps/api/core";
+import { dsProbeRegistries, dsInspectSpec, dsExemptionAction, dsApproveBuilds, dsPluginAction, classifyPluginFailure } from "../api/plugins.js";
 import { t } from "../composables/useI18n.js";
 import { useToast } from "../composables/useToast.js";
-import { actionErrorText } from "../composables/useDsPluginErrors.js";
+import { actionErrorText, parseIncompatiblePlugins } from "../composables/useDsPluginErrors.js";
+import { withTimeout } from "../composables/useAsyncTimeout.js";
+import { ErrorKind, toApiError } from "../api/errors.js";
 import { DS_PLUGIN_LOG_KEY } from "../composables/useDsPluginLog.js";
 
 // 官方风格安装对话框：form → checking → confirm → installing → done/failed。
@@ -29,6 +31,8 @@ const installing = ref(false);
 const installPhase = ref("form");
 const installResult = ref(null);
 const installError = ref("");
+const incompatible = ref([]);
+const failure = ref(null);
 const inspectInfo = ref(null);
 const inspectFailed = ref(false);
 const registryProbed = ref(false);
@@ -62,6 +66,8 @@ async function open(prefill) {
   installPhase.value = "form";
   installResult.value = null;
   installError.value = "";
+  incompatible.value = [];
+  failure.value = null;
   inspectInfo.value = null;
   inspectFailed.value = false;
   registryProbed.value = false;
@@ -76,7 +82,7 @@ async function open(prefill) {
   // 首次使用（未记住安装源）时探测最快源（对齐官方 registryProbe）
   if (!installRegistry.value) {
     try {
-      const p = await invoke("ds_probe_registries");
+      const p = await dsProbeRegistries();
       if (p?.kind) {
         installRegistry.value = p.kind;
         registryProbed.value = true;
@@ -111,12 +117,7 @@ async function requestInstall() {
   inspectFailed.value = false;
   inspectInfo.value = null;
   try {
-    const info = await invoke("ds_inspect_spec", {
-      version: props.version,
-      profile: props.profile,
-      spec,
-      registry: registryValue.value,
-    });
+    const info = await dsInspectSpec(props.version, props.profile, spec, registryValue.value);
     inspectInfo.value = info || null;
     if (info?.problem) {
       installError.value = inspectProblemText(info);
@@ -140,16 +141,39 @@ function retryInstall() {
   }
 }
 
+function exemptionCommand(item) {
+  return (
+    "dsh plugin --profile " + props.profile + " allow-version " +
+    item.packageVersion + " --dsh-version " + item.dshVersion + " --accept-risk"
+  );
+}
+
+async function allowIncompatibleAndRetry(onlyItem) {
+  const items = onlyItem ? [onlyItem] : incompatible.value.slice();
+  if (!items.length) return;
+  try {
+    for (const item of items) {
+      await withTimeout(
+        dsExemptionAction(props.version, props.profile, "allow", item.packageVersion, item.dshVersion),
+        60000,
+        t("dsplugins.operationTimeout"),
+      );
+    }
+    notify(t("dsplugins.exemptionAllowed", { n: items.length }));
+    emit("refresh-info");
+    incompatible.value = incompatible.value.filter((x) => !items.includes(x));
+    await confirmInstall();
+  } catch (e) {
+    notify("" + e);
+  }
+}
+
 // 失败界面内直接允许 pnpm 拦截的构建脚本并重试安装（对齐官方）
 async function approveAndRetryInstall() {
   const pkgs = props.profileInfo.pending_builds || [];
   if (!pkgs.length) return;
   try {
-    await invoke("ds_approve_builds", {
-      version: props.version,
-      profile: props.profile,
-      packages: pkgs,
-    });
+    await dsApproveBuilds(props.version, props.profile, pkgs);
     emit("refresh-info");
     retryInstall();
   } catch (e) {
@@ -172,23 +196,41 @@ async function confirmInstall() {
   installing.value = true;
   logLines.value = [];
   try {
-    const res = await invoke("ds_plugin_action", {
-      version: props.version,
-      profile: props.profile,
-      action: "add",
-      package: spec,
-      registry: registryValue.value,
-    });
+    const res = await withTimeout(
+      dsPluginAction(props.version, props.profile, "add", spec, registryValue.value),
+      300000,
+      t("dsplugins.operationTimeout"),
+    );
     installResult.value = { name: res?.name || null, spec, registry: registryValue.value };
     installPhase.value = "done";
     emit("installed");
     emit("refresh-info");
   } catch (e) {
-    installError.value = actionErrorText(e);
+    const apiError = toApiError(e, { code: ErrorKind.commandFailed });
+    const raw = apiError.raw + "\n" + logLines.value.join("\n");
+    installError.value = actionErrorText(apiError);
+    incompatible.value = parseIncompatiblePlugins(raw);
+    try {
+      const classified = await classifyPluginFailure(raw);
+      // 保留现有 code/message/detail；raw 必须包含完整日志，不能被截断。
+      failure.value = { ...classified, raw };
+    } catch (_) {
+      failure.value = null;
+    }
     installPhase.value = "failed";
     emit("refresh-info");
   } finally {
     installing.value = false;
+  }
+}
+
+async function copyFailureRaw() {
+  if (!failure.value) return;
+  try {
+    await navigator.clipboard.writeText(failure.value.raw);
+    notify(t("dsplugins.healthCopied"));
+  } catch (e) {
+    notify("" + e);
   }
 }
 
@@ -319,12 +361,33 @@ defineExpose({ open });
 
       <template v-else>
         <div class="dp-done-title dp-fail-title">✕ {{ t("dsplugins.installFailedTitle") }}</div>
+        <div class="dp-failure-card" v-if="failure">
+          <strong>{{ t("dsplugins.failure." + failure.code) }}</strong>
+          <span class="dp-modal-hint">{{ failure.detail }}</span>
+          <button class="dp-link-btn" @click="copyFailureRaw">
+            {{ t("dsplugins.copyRaw") }}
+          </button>
+        </div>
         <pre class="dp-log-body dp-modal-log">{{ installError }}</pre>
         <div class="dp-pending" v-if="profileInfo.pending_builds.length">
           <span class="dp-meta-label">{{ t("dsplugins.pendingBuilds", { n: profileInfo.pending_builds.length }) }}</span>
           <code class="dp-meta-code">{{ profileInfo.pending_builds.join(", ") }}</code>
           <button class="dp-btn dp-btn-primary dp-btn-sm" @click="approveAndRetryInstall">
             {{ t("dsplugins.approveRetry") }}
+          </button>
+        </div>
+        <div class="dp-incompatible" v-if="incompatible.length">
+          <div class="dp-meta-label">{{ t("dsplugins.incompatibleFound", { n: incompatible.length }) }}</div>
+          <div class="dp-incompatible-row" v-for="item in incompatible" :key="item.packageVersion + item.dshVersion">
+            <code class="dp-meta-code">{{ item.packageVersion }} · DSH {{ item.dshVersion }}</code>
+            <button class="dp-btn dp-btn-sm" @click="allowIncompatibleAndRetry(item)">
+              {{ t("dsplugins.allowExactVersion") }}
+            </button>
+          </div>
+          <div class="dp-modal-hint">{{ t("dsplugins.exemptionCommand") }}</div>
+          <code class="dp-meta-code">{{ exemptionCommand(incompatible[0]) }}</code>
+          <button class="dp-btn dp-btn-primary dp-btn-sm" @click="allowIncompatibleAndRetry()">
+            {{ t("dsplugins.allowExactVersionsRetry", { n: incompatible.length }) }}
           </button>
         </div>
         <div class="dp-modal-actions">

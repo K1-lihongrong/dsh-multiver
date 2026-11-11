@@ -3,10 +3,9 @@
 use super::*;
 
 #[tauri::command]
-pub(crate) fn list_installed(app: tauri::AppHandle) -> Vec<versions::VersionInfo> {
-    let mdir = manager_dir(&app);
-    let cfg = Config::load(&mdir);
-    let dirs = Dirs::new(cfg.resolve_root(&mdir));
+#[specta::specta]
+pub(crate) fn list_installed(ctx: tauri::State<'_, crate::AppCtx>) -> Vec<versions::VersionInfo> {
+    let (cfg, dirs) = ctx.config_dirs();
     versions::list(
         &dirs.versions,
         cfg.default_version.as_deref(),
@@ -15,10 +14,9 @@ pub(crate) fn list_installed(app: tauri::AppHandle) -> Vec<versions::VersionInfo
 }
 
 #[tauri::command]
-pub(crate) fn list_remote(app: tauri::AppHandle) -> Result<Vec<String>, String> {
-    let mdir = manager_dir(&app);
-    let cfg = Config::load(&mdir);
-    let dirs = Dirs::new(cfg.resolve_root(&mdir));
+#[specta::specta]
+pub(crate) fn list_remote(ctx: tauri::State<'_, crate::AppCtx>) -> Result<Vec<String>, String> {
+    let (_cfg, dirs) = ctx.config_dirs();
     let _ = dirs.ensure();
     let (ok, list, err) = actions::list_remote(&dirs.store, &dirs.cache, &dirs.state);
     if ok {
@@ -29,20 +27,25 @@ pub(crate) fn list_remote(app: tauri::AppHandle) -> Result<Vec<String>, String> 
 }
 
 #[tauri::command]
+#[specta::specta]
 pub(crate) async fn install_version(
     app: tauri::AppHandle,
+    ctx: tauri::State<'_, crate::AppCtx>,
     version: String,
     registry: Option<String>,
 ) -> Result<String, String> {
     use tauri::Emitter;
-    let mdir = manager_dir(&app);
-    let cfg = Config::load(&mdir);
-    let dirs = Dirs::new(cfg.resolve_root(&mdir));
+    let (cfg, dirs) = ctx.config_dirs();
+    let mdir = ctx.manager_dir().clone();
     let _ = dirs.ensure();
     // 启动参数 --debug-progress 时，把进度事件落盘到 <exe目录>/progress-debug.log
     // 供排查进度问题（默认关闭，不产生任何文件）。
     let debug_progress = std::env::args().any(|a| a == "--debug-progress");
 
+    let sink = ctx.job_sink(app.clone());
+    let job_id = sink.create("install", &version);
+    let sink2 = sink.clone();
+    let job_id2 = job_id.clone();
     let app2 = app.clone();
     let version_for_record = version.clone();
     // 把阻塞的安装逻辑丢到后台线程池，避免占用主线程导致界面卡死
@@ -67,6 +70,13 @@ pub(crate) async fn install_version(
                 }
             }
             let _ = app2.emit("install-progress", ev.clone());
+            sink2.progress(
+                &job_id2,
+                &format!("{:?}", ev.stage),
+                ev.step as u64,
+                Some(ev.total as u64),
+                None,
+            );
         };
         versions::install(
             &dirs.versions,
@@ -78,32 +88,47 @@ pub(crate) async fn install_version(
             registry.as_deref(),
         )
     })
-    .await
-    .map_err(|e| format!("安装任务失败: {}", e))?;
+    .await;
+
+    let result = match result {
+        Ok(v) => v,
+        Err(e) => {
+            let msg = format!("安装任务失败: {}", e);
+            sink.fail(&job_id, "internal", &msg, None);
+            return Err(msg);
+        }
+    };
 
     let (ok, msg) = result;
+    if ok {
+        sink.finish(&job_id, &msg, None);
+    } else {
+        let code = versions::classify_error(&msg);
+        sink.fail(
+            &job_id,
+            code,
+            &msg,
+            Some(serde_json::json!({ "raw": &msg })),
+        );
+    }
     // 维护 broken_versions：失败且分类为「私有包/不完整」时记入；成功时移除。
     let mut c = cfg.clone();
-    let kind = if ok {
-        ""
-    } else {
-        versions::classify_error(&msg)
-    };
-    if c.apply_install_result(&version_for_record, ok, kind) {
-        let _ = c.save(&mdir);
-    }
+    crate::install_service::finish_install(&mut c, &mdir, &version_for_record, ok, &msg);
     if ok {
         Ok(msg)
     } else {
         Err(msg)
     }
 }
-
 /// 清除「已知安装失败」标记（用户手动重试前可调用）。
 #[tauri::command]
-pub(crate) fn clear_broken(app: tauri::AppHandle, version: Option<String>) -> Result<(), String> {
-    let mdir = manager_dir(&app);
-    let mut cfg = Config::load(&mdir);
+#[specta::specta]
+pub(crate) fn clear_broken(
+    ctx: tauri::State<'_, crate::AppCtx>,
+    version: Option<String>,
+) -> Result<(), String> {
+    let mdir = ctx.manager_dir().clone();
+    let (mut cfg, _dirs) = ctx.config_dirs();
     match version {
         Some(v) => cfg.broken_versions.retain(|x| x != &v),
         None => cfg.broken_versions.clear(),
@@ -112,18 +137,23 @@ pub(crate) fn clear_broken(app: tauri::AppHandle, version: Option<String>) -> Re
 }
 
 #[tauri::command]
+#[specta::specta]
 pub(crate) async fn uninstall_version(
-    app: tauri::AppHandle,
+    ctx: tauri::State<'_, crate::AppCtx>,
     version: String,
 ) -> Result<String, String> {
-    let mdir = manager_dir(&app);
-    let cfg = Config::load(&mdir);
-    let dirs = Dirs::new(cfg.resolve_root(&mdir));
-    // 如果卸载的是默认版本，清空默认设置，并移除隔离标记
+    let mdir = ctx.manager_dir().clone();
+    let (cfg, dirs) = ctx.config_dirs();
+    // 如果卸载的是默认版本 / 隔离版本，清理引用；同时记录不再被任何版本使用的实例 home
     let mut cfg = cfg;
-    if cfg.remove_version_refs(&version) {
+    let (refs_changed, orphan_ids) = cfg.remove_version_refs_and_collect_orphans(&version);
+    if refs_changed {
         let _ = cfg.save(&mdir);
     }
+    let orphan_homes: Vec<std::path::PathBuf> = orphan_ids
+        .iter()
+        .map(|id| dirs.homes.join(id.as_str()))
+        .collect();
     // 卸载可能清掉了默认版本 / 隔离标记：重生成转发脚本（无默认版本时会删除 dsh.cmd）
     crate::paths::regenerate_forward_script(&mdir, &cfg);
     // 快速卸载：把版本目录 rename 到回收站（瞬时），实际删除交给后台线程。
@@ -133,6 +163,9 @@ pub(crate) async fn uninstall_version(
     let trash = dirs.trash.clone();
     let versions_dir = dirs.versions.clone();
     let (ok, msg) = tauri::async_runtime::spawn_blocking(move || {
+        for home in orphan_homes {
+            let _ = std::fs::remove_dir_all(home);
+        }
         let result = versions::uninstall_fast(&versions_dir, &trash, &version);
         // 版本目录已 rename 走后，webview 目录也 rename 进回收站（失败不影响卸载结果）
         if result.0 && webview_dir.exists() {
@@ -162,14 +195,14 @@ pub(crate) async fn uninstall_version(
 pub(crate) const CONFLICT_PREFIX: &str = "DSH_CONFLICT:";
 
 #[tauri::command]
+#[specta::specta]
 pub(crate) fn set_default(
-    app: tauri::AppHandle,
+    ctx: tauri::State<'_, crate::AppCtx>,
     version: Option<String>,
     force: Option<bool>,
 ) -> Result<String, String> {
-    let mdir = manager_dir(&app);
-    let mut cfg = Config::load(&mdir);
-    let dirs = Dirs::new(cfg.resolve_root(&mdir));
+    let mdir = ctx.manager_dir().clone();
+    let (mut cfg, dirs) = ctx.config_dirs();
     if let Some(v) = &version {
         if !versions::exists(&dirs.versions, v) {
             return Err(format!("版本 {} 未安装", v));

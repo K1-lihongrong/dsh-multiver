@@ -77,8 +77,9 @@ pub fn save_pending(root: &Path, p: &Pending) -> Result<(), String> {
 /// 清理暂存（安装完成或取消后调用）。
 pub fn clear_stage(root: &Path) {
     let dir = stage_dir(root);
-    let _ = std::fs::remove_file(pending_path(root));
-    let _ = std::fs::remove_file(staged_exe(root));
+    use crate::ports::FileSystem;
+    let _ = crate::ports::SystemFs.remove_file(&pending_path(root));
+    let _ = crate::ports::SystemFs.remove_file(&staged_exe(root));
     // 目录空了就删掉，避免数据根里长期留一个空目录
     let _ = std::fs::remove_dir(&dir);
 }
@@ -258,10 +259,7 @@ pub fn take_over_pending_at(root: &Path, p: &Pending, target: &Path) -> Option<S
     crate::logging::write_line(
         &root.join("logs"),
         "maintenance.log",
-        &format!(
-            "暂存更新 {} 已就位，下次启动生效（当前进程仍以旧代码运行）",
-            p.version
-        ),
+        &format!("暂存更新 {} 已安装，正在重启生效", p.version),
     );
 
     Some(p.version.clone())

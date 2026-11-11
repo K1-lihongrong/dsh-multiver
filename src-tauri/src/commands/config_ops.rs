@@ -3,9 +3,13 @@
 use super::*;
 
 #[tauri::command]
-pub(crate) fn set_root(app: tauri::AppHandle, root: Option<String>) -> Result<String, String> {
-    let mdir = manager_dir(&app);
-    let mut cfg = Config::load(&mdir);
+#[specta::specta]
+pub(crate) fn set_root(
+    ctx: tauri::State<'_, crate::AppCtx>,
+    root: Option<String>,
+) -> Result<String, String> {
+    let mdir = ctx.manager_dir().clone();
+    let (mut cfg, _dirs) = ctx.config_dirs();
 
     // 切换前：对**旧**数据根做一次残留进程清理（GAP-011）。
     // 否则旧 root 下遗留的登记不会被新 root 的启动清理触及，其中的 dsh 可能永久残留。
@@ -25,10 +29,18 @@ pub(crate) fn set_root(app: tauri::AppHandle, root: Option<String>) -> Result<St
         }
     }
 
-    cfg.root_dir = root.clone();
+    cfg.root_dir = match root.as_deref() {
+        Some(raw) => Some(
+            crate::config::validate_root_path(raw)?
+                .to_string_lossy()
+                .to_string(),
+        ),
+        None => None,
+    };
     cfg.save(&mdir).map_err(|e| e.to_string())?;
     let dirs = Dirs::new(cfg.resolve_root(&mdir));
     dirs.ensure().map_err(|e| e.to_string())?;
+    ctx.set_dirs(dirs.clone());
     // 根目录变了，重生成转发脚本（含新的 DSH_HOME）
     crate::paths::regenerate_forward_script(&mdir, &cfg);
     Ok(format!("根目录已设为 {}", dirs.root.to_string_lossy()))
@@ -39,12 +51,13 @@ pub(crate) fn set_root(app: tauri::AppHandle, root: Option<String>) -> Result<St
 /// 开启后，非隔离版本的 DSH_HOME 指向官方默认目录，用户已有的会话/凭据/插件立即可用；
 /// 隔离版本不受影响。切换后重生成转发脚本，保证 GUI 与终端行为一致。
 #[tauri::command]
+#[specta::specta]
 pub(crate) fn set_use_official_home(
-    app: tauri::AppHandle,
+    ctx: tauri::State<'_, crate::AppCtx>,
     enabled: bool,
 ) -> Result<String, String> {
-    let mdir = manager_dir(&app);
-    let mut cfg = Config::load(&mdir);
+    let mdir = ctx.manager_dir().clone();
+    let (mut cfg, _dirs) = ctx.config_dirs();
     cfg.use_official_dsh_home = enabled;
     cfg.save(&mdir)
         .map_err(|e| format!("保存配置失败: {}", e))?;
@@ -62,6 +75,7 @@ pub(crate) fn set_use_official_home(
 
 /// 查询官方 dsh 配置目录路径（供前端展示/判断是否存在）。
 #[tauri::command]
+#[specta::specta]
 pub(crate) fn get_official_home() -> Option<String> {
     crate::paths::official_dsh_home().map(|p| p.to_string_lossy().to_string())
 }
