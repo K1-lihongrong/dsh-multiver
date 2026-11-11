@@ -1,4 +1,4 @@
-﻿# 更新日志
+# 更新日志
 
 本文件记录 DSH 版本管理器（dsh-multiver）各版本的变更。
 最新版本的详细说明见 [Releases](https://github.com/K1-lihongrong/dsh-multiver/releases)。
@@ -392,7 +392,7 @@ v0.3.3 加强插件面板 hover 反馈时，只改了过渡属性写法，与界
 
 ## [0.3.0] - 2026-10-28
 
-> **破坏性变更**：CLI 从 `--flag` 风格改为子命令风格。旧语法已移除，迁移见 [CLI 迁移指南](docs/CLI迁移指南-v0.3.0.md)。
+> **破坏性变更**：CLI 从 `--flag` 风格改为子命令风格。旧语法已移除，迁移说明已归档，不再随仓库发布。
 >
 > **验收范围**：Windows 侧已完成本机验收；Linux 侧已实现但未做完整验收，相关项后置到 v0.3.x（见 [开发缺口 · Linux 适配后置](docs/开发缺口.md#linux-适配后置v03x)）。
 
@@ -507,7 +507,7 @@ v0.3.3 加强插件面板 hover 反馈时，只改了过渡属性写法，与界
 - **插件打包与安装**：`pnpm pack` 产出 tarball；`install.ps1` / `uninstall.ps1` 存为 UTF-8 with BOM 并检查 `$LASTEXITCODE`；缺 `dsh-web-app` 时默认报错，`-Force` 才降级。
 
 ### 文档
-- 新增 [CLI 迁移指南](docs/CLI迁移指南-v0.3.0.md)（旧→新对照 + 脚本迁移示例）。
+- 新增 CLI 迁移指南（历史资料，已归档）。
 - 使用手册与 README 同步更新。
 
 ### 新增

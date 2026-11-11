@@ -221,7 +221,7 @@ pub(crate) async fn launch_window(
     // ── topbar 事件监听（A1，v0.3.7）：绑定到本窗口 ──
     // 版本号由闭包捕获，payload 中的 version 字段不再被采信，从而杜绝
     // 「dsh 页面伪造 version 关掉/重启别的版本窗口」的越权路径。
-    // 见 docs/v0.3.7规划.md §3.2。
+    // 见历史 v0.3.7 安全加固说明（已归档）。
     {
         use tauri::Listener;
         // topbar-log：写前端日志
