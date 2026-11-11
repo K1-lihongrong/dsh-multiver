@@ -7,7 +7,7 @@
 
 ---
 
-## [0.4.0-alpha.3] - 2026-11-10
+## [0.4.0-alpha.3] - 2026-11-11
 
 ### 一键更新修复
 
@@ -20,6 +20,26 @@
 - 新增运行中 exe 替换、回滚、重启脚本无管道等回归测试。
 
 **用户可见变化**：更新失败会显示真实错误且不退出；更新成功后自动重启为新版本，不再出现退出后仍旧版。
+
+### A2 技术债收口
+
+- dsh_adapter 拆分为 detect / v0_1 / v0_3 / mod，统一 CLI 入口、profile 目录和版本能力门控。
+- 未知版本走安全适配器，不误开 allow-version 等新版本专属能力。
+- 新增 JobEventSink、CancellationToken、started_at 和 64 条历史上限；淘汰 Job 时同步清理 token。
+- launch、scan、install、插件操作、批量更新和共享 home 体检迁移到统一 job:* 事件。
+- 旧进度/取消事件继续保留，扫描取消同时接入 Job token 与旧全局标记。
+- 修复插件操作 spawn_blocking 返回类型错误，并收口 clippy 告警。
+
+**用户可见变化**：后台任务进度和取消行为保持兼容；插件命令按 DSH 版本能力门控，未知版本走保守默认。
+
+### 兼容矩阵与验证
+
+- 2026-11-11 兼容矩阵回归：11 个 DSH 版本全部通过。
+- 每个版本验证 plugin add/remove/add、dsh web 启动、state 200/ok、无 cookie 401、带 cookie GET 405。
+- 真实数据根 config.json 的 SHA256 前后一致；测试 home 全部位于 %TEMP%。
+- Rust 单测 256 passed / 1 ignored。
+- E2E 63 passed。
+- cargo fmt --check、cargo check --all-targets、cargo clippy --all-targets -D warnings、pnpm build 通过。
 
 ---
 
