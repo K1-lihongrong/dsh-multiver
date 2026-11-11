@@ -31,6 +31,13 @@ pub struct Instance {
     pub state: InstanceState,
 }
 
+/// 一次启动/运行的目标：home 类型 + 显式实例 id。
+#[derive(Debug, Clone)]
+pub struct LaunchTarget {
+    pub home_ref: HomeRef,
+    pub instance: Option<InstanceId>,
+}
+
 /// 管理器配置，持久化到 <根目录>/config.json
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
@@ -275,19 +282,54 @@ impl Config {
         }
     }
 
-    /// 计算某版本 + 可选实例对应的 home 类型。
+    /// 实例是否已挂载到该版本。
+    pub fn is_mounted(&self, version: &VersionId, id: &InstanceId) -> bool {
+        self.version_instances
+            .get(version)
+            .map(|ids| ids.contains(id))
+            .unwrap_or(false)
+    }
+
+    /// 解析本次启动/运行的目标。
     ///
-    /// 规则：显式实例 > selected_target 的显式值 > 共享/官方默认。
-    /// selected_target 缺失或为 null 都回共享 home，不做「回落到第一个挂载实例」
-    /// 的隐式推断——主按钮开哪份数据必须由配置明确表达。
-    pub fn home_ref_for(&self, version: &VersionId, instance: Option<&InstanceId>) -> HomeRef {
-        if let Some(id) = instance {
-            return HomeRef::Instance(id.clone());
+    /// 显式实例必须存在且已挂载，否则报错；未显式指定时看 selected_target，
+    /// 但只有目标实例仍存在且已挂载才使用，否则回共享/官方默认。
+    pub fn resolve_target(
+        &self,
+        version: &VersionId,
+        explicit: Option<&InstanceId>,
+    ) -> Result<LaunchTarget, String> {
+        if let Some(id) = explicit {
+            if !self.instance_exists(id) {
+                return Err(format!("实例 {id} 不存在"));
+            }
+            if !self.is_mounted(version, id) {
+                return Err(format!("实例 {id} 未挂载到 {version}"));
+            }
+            return Ok(LaunchTarget {
+                home_ref: HomeRef::Instance(id.clone()),
+                instance: Some(id.clone()),
+            });
         }
         if let Some(Some(id)) = self.selected_target.get(version) {
-            return HomeRef::Instance(id.clone());
+            if self.instance_exists(id) && self.is_mounted(version, id) {
+                return Ok(LaunchTarget {
+                    home_ref: HomeRef::Instance(id.clone()),
+                    instance: Some(id.clone()),
+                });
+            }
         }
-        self.default_home_ref()
+        Ok(LaunchTarget {
+            home_ref: self.default_home_ref(),
+            instance: None,
+        })
+    }
+
+    /// 计算某版本 + 可选实例对应的 home 类型（显式实例非法时退回默认）。
+    pub fn home_ref_for(&self, version: &VersionId, instance: Option<&InstanceId>) -> HomeRef {
+        self.resolve_target(version, instance)
+            .map(|t| t.home_ref)
+            .unwrap_or_else(|_| self.default_home_ref())
     }
 
     fn default_home_ref(&self) -> HomeRef {
@@ -387,6 +429,14 @@ impl Config {
     /// 实例 id 是否存在于实例表。
     pub fn instance_exists(&self, id: &InstanceId) -> bool {
         self.instances.iter().any(|i| &i.id == id)
+    }
+
+    /// 版本 -> 已挂载实例 id 列表（供 webview 两级清理使用）。
+    pub fn mounted_map(&self) -> std::collections::HashMap<String, Vec<String>> {
+        self.version_instances
+            .iter()
+            .map(|(v, ids)| (v.to_string(), ids.iter().map(|id| id.to_string()).collect()))
+            .collect()
     }
 
     /// 该实例挂载了哪些版本（按版本号排序）。
@@ -1471,6 +1521,37 @@ mod tests {
         assert_eq!(second.to_string(), "i2");
         assert!(cfg.instance_exists(&first));
         assert_eq!(cfg.mounted_versions(&first), Vec::<VersionId>::new());
+    }
+
+    #[test]
+    fn resolve_target_prefers_explicit_then_selected_then_shared() {
+        let mut cfg = Config::default();
+        let version = VersionId::new("0.1.0").unwrap();
+        let i1 = cfg.create_instance("A", 0).unwrap();
+        let i2 = cfg.create_instance("B", 0).unwrap();
+
+        assert!(matches!(
+            cfg.resolve_target(&version, None).unwrap().home_ref,
+            HomeRef::Shared
+        ));
+        cfg.attach_instance(&version, &i1).unwrap();
+        assert_eq!(
+            cfg.resolve_target(&version, None).unwrap().instance,
+            Some(i1.clone())
+        );
+        cfg.attach_instance(&version, &i2).unwrap();
+        cfg.set_selected_target(&version, Some(&i2)).unwrap();
+        assert_eq!(
+            cfg.resolve_target(&version, None).unwrap().instance,
+            Some(i2.clone())
+        );
+        assert_eq!(
+            cfg.resolve_target(&version, Some(&i1)).unwrap().instance,
+            Some(i1.clone())
+        );
+        assert!(cfg
+            .resolve_target(&version, Some(&InstanceId::new("i9").unwrap()))
+            .is_err());
     }
 
     #[test]

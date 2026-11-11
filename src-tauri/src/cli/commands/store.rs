@@ -37,7 +37,11 @@ pub fn cmd_maintenance(kind: &str, dry_run: bool, json: bool) -> i32 {
     let mut cleaned: Option<usize> = None;
     let mut pruned = false;
     if kind == "cleanup" || kind == "all" {
-        let removed = maintenance::cleanup_orphan_webviews(&ctx.dirs.versions, &ctx.dirs.webview);
+        let removed = maintenance::cleanup_orphan_webviews(
+            &ctx.dirs.versions,
+            &ctx.dirs.webview,
+            &ctx.cfg.mounted_map(),
+        );
         ctx.cfg.maintenance.last_cleanup_at = Some(maintenance::now_secs());
         ctx.cfg.maintenance.last_cleanup_count = removed.len() as u64;
         cleaned = Some(removed.len());
@@ -153,7 +157,11 @@ pub fn cmd_doctor(json: bool) -> i32 {
     }));
 
     // 5) 孤立 webview 目录（版本已卸载但 webview 残留）——只报告，不自动删
-    let orphans = crate::maintenance::list_orphan_webviews(&ctx.dirs.versions, &ctx.dirs.webview);
+    let orphans = crate::maintenance::list_orphan_webviews(
+        &ctx.dirs.versions,
+        &ctx.dirs.webview,
+        &ctx.cfg.mounted_map(),
+    );
     items.push(serde_json::json!({
         "name": "孤立 webview 缓存", "ok": orphans.is_empty(), "critical": false,
         "detail": if orphans.is_empty() { "无".to_string() }
@@ -229,7 +237,11 @@ pub fn cmd_clean(dry_run: bool, json: bool) -> i32 {
     if let Err(e) = ctx.dirs.ensure() {
         return crate::cli::output::info_fail(json, &format!("创建数据目录失败：{}", e));
     }
-    let removed = maintenance::cleanup_orphan_webviews(&ctx.dirs.versions, &ctx.dirs.webview);
+    let removed = maintenance::cleanup_orphan_webviews(
+        &ctx.dirs.versions,
+        &ctx.dirs.webview,
+        &ctx.cfg.mounted_map(),
+    );
     let trashed = maintenance::cleanup_trash(&ctx.dirs.trash);
     if json {
         println!(

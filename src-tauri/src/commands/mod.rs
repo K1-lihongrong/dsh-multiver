@@ -22,6 +22,7 @@
 mod backup;
 mod config_ops;
 mod env;
+mod instances;
 mod isolated;
 mod launch;
 mod misc;
@@ -34,6 +35,7 @@ mod version;
 pub(crate) use backup::*;
 pub(crate) use config_ops::*;
 pub(crate) use env::*;
+pub(crate) use instances::*;
 pub(crate) use isolated::*;
 pub(crate) use launch::*;
 pub(crate) use misc::*;
@@ -59,12 +61,19 @@ mod tests {
 
     #[test]
     fn topbar_script_substitutes_placeholders() {
-        let s = build_topbar_script("0.2.0-rc.2", "http://127.0.0.1:1234/?token=abc", "deadbeef");
+        let s = build_topbar_script(
+            "0.2.0-rc.2",
+            "0.2.0-rc.2 · 对比用",
+            "http://127.0.0.1:1234/?token=abc",
+            "deadbeef",
+        );
         // 占位符应被替换
         assert!(!s.contains("__VER__"));
+        assert!(!s.contains("__LABEL__"));
         assert!(!s.contains("__URL__"));
         assert!(!s.contains("__TOKEN__"));
         assert!(s.contains("0.2.0-rc.2"));
+        assert!(s.contains("0.2.0-rc.2 · 对比用"));
         assert!(s.contains("deadbeef"));
         assert!(s.contains("http://127.0.0.1:1234/?token=abc"));
     }
@@ -72,7 +81,7 @@ mod tests {
     #[test]
     fn topbar_script_escapes_quote_and_backslash() {
         // 单引号、反斜杠应被转义，防注入 JS 单引号字符串字面量
-        let s = build_topbar_script("v'1", "http://x/'y\\z", "tok'en");
+        let s = build_topbar_script("v'1", "v'1 · A", "http://x/'y\\z", "tok'en");
         assert!(s.contains("v\\'1"), "单引号应被转义: {}", s);
         assert!(s.contains("http://x/\\'y"), "URL 中单引号应被转义");
         assert!(s.contains("tok\\'en"), "token 中单引号应被转义");
@@ -98,7 +107,7 @@ mod tests {
     /// 同步改这里的期望值；三者（JS / 监听器 / 本断言）必须同时更新。
     #[test]
     fn topbar_script_emits_events_matching_rust_listeners() {
-        let s = build_topbar_script("0.2.0", "http://127.0.0.1:1/", "deadbeef");
+        let s = build_topbar_script("0.2.0", "0.2.0", "http://127.0.0.1:1/", "deadbeef");
 
         // 通道：remote 上下文只能走插件命令
         assert!(
