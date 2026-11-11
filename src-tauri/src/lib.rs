@@ -11,6 +11,7 @@ mod dsh_adapter;
 mod dsplugins;
 mod envcheck;
 mod install_service;
+mod instances;
 mod jobobj;
 mod jobs;
 mod launcher;

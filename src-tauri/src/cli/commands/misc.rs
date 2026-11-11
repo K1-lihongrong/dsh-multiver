@@ -2,6 +2,9 @@
 
 use crate::cli::load_ctx;
 use crate::cli::output::{info_fail, json_str, out_result};
+use crate::cli::IsolateAction;
+use crate::domain::{HomeRef, InstanceId, VersionId};
+use crate::instances;
 use crate::runtime::RuntimeProgress;
 use crate::versions;
 
@@ -93,24 +96,67 @@ pub fn cmd_shortcut(version: &str, dry_run: bool, json: bool) -> i32 {
     }
 }
 
-/// `copy-shared <版本>`：把共享 home 数据复制到该隔离版本的独立 home。
-/// 该版本必须已开启隔离。
-pub fn cmd_copy_shared(version: &str, dry_run: bool, json: bool) -> i32 {
+/// 解析版本默认目标或显式实例的 home；未隔离且未指定实例时报错。
+fn resolve_cli_home(
+    cfg: &crate::config::Config,
+    dirs: &crate::config::Dirs,
+    version: &str,
+    instance: Option<&str>,
+) -> Result<(std::path::PathBuf, Option<String>), String> {
+    let vid = VersionId::new(version)?;
+    match instance {
+        Some(raw) => {
+            let id = InstanceId::new(raw)?;
+            if !cfg.instance_exists(&id) {
+                return Err(format!("实例 {} 不存在", id));
+            }
+            let mounted = cfg
+                .version_instances
+                .get(&vid)
+                .map(|ids| ids.contains(&id))
+                .unwrap_or(false);
+            if !mounted {
+                return Err(format!("实例 {} 未挂载到 {}", id, version));
+            }
+            Ok((
+                crate::paths::resolve_home_ref(dirs, &HomeRef::Instance(id.clone())),
+                Some(id.to_string()),
+            ))
+        }
+        None => {
+            let target = cfg.home_ref_for(&vid, None);
+            if matches!(target, HomeRef::Shared | HomeRef::Official) {
+                return Err("该版本未开启隔离，请用 --instance 指定实例".into());
+            }
+            Ok((
+                crate::paths::resolve_home_ref(dirs, &target),
+                match target {
+                    HomeRef::Instance(id) => Some(id.to_string()),
+                    _ => None,
+                },
+            ))
+        }
+    }
+}
+
+/// `copy-shared <版本> [--instance <id>]`：把共享 home 数据复制到目标实例 home。
+pub fn cmd_copy_shared(version: &str, instance: Option<&str>, dry_run: bool, json: bool) -> i32 {
     let ctx = load_ctx();
-    if !ctx.cfg.isolated_versions.iter().any(|v| v == version) {
-        return info_fail(
-            json,
-            &format!("{} 未开启隔离（先用 isolate {} 开启）", version, version),
-        );
+    if !versions::exists(&ctx.dirs.versions, version) {
+        return info_fail(json, &format!("版本 {} 未安装", version));
     }
     let shared = ctx.dirs.home.clone();
-    let isolated = crate::paths::resolve_home(&ctx.cfg, &ctx.dirs, version);
+    let (isolated, instance_id) = match resolve_cli_home(&ctx.cfg, &ctx.dirs, version, instance) {
+        Ok(v) => v,
+        Err(e) => return info_fail(json, &e),
+    };
     if dry_run {
         if json {
             println!(
                 "{}",
                 json_str(&serde_json::json!({
                     "dry_run": true, "action": "copy-shared", "version": version,
+                    "instance": instance_id,
                     "from": shared.to_string_lossy(), "to": isolated.to_string_lossy(),
                 }))
             );
@@ -133,19 +179,23 @@ pub fn cmd_copy_shared(version: &str, dry_run: bool, json: bool) -> i32 {
     }
 }
 
-/// `clear-isolated <版本>`：清空该隔离版本的独立 home（保留版本本身）。
-pub fn cmd_clear_isolated(version: &str, dry_run: bool, json: bool) -> i32 {
+/// `clear-isolated <版本> [--instance <id>]`：清空目标实例 home（保留版本本身）。
+pub fn cmd_clear_isolated(version: &str, instance: Option<&str>, dry_run: bool, json: bool) -> i32 {
     let ctx = load_ctx();
     if !versions::exists(&ctx.dirs.versions, version) {
         return info_fail(json, &format!("版本 {} 未安装", version));
     }
+    let (home, instance_id) = match resolve_cli_home(&ctx.cfg, &ctx.dirs, version, instance) {
+        Ok(v) => v,
+        Err(e) => return info_fail(json, &e),
+    };
     if dry_run {
-        let home = crate::paths::resolve_home(&ctx.cfg, &ctx.dirs, version);
         if json {
             println!(
                 "{}",
                 json_str(&serde_json::json!({
                     "dry_run": true, "action": "clear-isolated", "version": version,
+                    "instance": instance_id,
                     "home": home.to_string_lossy(),
                 }))
             );
@@ -155,7 +205,6 @@ pub fn cmd_clear_isolated(version: &str, dry_run: bool, json: bool) -> i32 {
         }
         return 0;
     }
-    let home = crate::paths::resolve_home(&ctx.cfg, &ctx.dirs, version);
     let (ok, msg) = versions::clear_home_dir(&home, version);
     out_result(json, ok, &msg);
     if ok {
@@ -165,57 +214,129 @@ pub fn cmd_clear_isolated(version: &str, dry_run: bool, json: bool) -> i32 {
     }
 }
 
-/// `isolate <版本> [--off]`：开关数据隔离（默认开启；--off 关闭）。
-/// 与 GUI 的 set_isolated 行为一致：改配置 + 预创建隔离目录 + 重生成转发脚本。
-pub fn cmd_isolate(version: &str, on: bool, dry_run: bool, json: bool) -> i32 {
+/// `isolate <版本> [--off|--list|--attach <id>|--detach <id>]`。
+/// 无选项 = 幂等确保；旧 --off 兼容为解除该版本全部挂载（实例本体保留）。
+pub fn cmd_isolate(version: &str, action: IsolateAction, dry_run: bool, json: bool) -> i32 {
     let mut ctx = load_ctx();
+    let installed = versions::exists(&ctx.dirs.versions, version);
+    let vid = match VersionId::new(version) {
+        Ok(v) => v,
+        Err(e) => return info_fail(json, &e),
+    };
+
+    if let IsolateAction::List = action {
+        if !installed {
+            return info_fail(json, &format!("版本 {} 未安装", version));
+        }
+        let view = instances::views(&ctx.cfg, &ctx.dirs, &std::collections::BTreeMap::new());
+        let selected = ctx
+            .cfg
+            .selected_target
+            .get(&vid)
+            .and_then(|t| t.as_ref())
+            .map(|id| id.to_string());
+        let list: Vec<_> = view
+            .instances
+            .into_iter()
+            .filter(|i| i.mounted_versions.iter().any(|v| v == version))
+            .collect();
+        if json {
+            println!(
+                "{}",
+                json_str(&serde_json::json!({
+                    "version": version,
+                    "isolated": !list.is_empty(),
+                    "selected_target": selected,
+                    "instances": list,
+                }))
+            );
+        } else {
+            println!("版本 {} 的实例：", version);
+            println!("  主按钮：{}", selected.as_deref().unwrap_or("共享 home"));
+            if list.is_empty() {
+                println!("  （无挂载实例）");
+            }
+            for inst in &list {
+                println!("  {}  {}  home={}", inst.id, inst.name, inst.home);
+            }
+        }
+        return 0;
+    }
+
+    let action_desc = match &action {
+        IsolateAction::Ensure => "开启数据隔离（确保默认实例）".to_string(),
+        IsolateAction::Off => "解除该版本与全部实例的挂载（实例保留）".to_string(),
+        IsolateAction::Attach { id } => format!("把实例 {id} 挂载到 {version}"),
+        IsolateAction::Detach { id } => format!("把实例 {id} 从 {version} 解除挂载"),
+        IsolateAction::List => unreachable!(),
+    };
     if dry_run {
-        let installed = versions::exists(&ctx.dirs.versions, version);
         if json {
             println!(
                 "{}",
                 json_str(&serde_json::json!({
                     "dry_run": true, "action": "isolate", "version": version,
-                    "isolated": on, "installed": installed,
+                    "operation": action_desc, "installed": installed,
                 }))
             );
         } else {
-            println!(
-                "[dry-run] 将{}版本 {} 的数据隔离",
-                if on { "开启" } else { "关闭" },
-                version
-            );
+            println!("[dry-run] 将{}", action_desc);
             if !installed {
                 println!("[dry-run] 警告：该版本未安装（实际执行会失败）");
             }
-            println!("[dry-run] 会重生成终端转发脚本 dsh（若该版本是默认版本）");
             println!("[dry-run] 未执行任何操作");
         }
         return 0;
     }
-    if !versions::exists(&ctx.dirs.versions, version) {
+    if !installed {
         return info_fail(json, &format!("版本 {} 未安装", version));
     }
-    let vid = crate::domain::VersionId::new(version)
-        .unwrap_or_else(|_| crate::domain::VersionId::new("invalid").unwrap());
-    if on {
-        if let Err(e) = ctx.cfg.ensure_default_instance(&vid, &ctx.dirs.root) {
-            return info_fail(json, &format!("开启隔离失败：{}", e));
+
+    let saved_by_service = matches!(
+        &action,
+        IsolateAction::Attach { .. } | IsolateAction::Detach { .. }
+    );
+    let result = match action {
+        IsolateAction::Ensure => ctx
+            .cfg
+            .ensure_default_instance(&vid, &ctx.dirs.root)
+            .map(|_| format!("{} 已开启数据隔离", version)),
+        IsolateAction::Off => {
+            ctx.cfg.detach_version(&vid);
+            Ok(format!("{} 已解除全部实例挂载（实例本体保留）", version))
         }
-    } else {
-        ctx.cfg.detach_version(&vid);
-    }
-    if let Err(e) = ctx.cfg.save(&ctx.mdir) {
-        return info_fail(json, &format!("保存配置失败：{}", e));
-    }
-    crate::paths::regenerate_forward_script(&ctx.mdir, &ctx.cfg);
-    let msg = if on {
-        format!("{} 已开启数据隔离", version)
-    } else {
-        format!("{} 已关闭数据隔离", version)
+        IsolateAction::Attach { id } => {
+            let iid = match InstanceId::new(&id) {
+                Ok(v) => v,
+                Err(e) => return info_fail(json, &e),
+            };
+            instances::attach(&mut ctx.cfg, &ctx.mdir, &ctx.dirs.versions, &vid, &iid)
+                .map(|_| format!("实例 {} 已挂载到 {}", iid, version))
+        }
+        IsolateAction::Detach { id } => {
+            let iid = match InstanceId::new(&id) {
+                Ok(v) => v,
+                Err(e) => return info_fail(json, &e),
+            };
+            instances::detach(&mut ctx.cfg, &ctx.mdir, &vid, &iid)
+                .map(|_| format!("实例 {} 已从 {} 解除挂载", iid, version))
+        }
+        IsolateAction::List => unreachable!(),
     };
-    out_result(json, true, &msg);
-    0
+
+    match result {
+        Ok(msg) => {
+            if !saved_by_service {
+                if let Err(e) = ctx.cfg.save(&ctx.mdir) {
+                    return info_fail(json, &format!("保存配置失败：{}", e));
+                }
+                crate::paths::regenerate_forward_script(&ctx.mdir, &ctx.cfg);
+            }
+            out_result(json, true, &msg);
+            0
+        }
+        Err(e) => info_fail(json, &format!("操作失败：{}", e)),
+    }
 }
 
 /// `import <文件>`：导入备份文件（export 生成的）里的配置。
@@ -279,15 +400,40 @@ pub fn cmd_import(file: &str, dry_run: bool, json: bool) -> i32 {
     }
 }
 
-/// `run <版本>`：启动 dsh web（新控制台窗口 + 自动打开系统浏览器）。
+/// `run <版本> [--instance <id>]`：启动 dsh web（新控制台窗口 + 自动打开系统浏览器）。
 /// 与 GUI 的「浏览器打开」行为一致：关掉控制台窗口即停止服务。
-pub fn cmd_run(version: &str, json: bool) -> i32 {
+pub fn cmd_run(version: &str, instance: Option<&str>, json: bool) -> i32 {
     let ctx = load_ctx();
     let vdir = ctx.dirs.versions.join(version);
     if !vdir.join("node_modules").exists() {
         return info_fail(json, &format!("版本 {} 未安装", version));
     }
-    let home = crate::paths::resolve_home(&ctx.cfg, &ctx.dirs, version);
+    let vid = match VersionId::new(version) {
+        Ok(v) => v,
+        Err(e) => return info_fail(json, &e),
+    };
+    let home = match instance {
+        Some(raw) => {
+            let id = match InstanceId::new(raw) {
+                Ok(v) => v,
+                Err(e) => return info_fail(json, &e),
+            };
+            if !ctx.cfg.instance_exists(&id) {
+                return info_fail(json, &format!("实例 {} 不存在", id));
+            }
+            let mounted = ctx
+                .cfg
+                .version_instances
+                .get(&vid)
+                .map(|ids| ids.contains(&id))
+                .unwrap_or(false);
+            if !mounted {
+                return info_fail(json, &format!("实例 {} 未挂载到 {}", id, version));
+            }
+            crate::paths::resolve_home_ref(&ctx.dirs, &HomeRef::Instance(id))
+        }
+        None => crate::paths::resolve_home(&ctx.cfg, &ctx.dirs, version),
+    };
 
     // 端口：固定 3080；被占用则随机（CLI 无交互，直接随机）
     let port: u16 = if crate::launcher::port_in_use(3080) {
@@ -308,7 +454,8 @@ pub fn cmd_run(version: &str, json: bool) -> i32 {
             println!(
                 "{}",
                 json_str(&serde_json::json!({
-                    "ok": true, "version": version, "port": port, "home": home.to_string_lossy(),
+                    "ok": true, "version": version, "instance": instance,
+                    "port": port, "home": home.to_string_lossy(),
                 }))
             );
         } else {

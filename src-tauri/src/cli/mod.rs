@@ -7,13 +7,15 @@
 //!   list / which / info <版本> / versions / env / doctor
 //!   install <版本> [--registry <url>] / uninstall <版本> / set-default <版本>
 //!   set-root <目录>（设置数据根；与 GUI 的 set_root 等价）
-//!   isolate <版本> [--off] / clean
-//!   shortcut <版本> / copy-shared <版本> / clear-isolated <版本>
-//!   export [<文件>] / import <文件> / run <版本>
+//!   isolate <版本> [--off|--list|--attach <id>|--detach <id>] / clean
+//!   instance create|list|rename|remove
+//!   shortcut <版本> / copy-shared <版本> [--instance <id>] / clear-isolated <版本> [--instance <id>]
+//!   export [<文件>] / import <文件> / run <版本> [--instance <id>]
 //!   setup-runtime / update / maintenance [--cleanup|--prune]
 //!   help / version
 //!
-//! 修饰符（保持 `--`）：`--json` / `--dry-run` / `--force` / `--registry <url>` / `--off`
+//! 修饰符（保持 `--`）：`--json` / `--dry-run` / `--force` / `--registry <url>` /
+//! `--off` / `--list` / `--attach <版本>` / `--detach <id>` / `--instance <id>`
 //!
 //! 设计取舍：
 //! - **无交互确认**：破坏性命令靠"精确参数"保护
@@ -34,6 +36,25 @@ use std::path::PathBuf;
 
 /// 本程序版本（取自 Cargo.toml）
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+
+/// isolate 的动作（旧 `isolate <版本> [--off]` 保持兼容）。
+#[derive(Debug)]
+pub enum IsolateAction {
+    Ensure,
+    Off,
+    List,
+    Attach { id: String },
+    Detach { id: String },
+}
+
+/// instance 子命令的动作。
+#[derive(Debug)]
+pub enum InstanceAction {
+    Create { name: String, attaches: Vec<String> },
+    List,
+    Rename { id: String, name: String },
+    Remove { id: String },
+}
 
 /// 解析出的 CLI 命令。
 #[derive(Debug)]
@@ -67,10 +88,14 @@ pub enum CliCommand {
     Versions,
     /// 环境检查（Node / pnpm / 根目录可写 / 磁盘 / npm 源连通）
     Env,
-    /// 开关某版本的数据隔离（on=true 开启，false 关闭）
+    /// 实例管理（创建 / 列表 / 改名 / 删除）
+    Instance {
+        action: InstanceAction,
+    },
+    /// 版本 ↔ 实例挂载 / 主按钮目标 / 旧 isolate 开关
     Isolate {
         version: String,
-        on: bool,
+        action: IsolateAction,
     },
     /// 清理：孤立 webview 缓存 + 回收站（等价 maintenance --cleanup + trash）
     Clean,
@@ -83,10 +108,12 @@ pub enum CliCommand {
     /// 把共享 home 数据复制到某隔离版本的独立 home
     CopyShared {
         version: String,
+        instance: Option<String>,
     },
     /// 清空某隔离版本的独立 home（保留版本本身）
     ClearIsolated {
         version: String,
+        instance: Option<String>,
     },
     /// 导出配置 + 版本清单到指定文件（换机迁移用）
     Export {
@@ -95,6 +122,7 @@ pub enum CliCommand {
     /// 启动 dsh web（新控制台 + 自动打开系统浏览器）
     Run {
         version: String,
+        instance: Option<String>,
     },
     /// 导入配置（从 export 生成的备份文件）
     Import {

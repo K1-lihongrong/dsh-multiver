@@ -3,7 +3,7 @@
 //! 语法：`dsh-multiver <子命令> [参数...] [修饰符...]`
 //! 修饰符保持 `--`：`--json` / `--dry-run` / `--force` / `--registry <url>` / `--off`
 
-use super::CliCommand;
+use super::{CliCommand, InstanceAction, IsolateAction};
 
 /// 从命令行参数解析出 CLI 命令。
 ///
@@ -101,23 +101,23 @@ pub fn parse(args: &[String]) -> Result<Option<CliCommand>, String> {
         "shortcut" => CliCommand::Shortcut {
             version: take_value(rest, "shortcut")?,
         },
-        "copy-shared" => CliCommand::CopyShared {
-            version: take_value(rest, "copy-shared")?,
-        },
-        "clear-isolated" => CliCommand::ClearIsolated {
-            version: take_value(rest, "clear-isolated")?,
-        },
-        "run" => CliCommand::Run {
-            version: take_value(rest, "run")?,
-        },
+        "copy-shared" => {
+            let (version, instance) = parse_version_with_instance(rest, "copy-shared")?;
+            CliCommand::CopyShared { version, instance }
+        }
+        "clear-isolated" => {
+            let (version, instance) = parse_version_with_instance(rest, "clear-isolated")?;
+            CliCommand::ClearIsolated { version, instance }
+        }
+        "run" => {
+            let (version, instance) = parse_version_with_instance(rest, "run")?;
+            CliCommand::Run { version, instance }
+        }
         "import" => CliCommand::Import {
             file: take_value(rest, "import")?,
         },
-        "isolate" => {
-            let version = take_value(rest, "isolate")?;
-            let on = !args.iter().any(|x| x == "--off");
-            CliCommand::Isolate { version, on }
-        }
+        "isolate" => parse_isolate(rest, args[..idx].iter().any(|x| x == "--off"))?,
+        "instance" => parse_instance(rest)?,
         "export" => {
             // 可选跟随一个非 -- 开头的值作为输出文件
             let file = rest
@@ -149,6 +149,182 @@ fn take_value(rest: &[String], cmd: &str) -> Result<String, String> {
         Some(v) if !v.starts_with("--") && !v.starts_with('-') => Ok(v.clone()),
         _ => Err(format!("{} 缺少参数值", cmd)),
     }
+}
+
+fn is_global_flag(a: &str) -> bool {
+    matches!(a, "--json" | "--dry-run" | "--force")
+}
+
+fn next_value(rest: &[String], i: usize, key: &str) -> Result<String, String> {
+    match rest.get(i + 1) {
+        Some(v) if !v.starts_with("--") && !v.starts_with('-') => Ok(v.clone()),
+        _ => Err(format!("{key} 缺少参数值")),
+    }
+}
+
+fn ensure_only_globals(rest: &[String], cmd: &str) -> Result<(), String> {
+    for a in rest {
+        if is_global_flag(a) {
+            continue;
+        }
+        return Err(format!("{cmd} 不接受参数：{a}"));
+    }
+    Ok(())
+}
+
+/// 解析 `<版本> [--instance <id>]` 形式。
+fn parse_version_with_instance(
+    rest: &[String],
+    cmd: &str,
+) -> Result<(String, Option<String>), String> {
+    let version = match rest.first() {
+        Some(v) if !v.starts_with('-') => v.clone(),
+        _ => return Err(format!("{cmd} 缺少版本号")),
+    };
+    let mut instance = None;
+    let mut i = 1;
+    while i < rest.len() {
+        match rest[i].as_str() {
+            "--instance" => {
+                if instance.is_some() {
+                    return Err("--instance 只能出现一次".into());
+                }
+                instance = Some(next_value(rest, i, "--instance")?);
+                i += 2;
+            }
+            a if is_global_flag(a) => i += 1,
+            a if a.starts_with('-') => return Err(format!("未知参数：{a}")),
+            a => return Err(format!("{cmd} 多余参数：{a}")),
+        }
+    }
+    Ok((version, instance))
+}
+
+fn set_isolate_action(slot: &mut Option<IsolateAction>, next: IsolateAction) -> Result<(), String> {
+    if slot.is_some() {
+        return Err("isolate 的 --off / --list / --attach / --detach 只能选一个".into());
+    }
+    *slot = Some(next);
+    Ok(())
+}
+
+/// 解析 `isolate <版本> [--off|--list|--attach <id>|--detach <id>]`。
+fn parse_isolate(rest: &[String], off_before: bool) -> Result<CliCommand, String> {
+    let version = match rest.first() {
+        Some(v) if !v.starts_with('-') => v.clone(),
+        _ => return Err("isolate 缺少版本号".into()),
+    };
+    let mut action = None;
+    if off_before {
+        action = Some(IsolateAction::Off);
+    }
+    let mut i = 1;
+    while i < rest.len() {
+        match rest[i].as_str() {
+            "--off" => {
+                set_isolate_action(&mut action, IsolateAction::Off)?;
+                i += 1;
+            }
+            "--list" => {
+                set_isolate_action(&mut action, IsolateAction::List)?;
+                i += 1;
+            }
+            "--attach" => {
+                let id = next_value(rest, i, "--attach")?;
+                set_isolate_action(&mut action, IsolateAction::Attach { id })?;
+                i += 2;
+            }
+            "--detach" => {
+                let id = next_value(rest, i, "--detach")?;
+                set_isolate_action(&mut action, IsolateAction::Detach { id })?;
+                i += 2;
+            }
+            a if is_global_flag(a) => i += 1,
+            a if a.starts_with('-') => return Err(format!("未知参数：{a}")),
+            a => return Err(format!("isolate 多余参数：{a}")),
+        }
+    }
+    Ok(CliCommand::Isolate {
+        version,
+        action: action.unwrap_or(IsolateAction::Ensure),
+    })
+}
+
+/// 解析 `instance create|list|rename|remove`。
+fn parse_instance(rest: &[String]) -> Result<CliCommand, String> {
+    let Some(sub) = rest.first() else {
+        return Err("instance 缺少子命令（create / list / rename / remove）".into());
+    };
+    let action = match sub.as_str() {
+        "create" => {
+            let mut name = None;
+            let mut attaches = Vec::new();
+            let mut i = 1;
+            while i < rest.len() {
+                match rest[i].as_str() {
+                    "--name" => {
+                        if name.is_some() {
+                            return Err("--name 只能出现一次".into());
+                        }
+                        name = Some(next_value(rest, i, "--name")?);
+                        i += 2;
+                    }
+                    "--attach" => {
+                        attaches.push(next_value(rest, i, "--attach")?);
+                        i += 2;
+                    }
+                    a if is_global_flag(a) => i += 1,
+                    a if a.starts_with('-') => return Err(format!("未知参数：{a}")),
+                    a => return Err(format!("instance create 不接受位置参数：{a}")),
+                }
+            }
+            let name = name.ok_or_else(|| "instance create 缺少 --name".to_string())?;
+            InstanceAction::Create { name, attaches }
+        }
+        "list" => {
+            ensure_only_globals(&rest[1..], "instance list")?;
+            InstanceAction::List
+        }
+        "rename" => {
+            let mut positional = Vec::new();
+            for a in &rest[1..] {
+                if is_global_flag(a) {
+                    continue;
+                }
+                if a.starts_with('-') {
+                    return Err(format!("未知参数：{a}"));
+                }
+                positional.push(a.clone());
+            }
+            if positional.len() != 2 {
+                return Err("instance rename 需要 <id> <新名>".into());
+            }
+            InstanceAction::Rename {
+                id: positional[0].clone(),
+                name: positional[1].clone(),
+            }
+        }
+        "remove" => {
+            let mut positional = Vec::new();
+            for a in &rest[1..] {
+                if is_global_flag(a) {
+                    continue;
+                }
+                if a.starts_with('-') {
+                    return Err(format!("未知参数：{a}"));
+                }
+                positional.push(a.clone());
+            }
+            if positional.len() != 1 {
+                return Err("instance remove 需要 <id>".into());
+            }
+            InstanceAction::Remove {
+                id: positional[0].clone(),
+            }
+        }
+        other => return Err(format!("未知 instance 子命令：{other}")),
+    };
+    Ok(CliCommand::Instance { action })
 }
 
 /// 在整个参数表里找 `key <value>`，返回 value（与 key 的先后位置无关）
@@ -291,21 +467,92 @@ mod tests {
     }
 
     #[test]
-    fn isolate_off() {
+    fn isolate_actions() {
         match parse(&args(&["isolate", "0.1.7"])) {
-            Ok(Some(CliCommand::Isolate { version, on })) => {
+            Ok(Some(CliCommand::Isolate { version, action })) => {
                 assert_eq!(version, "0.1.7");
-                assert!(on);
+                assert!(matches!(action, IsolateAction::Ensure));
             }
             other => panic!("unexpected: {:?}", other),
         }
         match parse(&args(&["isolate", "0.1.7", "--off"])) {
-            Ok(Some(CliCommand::Isolate { version, on })) => {
-                assert_eq!(version, "0.1.7");
-                assert!(!on);
+            Ok(Some(CliCommand::Isolate { action, .. })) => {
+                assert!(matches!(action, IsolateAction::Off));
             }
             other => panic!("unexpected: {:?}", other),
         }
+        match parse(&args(&["isolate", "0.1.7", "--list"])) {
+            Ok(Some(CliCommand::Isolate { action, .. })) => {
+                assert!(matches!(action, IsolateAction::List));
+            }
+            other => panic!("unexpected: {:?}", other),
+        }
+        match parse(&args(&["isolate", "0.1.7", "--attach", "i2"])) {
+            Ok(Some(CliCommand::Isolate { action, .. })) => match action {
+                IsolateAction::Attach { id } => assert_eq!(id, "i2"),
+                other => panic!("unexpected action: {other:?}"),
+            },
+            other => panic!("unexpected: {:?}", other),
+        }
+        match parse(&args(&["isolate", "0.1.7", "--detach", "i2"])) {
+            Ok(Some(CliCommand::Isolate { action, .. })) => match action {
+                IsolateAction::Detach { id } => assert_eq!(id, "i2"),
+                other => panic!("unexpected action: {other:?}"),
+            },
+            other => panic!("unexpected: {:?}", other),
+        }
+        assert!(parse(&args(&["isolate", "0.1.7", "--off", "--list"])).is_err());
+        assert!(parse(&args(&["isolate", "0.1.7", "--attach"])).is_err());
+    }
+
+    #[test]
+    fn instance_commands() {
+        match parse(&args(&[
+            "instance", "create", "--name", "A", "--attach", "0.1.7", "--attach", "0.2.0",
+        ])) {
+            Ok(Some(CliCommand::Instance {
+                action: InstanceAction::Create { name, attaches },
+            })) => {
+                assert_eq!(name, "A");
+                assert_eq!(attaches, vec!["0.1.7", "0.2.0"]);
+            }
+            other => panic!("unexpected: {:?}", other),
+        }
+        match parse(&args(&["instance", "create", "--name", "A"])) {
+            Ok(Some(CliCommand::Instance {
+                action: InstanceAction::Create { attaches, .. },
+            })) => assert!(attaches.is_empty()),
+            other => panic!("unexpected: {:?}", other),
+        }
+        assert!(parse(&args(&["instance", "create"])).is_err());
+        assert!(parse(&args(&["instance", "create", "--name"])).is_err());
+        assert!(parse(&args(&["instance", "create", "--name", "A", "--name", "B"])).is_err());
+        assert!(parse(&args(&["instance", "create", "--name", "A", "--attach"])).is_err());
+        assert!(parse(&args(&["instance", "create", "--name", "A", "extra"])).is_err());
+
+        assert!(matches!(
+            parse(&args(&["instance", "list"])),
+            Ok(Some(CliCommand::Instance {
+                action: InstanceAction::List
+            }))
+        ));
+        match parse(&args(&["instance", "rename", "i1", "B"])) {
+            Ok(Some(CliCommand::Instance {
+                action: InstanceAction::Rename { id, name },
+            })) => {
+                assert_eq!(id, "i1");
+                assert_eq!(name, "B");
+            }
+            other => panic!("unexpected: {:?}", other),
+        }
+        assert!(parse(&args(&["instance", "rename", "i1"])).is_err());
+        match parse(&args(&["instance", "remove", "i1"])) {
+            Ok(Some(CliCommand::Instance {
+                action: InstanceAction::Remove { id },
+            })) => assert_eq!(id, "i1"),
+            other => panic!("unexpected: {:?}", other),
+        }
+        assert!(parse(&args(&["instance", "remove"])).is_err());
     }
 
     #[test]
@@ -350,7 +597,17 @@ mod tests {
         }
         assert!(parse(&args(&["info"])).is_err());
         match parse(&args(&["run", "0.1.7"])) {
-            Ok(Some(CliCommand::Run { version })) => assert_eq!(version, "0.1.7"),
+            Ok(Some(CliCommand::Run { version, instance })) => {
+                assert_eq!(version, "0.1.7");
+                assert!(instance.is_none());
+            }
+            other => panic!("unexpected: {:?}", other),
+        }
+        match parse(&args(&["run", "0.1.7", "--instance", "i2"])) {
+            Ok(Some(CliCommand::Run { version, instance })) => {
+                assert_eq!(version, "0.1.7");
+                assert_eq!(instance.as_deref(), Some("i2"));
+            }
             other => panic!("unexpected: {:?}", other),
         }
         assert!(parse(&args(&["run"])).is_err());
@@ -363,11 +620,29 @@ mod tests {
             other => panic!("unexpected: {:?}", other),
         }
         match parse(&args(&["copy-shared", "0.1.7"])) {
-            Ok(Some(CliCommand::CopyShared { version })) => assert_eq!(version, "0.1.7"),
+            Ok(Some(CliCommand::CopyShared { version, instance })) => {
+                assert_eq!(version, "0.1.7");
+                assert!(instance.is_none());
+            }
+            other => panic!("unexpected: {:?}", other),
+        }
+        match parse(&args(&["copy-shared", "0.1.7", "--instance", "i2"])) {
+            Ok(Some(CliCommand::CopyShared { instance, .. })) => {
+                assert_eq!(instance.as_deref(), Some("i2"))
+            }
             other => panic!("unexpected: {:?}", other),
         }
         match parse(&args(&["clear-isolated", "0.1.7"])) {
-            Ok(Some(CliCommand::ClearIsolated { version })) => assert_eq!(version, "0.1.7"),
+            Ok(Some(CliCommand::ClearIsolated { version, instance })) => {
+                assert_eq!(version, "0.1.7");
+                assert!(instance.is_none());
+            }
+            other => panic!("unexpected: {:?}", other),
+        }
+        match parse(&args(&["clear-isolated", "0.1.7", "--instance", "i2"])) {
+            Ok(Some(CliCommand::ClearIsolated { instance, .. })) => {
+                assert_eq!(instance.as_deref(), Some("i2"))
+            }
             other => panic!("unexpected: {:?}", other),
         }
         assert!(parse(&args(&["shortcut"])).is_err());

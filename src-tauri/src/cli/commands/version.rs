@@ -213,6 +213,18 @@ pub fn cmd_info(version: &str, json: bool) -> i32 {
     let size = cached_version_size(&ctx, version);
     // 非隔离时 DSH_HOME 可能是共享 home 或官方 ~/.dsh，界面/脚本都需要看到实际值
     let home = crate::paths::resolve_home(&ctx.cfg, &ctx.dirs, version);
+    let vid = crate::domain::VersionId::new(version).ok();
+    let selected = vid
+        .as_ref()
+        .and_then(|v| ctx.cfg.selected_target.get(v))
+        .and_then(|t| t.as_ref())
+        .map(|id| id.to_string());
+    let instance_views: Vec<_> =
+        crate::instances::views(&ctx.cfg, &ctx.dirs, &std::collections::BTreeMap::new())
+            .instances
+            .into_iter()
+            .filter(|i| i.mounted_versions.iter().any(|v| v == version))
+            .collect();
 
     if json {
         println!(
@@ -226,6 +238,8 @@ pub fn cmd_info(version: &str, json: bool) -> i32 {
                 "installed_at": info.installed_at,
                 "home": home.to_string_lossy(),
                 "size": size,
+                "selected_target": selected,
+                "instances": instance_views,
             }))
         );
     } else {
@@ -240,6 +254,14 @@ pub fn cmd_info(version: &str, json: bool) -> i32 {
             println!("隔离:     否（共享 home）");
         }
         println!("配置目录: {}", home.to_string_lossy());
+        if !instance_views.is_empty() {
+            println!("主按钮:   {}", selected.as_deref().unwrap_or("共享 home"));
+            let names: Vec<String> = instance_views
+                .iter()
+                .map(|i| format!("{}（{}）", i.name, i.id))
+                .collect();
+            println!("实例:     {}", names.join("、"));
+        }
         if !info.installed_at.is_empty() {
             println!("安装于:   {}", info.installed_at);
         }
