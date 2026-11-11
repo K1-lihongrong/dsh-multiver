@@ -13,3 +13,4 @@ export const detachInstance = (version, id) =>
 export const setSelectedTarget = (version, instance) =>
   call(commands.set_selected_target(version, instance));
 export const scanInstanceSize = (id) => call(commands.scan_instance_size(id));
+export const openInstanceDir = (id) => call(commands.open_instance_dir(id));

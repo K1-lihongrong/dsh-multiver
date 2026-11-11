@@ -131,6 +131,7 @@ export const commands = {
 	detach_instance: (version: string, id: string) => typedError<null, string>(__TAURI_INVOKE("detach_instance", { version, id })),
 	set_selected_target: (version: string, instance: string | null) => typedError<null, string>(__TAURI_INVOKE("set_selected_target", { version, instance })),
 	scan_instance_size: (id: string) => typedError<number, string>(__TAURI_INVOKE("scan_instance_size", { id })),
+	open_instance_dir: (id: string) => typedError<null, string>(__TAURI_INVOKE("open_instance_dir", { id })),
 	/**
 	 *  dsh 插件管理（双向桥 B1）：列某版本下的所有 profile 与插件。
 	 * 

@@ -1,9 +1,13 @@
-﻿import { test, expect } from "@playwright/test";
-import { mockTauri, makeVersion } from "./helpers.js";
+import { test, expect } from "@playwright/test";
+import { mockTauri, makeVersion, makeInstance } from "./helpers.js";
 
 test("浏览器打开返回失败结构时展示 URL（前端兜底能力）", async ({ page }) => {
   await mockTauri(page, {
     installed: [makeVersion("0.2.1-rc.2", { isolated: true })],
+    instances: [
+      makeInstance("i1", "默认隔离", { mounted_versions: ["0.2.1-rc.2"] }),
+    ],
+    versionTargets: { "0.2.1-rc.2": "i1" },
     extra: {
       open_in_browser: {
         url: "http://127.0.0.1:3080/?token=test-token",

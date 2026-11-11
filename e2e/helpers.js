@@ -1,4 +1,4 @@
-﻿// v0.2.14：Playwright E2E 公共工具。
+// v0.2.14：Playwright E2E 公共工具。
 // 纯 web 环境（vite preview）无 Tauri 后端，需 mock window.__TAURI_INTERNALS__。
 //
 // 关键：page.addInitScript 的参数走 structured clone，函数会丢失。
@@ -27,6 +27,9 @@ export async function mockTauri(page, opts = {}) {
   const installed = opts.installed || [];
   const launchMode = opts.launchMode ?? null;
   const extra = opts.extra || {};
+  const instances = opts.instances || [];
+  const versionTargets = opts.versionTargets || {};
+  const runningTargets = opts.runningTargets || [];
 
   // extra 序列化：JSON 值原样，字符串（函数体）标记，页面内 eval
   const extraSerialized = JSON.stringify(extra);
@@ -34,7 +37,7 @@ export async function mockTauri(page, opts = {}) {
     .filter(([, v]) => typeof v === "function" || (typeof v === "string" && v.trim().startsWith("(")))
     .map(([k, v]) => ({ key: k, src: typeof v === "function" ? v.toString() : v }));
 
-  await page.addInitScript(({ state, installed, launchMode, extraSerialized, extraFnKeys }) => {
+  await page.addInitScript(({ state, installed, launchMode, extraSerialized, extraFnKeys, instances, versionTargets, runningTargets }) => {
     try { localStorage.setItem("dsh-multiver.lang", "zh-CN"); } catch (_) {}
     const listeners = new Map();
     const callbacks = {
@@ -53,6 +56,17 @@ export async function mockTauri(page, opts = {}) {
       check_update: () => ({ has_update: false }),
       log_frontend: () => null,
       is_version_open: () => false,
+      is_instance_open: () => false,
+      list_instances: () => ({ instances, version_targets: versionTargets }),
+      list_running_targets: () => runningTargets,
+      set_selected_target: () => null,
+      instance_create: (args) => "i1",
+      instance_rename: () => null,
+      instance_remove: () => null,
+      attach_instance: () => null,
+      detach_instance: () => null,
+      scan_instance_size: () => 0,
+      open_instance_dir: () => null,
       // 默认：安装前 inspect 成功（组合包）；需要失败场景时用 extra 覆盖
       ds_inspect_spec: () => ({
         kind: "npm",
@@ -129,7 +143,7 @@ export async function mockTauri(page, opts = {}) {
       metadata: { currentWindow: { label: "main" }, currentWebview: { label: "main" } },
     };
     window.__TAURI_EVENT_PLUGIN_INTERNALS__ = { unregisterListener: async () => {} };
-  }, { state, installed, launchMode, extraSerialized, extraFnKeys });
+  }, { state, installed, launchMode, extraSerialized, extraFnKeys, instances, versionTargets, runningTargets });
 
   // 注意：mockTauri 调用后，页面才能 goto。
 }
@@ -143,6 +157,22 @@ export function makeVersion(version, opts = {}) {
     is_default: opts.isDefault ?? false,
     broken: false,
     note: null,
+    ...opts,
+  };
+}
+
+/** 构造一个实例项（字段与 Rust InstanceView 一致）。 */
+export function makeInstance(id, name, opts = {}) {
+  return {
+    id,
+    name,
+    created_at: 1762300000,
+    state: "ready",
+    home: `D:/dsh-data/homes/${id}`,
+    mounted_versions: [],
+    orphan: (opts.mounted_versions || []).length === 0,
+    running_on: null,
+    size: null,
     ...opts,
   };
 }

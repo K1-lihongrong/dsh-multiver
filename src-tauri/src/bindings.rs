@@ -65,6 +65,7 @@ pub(crate) fn builder() -> Builder<tauri::Wry> {
             crate::commands::detach_instance,
             crate::commands::set_selected_target,
             crate::commands::scan_instance_size,
+            crate::commands::open_instance_dir,
             crate::commands::ds_list_plugins,
             crate::commands::ds_plugin_action,
             crate::commands::ds_plugin_update_batch,

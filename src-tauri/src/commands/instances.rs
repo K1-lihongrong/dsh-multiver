@@ -111,6 +111,24 @@ pub(crate) fn set_selected_target(
 
 #[tauri::command]
 #[specta::specta]
+pub(crate) fn open_instance_dir(
+    ctx: tauri::State<'_, crate::AppCtx>,
+    id: String,
+) -> Result<(), String> {
+    let id = InstanceId::new(id)?;
+    let (_cfg, dirs) = ctx.config_dirs();
+    let home = dirs.homes.join(id.as_str());
+    let _ = std::fs::create_dir_all(&home);
+    let (ok, msg) = actions::open_folder(&home);
+    if ok {
+        Ok(())
+    } else {
+        Err(msg)
+    }
+}
+
+#[tauri::command]
+#[specta::specta]
 pub(crate) async fn scan_instance_size(
     ctx: tauri::State<'_, crate::AppCtx>,
     id: String,

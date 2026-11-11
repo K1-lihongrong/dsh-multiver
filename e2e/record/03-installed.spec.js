@@ -1,5 +1,5 @@
 import { test } from "@playwright/test";
-import { mockTauri, makeVersion } from "../helpers.js";
+import { mockTauri, makeVersion, makeInstance } from "../helpers.js";
 import { installCursor, glide, clickAt, hover, waitReady, startCues, cue, saveCues, HOLD_START, HOLD_END } from "./_rec.js";
 
 // 03 已安装版本：对应正文 115-128 行。
@@ -67,6 +67,11 @@ test("03 已安装版本与占用", async ({ page }) => {
       makeVersion("0.2.0-rc.1", { isolated: true, installed_at: "2026-09-28" }),
       makeVersion("0.1.8", { installed_at: "2026-09-20" }),
     ],
+    instances: [
+      makeInstance("i1", "默认隔离", { mounted_versions: ["0.2.0-rc.1"] }),
+      makeInstance("i2", "对比用", { mounted_versions: ["0.2.0-rc.1"] }),
+    ],
+    versionTargets: { "0.2.0-rc.1": "i1" },
     extra: {
       // scan_versions 立即返回，实际进度靠下面手动推事件
       scan_versions: "() => Promise.resolve()",
@@ -91,9 +96,9 @@ test("03 已安装版本与占用", async ({ page }) => {
 
   // 2) 依次悬停各操作按钮，让观众看清可用的 8 个操作
   cue(
-    "每个版本提供 8 个操作：运行、浏览器打开、设为默认、快捷方式、插件、扫描占用、隔离、卸载",
-    "Each version offers eight actions: run, open in browser, set default, shortcut, plugins, scan size, isolate, uninstall",
-    "各バージョンには 8 つの操作があります：実行、ブラウザで開く、既定に設定、ショートカット、プラグイン、サイズスキャン、隔離、アンインストール",
+    "每个版本提供 8 个操作：运行、浏览器打开、设为默认、快捷方式、插件、扫描占用、实例、卸载",
+    "Each version offers eight actions: run, open in browser, set default, shortcut, plugins, scan size, instances, uninstall",
+    "各バージョンには 8 つの操作があります：実行、ブラウザで開く、既定に設定、ショートカット、プラグイン、サイズスキャン、インスタンス、アンインストール",
   );
   for (const name of ["运行", "浏览器打开", "设为默认", "快捷方式"]) {
     const btn = page.getByRole("button", { name, exact: true }).first();
@@ -116,13 +121,13 @@ test("03 已安装版本与占用", async ({ page }) => {
     await page.waitForTimeout(400);
   }
 
-  // 4) 展示「已隔离 ▾」菜单按钮（正文 124 行）
+  // 4) 展示实例浮层入口（主按钮右侧小三角）
   cue(
-    "隔离版本显示「已隔离 ▾」菜单，可打开隔离目录、复制共享数据、清理或关闭隔离",
-    "Isolated versions show an \"Isolated ▾\" menu: open the isolated folder, copy shared data, clear it, or disable isolation",
-    "隔離バージョンには「隔離済み ▾」メニューが表示され、隔離フォルダを開く、共有データをコピーする、クリアする、隔離を解除する操作ができます",
+    "隔离版本的主按钮右侧有实例下拉：可切换共享 home、选择实例、查看运行状态或新建实例",
+    "Next to the run button, the instance menu switches between shared home and instances, shows running state, or creates a new one",
+    "実行ボタンの右側のインスタンスメニューで、共有 home とインスタンスを切り替え、実行状態を確認したり新規作成できます",
   );
-  const isoBtn = page.getByRole("button", { name: /已隔离/ }).first();
+  const isoBtn = page.locator(".run-caret").nth(1);
   if (await isoBtn.count()) await hover(page, isoBtn);
 
   saveCues("03-installed");
