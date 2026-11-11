@@ -23,7 +23,7 @@
 - 🧹 **自动维护**：启动时清理孤立 webview 缓存，定期回收 pnpm store
 - ⌨️ **无头 CLI**：子命令风格（v0.3.0+），覆盖查询（`list` / `info` / `versions` / `env` / `which`）、
   操作（`install` / `uninstall` / `set-default` / `isolate` / `clean`）、
-  运维（`doctor` / `maintenance` / `export` / `import` / `run` / `set-root`）等 22 个命令，
+  运维（`doctor` / `maintenance` / `export` / `import` / `run` / `set-root`）与实例（`instance`）等 24 个命令，
   支持 `--json`（机读）、`--dry-run`（预览）；不启动界面即可完成全部操作，方便脚本化
 
 ## 截图
