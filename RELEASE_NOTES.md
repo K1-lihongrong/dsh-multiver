@@ -1,4 +1,4 @@
-# v0.4.0-alpha.3
+﻿# v0.4.0-alpha.3
 
 本次为 alpha 验证版，重点修复一键更新替换卡死与不重启，并收口 alpha.2 留下的 DSH adapter 和 Job 事件技术债。没有新增实例 UI，也不改变现有插件命令语义。
 
@@ -48,6 +48,9 @@
 - `pnpm check:commands` 通过
 - `pnpm build` 通过
 - `pnpm tauri build --no-bundle` 在本地验收阶段执行
+- 原生 UIA 验收脚本通过
+- 本地 mock 更新链路脚本通过
+- 11 版本兼容矩阵 11/11 通过
 
 ## 已知边界
 

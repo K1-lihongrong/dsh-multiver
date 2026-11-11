@@ -1,4 +1,4 @@
-# 更新日志
+﻿# 更新日志
 
 本文件记录 DSH 版本管理器（dsh-multiver）各版本的变更。
 最新版本的详细说明见 [Releases](https://github.com/K1-lihongrong/dsh-multiver/releases)。
@@ -31,6 +31,13 @@
 - 修复插件操作 spawn_blocking 返回类型错误，并收口 clippy 告警。
 
 **用户可见变化**：后台任务进度和取消行为保持兼容；插件命令按 DSH 版本能力门控，未知版本走保守默认。
+
+### 自动化验收
+
+- 新增 `scripts/acceptance-uia.ps1`：真实原生窗口 UIA 验收启动、版本、插件面板、扫描取消、DSH 版本启动/关闭、日志和残留进程。
+- 新增 `scripts/acceptance-update.ps1`：本地 mock API 驱动的真实更新链路验收，覆盖 SHA256、替换、`.old` 备份、退出和自动重启。
+- 新增 `scripts/compat-matrix.ps1`：11 版本隔离兼容矩阵，默认 dry-run，`-Execute` 才执行。
+- `package.json` 增加 `test:acceptance:ui`、`test:acceptance:update`、`test:compat` 入口。
 
 ### 兼容矩阵与验证
 

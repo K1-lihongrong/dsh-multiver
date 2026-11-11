@@ -12,6 +12,9 @@
     "test:e2e:ui": "playwright test --ui",
     "test:e2e:report": "playwright show-report",
     "check:commands": "node scripts/check-commands.mjs",
+    "test:acceptance:ui": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/acceptance-uia.ps1",
+    "test:acceptance:update": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/acceptance-update.ps1",
+    "test:compat": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/compat-matrix.ps1",
     "bindings:generate": "cargo run --manifest-path src-tauri/Cargo.toml --bin generate_bindings -- src/api/bindings.ts"
   },
   "dependencies": {
