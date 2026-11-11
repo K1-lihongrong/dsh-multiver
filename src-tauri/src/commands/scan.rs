@@ -18,16 +18,17 @@ pub(crate) async fn scan_versions(
 
     // A2-5: one Job per scan, while keeping the legacy scan-size-progress events.
     let job_target = format!("{} versions", versions.len());
-    let job_id = ctx.jobs().create("scan", &job_target);
-    let jobs = ctx.jobs().clone();
+    let sink = ctx.job_sink(app.clone());
+    let job_id = sink.create("scan", &job_target);
+    let token = sink.token(&job_id).unwrap_or_default();
 
-    // Clear the previous cancellation flag.
-    let cancel_flag = ctx.scan_cancel_handle();
-    cancel_flag.store(false, std::sync::atomic::Ordering::SeqCst);
+    // Keep the legacy global flag in sync for compatibility; the scan loop
+    // itself uses the job's CancellationToken.
+    let legacy_cancel = ctx.scan_cancel_handle();
+    legacy_cancel.store(false, std::sync::atomic::Ordering::SeqCst);
 
     let job_for_scan = job_id.clone();
-    let jobs_for_scan = jobs.clone();
-    let target_for_scan = job_target.clone();
+    let sink_for_scan = sink.clone();
     let scan = tauri::async_runtime::spawn_blocking(move || {
         use tauri::Emitter;
         let names: Vec<String> = versions;
@@ -38,9 +39,15 @@ pub(crate) async fn scan_versions(
         sizecache::prune(&mut cache, |v| versions_dir.join(v).exists());
         let mut cancelled = false;
 
+        let cancel = {
+            let token = token.clone();
+            let legacy = legacy_cancel.clone();
+            move || token.is_cancelled() || legacy.load(std::sync::atomic::Ordering::SeqCst)
+        };
+
         for (i, n) in names.iter().enumerate() {
             // Cancellation check before each version.
-            if cancel_flag.load(std::sync::atomic::Ordering::SeqCst) {
+            if cancel() {
                 cancelled = true;
                 break;
             }
@@ -63,20 +70,16 @@ pub(crate) async fn scan_versions(
                             "cached": true,
                         }),
                     );
-                    jobs_for_scan.progress(&job_for_scan, "detail", idx as u64, Some(total as u64));
-                    let _ = app2.emit(
-                        "job:progress",
-                        serde_json::json!({
-                            "id": job_for_scan,
-                            "kind": "scan",
-                            "target": target_for_scan,
-                            "stage": "detail",
+                    sink_for_scan.progress(
+                        &job_for_scan,
+                        "detail",
+                        idx as u64,
+                        Some(total as u64),
+                        Some(serde_json::json!({
                             "version": n,
                             "index": idx,
-                            "done": idx,
-                            "total": total,
                             "cached": true,
-                        }),
+                        })),
                     );
                     if total > 1 {
                         std::thread::sleep(std::time::Duration::from_millis(80));
@@ -86,7 +89,6 @@ pub(crate) async fn scan_versions(
             }
 
             // First pass starts: legacy counting event plus the unified job event.
-            jobs_for_scan.progress(&job_for_scan, "counting", i as u64, Some(total as u64));
             let _ = app2.emit(
                 "scan-size-progress",
                 serde_json::json!({
@@ -100,28 +102,21 @@ pub(crate) async fn scan_versions(
                     "cached": false,
                 }),
             );
-            let _ = app2.emit(
-                "job:progress",
-                serde_json::json!({
-                    "id": job_for_scan,
-                    "kind": "scan",
-                    "target": target_for_scan,
-                    "stage": "counting",
+            sink_for_scan.progress(
+                &job_for_scan,
+                "counting",
+                i as u64,
+                Some(total as u64),
+                Some(serde_json::json!({
                     "version": n,
                     "index": idx,
-                    "done": i,
-                    "total": total,
-                }),
+                })),
             );
-
-            let cancel_flag = cancel_flag.clone();
-            let cancel = move || cancel_flag.load(std::sync::atomic::Ordering::SeqCst);
 
             let app_c = app2.clone();
             let vname_c = n.clone();
             let job_c = job_for_scan.clone();
-            let jobs_c = jobs_for_scan.clone();
-            let target_c = target_for_scan.clone();
+            let sink_c = sink_for_scan.clone();
             let cb_count = move |done: u64, _tot: u64| {
                 let _ = app_c.emit(
                     "scan-size-progress",
@@ -136,20 +131,16 @@ pub(crate) async fn scan_versions(
                         "cached": false,
                     }),
                 );
-                jobs_c.progress(&job_c, "counting", i as u64, Some(total as u64));
-                let _ = app_c.emit(
-                    "job:progress",
-                    serde_json::json!({
-                        "id": job_c,
-                        "kind": "scan",
-                        "target": target_c,
-                        "stage": "counting",
+                sink_c.progress(
+                    &job_c,
+                    "counting",
+                    i as u64,
+                    Some(total as u64),
+                    Some(serde_json::json!({
                         "version": vname_c,
                         "index": idx,
-                        "done": i,
-                        "total": total,
                         "files": done,
-                    }),
+                    })),
                 );
             };
             let Some(fl) =
@@ -179,27 +170,22 @@ pub(crate) async fn scan_versions(
                     "cached": false,
                 }),
             );
-            jobs_for_scan.progress(&job_for_scan, "counting", i as u64, Some(total as u64));
-            let _ = app2.emit(
-                "job:progress",
-                serde_json::json!({
-                    "id": job_for_scan,
-                    "kind": "scan",
-                    "target": target_for_scan,
-                    "stage": "counting",
+            sink_for_scan.progress(
+                &job_for_scan,
+                "counting",
+                i as u64,
+                Some(total as u64),
+                Some(serde_json::json!({
                     "version": n,
                     "index": idx,
-                    "done": i,
-                    "total": total,
                     "fileTotal": file_count,
-                }),
+                })),
             );
 
             let app3 = app2.clone();
             let vname = n.clone();
             let job_d = job_for_scan.clone();
-            let jobs_d = jobs_for_scan.clone();
-            let target_d = target_for_scan.clone();
+            let sink_d = sink_for_scan.clone();
             let cb = move |done: u64, ftot: u64| {
                 let _ = app3.emit(
                     "scan-size-progress",
@@ -214,21 +200,17 @@ pub(crate) async fn scan_versions(
                         "cached": false,
                     }),
                 );
-                jobs_d.progress(&job_d, "detail", i as u64, Some(total as u64));
-                let _ = app3.emit(
-                    "job:progress",
-                    serde_json::json!({
-                        "id": job_d,
-                        "kind": "scan",
-                        "target": target_d,
-                        "stage": "detail",
+                sink_d.progress(
+                    &job_d,
+                    "detail",
+                    i as u64,
+                    Some(total as u64),
+                    Some(serde_json::json!({
                         "version": vname,
                         "index": idx,
-                        "done": i,
-                        "total": total,
                         "files": done,
                         "fileTotal": if ftot > 0 { ftot } else { file_count },
-                    }),
+                    })),
                 );
             };
             let Some(info) =
@@ -251,20 +233,16 @@ pub(crate) async fn scan_versions(
                     "cached": false,
                 }),
             );
-            jobs_for_scan.progress(&job_for_scan, "detail", idx as u64, Some(total as u64));
-            let _ = app2.emit(
-                "job:progress",
-                serde_json::json!({
-                    "id": job_for_scan,
-                    "kind": "scan",
-                    "target": target_for_scan,
-                    "stage": "detail",
+            sink_for_scan.progress(
+                &job_for_scan,
+                "detail",
+                idx as u64,
+                Some(total as u64),
+                Some(serde_json::json!({
                     "version": n,
                     "index": idx,
-                    "done": idx,
-                    "total": total,
                     "fileTotal": file_count,
-                }),
+                })),
             );
             sizecache::put(&mut cache, n, dir_mtime, store_mtime, info);
         }
@@ -275,44 +253,16 @@ pub(crate) async fn scan_versions(
 
     match scan {
         Ok(true) => {
-            jobs.cancel(&job_id, "scan cancelled");
-            let _ = app.emit(
-                "job:failed",
-                serde_json::json!({
-                    "id": job_id,
-                    "kind": "scan",
-                    "target": job_target,
-                    "code": "cancelled",
-                    "message": "scan cancelled",
-                }),
-            );
+            sink.cancel(&job_id, "scan cancelled", None);
             Ok(())
         }
         Ok(false) => {
-            jobs.finish(&job_id, "scan done");
-            let _ = app.emit(
-                "job:done",
-                serde_json::json!({
-                    "id": job_id,
-                    "kind": "scan",
-                    "target": job_target,
-                }),
-            );
+            sink.finish(&job_id, "scan done", None);
             Ok(())
         }
         Err(e) => {
             let msg = format!("扫描失败: {}", e);
-            jobs.fail(&job_id, "scan_failed", &msg);
-            let _ = app.emit(
-                "job:failed",
-                serde_json::json!({
-                    "id": job_id,
-                    "kind": "scan",
-                    "target": job_target,
-                    "code": "scan_failed",
-                    "message": msg,
-                }),
-            );
+            sink.fail(&job_id, "scan_failed", &msg, None);
             Err(msg)
         }
     }
@@ -324,6 +274,11 @@ pub(crate) async fn scan_versions(
 pub(crate) fn cancel_scan(ctx: tauri::State<'_, crate::AppCtx>) -> Result<(), String> {
     ctx.scan_cancel()
         .store(true, std::sync::atomic::Ordering::SeqCst);
+    if let Some(id) = ctx.jobs().latest_running_id("scan") {
+        if let Some(token) = ctx.jobs().token(&id) {
+            token.cancel();
+        }
+    }
     Ok(())
 }
 

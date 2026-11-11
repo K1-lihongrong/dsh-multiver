@@ -21,7 +21,9 @@ pub use catalog::{
     runtime_version, version_is_newer, DsUpdate,
 };
 #[allow(unused_imports)]
-pub use diagnostics::{dsh_bin, dsh_cli, run_dsh_plugin, strip_ansi, DshCli, RunResult};
+pub use diagnostics::{
+    dsh_bin, dsh_cli, dsh_cli_from_bin, run_dsh_plugin, strip_ansi, DshCli, RunResult,
+};
 #[allow(unused_imports)]
 pub use exempt::{approve_builds, read_exemptions, read_pending_builds, BUILD_UNDECIDED};
 #[allow(unused_imports)]

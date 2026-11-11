@@ -42,15 +42,14 @@ pub(crate) async fn install_version(
     // 供排查进度问题（默认关闭，不产生任何文件）。
     let debug_progress = std::env::args().any(|a| a == "--debug-progress");
 
-    let job_id = Some(ctx.jobs().create("install", &version));
-    let jobs = Some(ctx.jobs().clone());
+    let sink = ctx.job_sink(app.clone());
+    let job_id = sink.create("install", &version);
+    let sink2 = sink.clone();
     let job_id2 = job_id.clone();
-    let jobs2 = jobs.clone();
     let app2 = app.clone();
     let version_for_record = version.clone();
     // 把阻塞的安装逻辑丢到后台线程池，避免占用主线程导致界面卡死
     let result = tauri::async_runtime::spawn_blocking(move || {
-        let version_job = version.clone();
         let on_progress = move |ev: &versions::ProgressEvent| {
             if debug_progress {
                 if let Ok(mdir) = std::env::current_exe() {
@@ -71,21 +70,13 @@ pub(crate) async fn install_version(
                 }
             }
             let _ = app2.emit("install-progress", ev.clone());
-            if let (Some(jid), Some(reg)) = (job_id2.as_deref(), jobs2.as_ref()) {
-                reg.progress(
-                    jid,
-                    ev.stage.as_str(),
-                    ev.step as u64,
-                    Some(ev.total as u64),
-                );
-                let _ = app2.emit(
-                    "job:progress",
-                    serde_json::json!({
-                        "id": jid, "kind": "install", "target": version_job,
-                        "stage": format!("{:?}", ev.stage), "done": ev.step, "total": ev.total,
-                    }),
-                );
-            }
+            sink2.progress(
+                &job_id2,
+                &format!("{:?}", ev.stage),
+                ev.step as u64,
+                Some(ev.total as u64),
+                None,
+            );
         };
         versions::install(
             &dirs.versions,
@@ -97,25 +88,28 @@ pub(crate) async fn install_version(
             registry.as_deref(),
         )
     })
-    .await
-    .map_err(|e| format!("安装任务失败: {}", e))?;
+    .await;
+
+    let result = match result {
+        Ok(v) => v,
+        Err(e) => {
+            let msg = format!("安装任务失败: {}", e);
+            sink.fail(&job_id, "internal", &msg, None);
+            return Err(msg);
+        }
+    };
 
     let (ok, msg) = result;
-    if let (Some(jid), Some(reg)) = (job_id.as_deref(), jobs.as_ref()) {
-        if ok {
-            reg.finish(jid, &msg);
-            let _ = app.emit(
-                "job:done",
-                serde_json::json!({ "id": jid, "kind": "install", "target": version_for_record }),
-            );
-        } else {
-            let code = versions::classify_error(&msg);
-            reg.fail(jid, code, &msg);
-            let _ = app.emit(
-                "job:failed",
-                serde_json::json!({ "id": jid, "kind": "install", "target": version_for_record, "code": code, "message": msg, "raw": msg }),
-            );
-        }
+    if ok {
+        sink.finish(&job_id, &msg, None);
+    } else {
+        let code = versions::classify_error(&msg);
+        sink.fail(
+            &job_id,
+            code,
+            &msg,
+            Some(serde_json::json!({ "raw": &msg })),
+        );
     }
     // 维护 broken_versions：失败且分类为「私有包/不完整」时记入；成功时移除。
     let mut c = cfg.clone();
@@ -126,7 +120,6 @@ pub(crate) async fn install_version(
         Err(msg)
     }
 }
-
 /// 清除「已知安装失败」标记（用户手动重试前可调用）。
 #[tauri::command]
 #[specta::specta]

@@ -3,61 +3,16 @@
 use super::*;
 use crate::domain::{LaunchTicket, ProcKey, VersionId};
 
-fn emit_launch_job_progress(
-    app: &tauri::AppHandle,
-    ctx: &crate::AppCtx,
-    job_id: &str,
-    version: &str,
-    stage: &str,
-) {
-    use tauri::Emitter;
-    ctx.jobs().progress(job_id, stage, 0, None);
-    let _ = app.emit(
-        "job:progress",
-        serde_json::json!({
-            "id": job_id,
-            "kind": "launch",
-            "target": version,
-            "stage": stage,
-        }),
-    );
+fn emit_launch_job_progress(sink: &crate::jobs::JobEventSink, job_id: &str, stage: &str) {
+    sink.progress(job_id, stage, 0, None, None);
 }
 
-fn finish_launch_job(
-    app: &tauri::AppHandle,
-    ctx: &crate::AppCtx,
-    job_id: &str,
-    version: &str,
-    message: &str,
-) {
-    use tauri::Emitter;
-    ctx.jobs().finish(job_id, message);
-    let _ = app.emit(
-        "job:done",
-        serde_json::json!({ "id": job_id, "kind": "launch", "target": version }),
-    );
+fn finish_launch_job(sink: &crate::jobs::JobEventSink, job_id: &str, message: &str) {
+    sink.finish(job_id, message, None);
 }
 
-fn fail_launch_job(
-    app: &tauri::AppHandle,
-    ctx: &crate::AppCtx,
-    job_id: &str,
-    version: &str,
-    code: &str,
-    message: &str,
-) {
-    use tauri::Emitter;
-    ctx.jobs().fail(job_id, code, message);
-    let _ = app.emit(
-        "job:failed",
-        serde_json::json!({
-            "id": job_id,
-            "kind": "launch",
-            "target": version,
-            "code": code,
-            "message": message,
-        }),
-    );
+fn fail_launch_job(sink: &crate::jobs::JobEventSink, job_id: &str, code: &str, message: &str) {
+    sink.fail(job_id, code, message, None);
 }
 
 pub(crate) async fn launch_window(
@@ -69,27 +24,28 @@ pub(crate) async fn launch_window(
     let procs = ctx.procs.clone();
 
     // A2-5: one Job per launch. The legacy launch-progress event is kept below.
-    let job_id = ctx.jobs().create("launch", &version);
+    let sink = ctx.job_sink(app.clone());
+    let job_id = sink.create("launch", &version);
 
     let (cfg, dirs) = ctx.config_dirs();
     let version_id = match VersionId::new(&version) {
         Ok(v) => v,
         Err(e) => {
-            fail_launch_job(&app, &ctx, &job_id, &version, "invalid_version", &e);
+            fail_launch_job(&sink, &job_id, "invalid_version", &e);
             return Err(e);
         }
     };
     let proc_key = match ProcKey::shared(version_id.as_str()) {
         Ok(v) => v,
         Err(e) => {
-            fail_launch_job(&app, &ctx, &job_id, &version, "invalid_version", &e);
+            fail_launch_job(&sink, &job_id, "invalid_version", &e);
             return Err(e);
         }
     };
     let vdir = dirs.versions.join(version_id.as_str());
     if !vdir.join("node_modules").exists() {
         let msg = format!("版本 {} 未安装", version);
-        fail_launch_job(&app, &ctx, &job_id, &version, "not_installed", &msg);
+        fail_launch_job(&sink, &job_id, "not_installed", &msg);
         return Err(msg);
     }
     let home = crate::paths::resolve_home_for(&cfg, &dirs, &version_id, None);
@@ -105,8 +61,8 @@ pub(crate) async fn launch_window(
                 let _ = win.show();
                 let _ = win.unminimize();
                 let _ = win.set_focus();
-                emit_launch_job_progress(&app, &ctx, &job_id, &version, "ready");
-                finish_launch_job(&app, &ctx, &job_id, &version, "focused existing window");
+                emit_launch_job_progress(&sink, &job_id, "ready");
+                finish_launch_job(&sink, &job_id, "focused existing window");
                 return Ok(format!("已聚焦 DSH {} 的窗口", version));
             }
         }
@@ -118,7 +74,7 @@ pub(crate) async fn launch_window(
     //   waiting   —— 进程已起、正在等 dsh 打印 URL（最慢，最坏 90s）
     // 这里直接发 waiting：spawn_blocking 内部即"起进程 + 等 URL"，属"等待"。
     // （preparing 由前端进入启动态时自行设定，无需后端再发。）
-    emit_launch_job_progress(&app, &ctx, &job_id, &version, "waiting");
+    emit_launch_job_progress(&sink, &job_id, "waiting");
     {
         use tauri::Emitter;
         let _ = app.emit(
@@ -128,7 +84,7 @@ pub(crate) async fn launch_window(
     }
 
     // 阻塞部分（起进程 + 等端口/URL，最多 90s，见 launcher 的超时常量）丢到后台线程，避免冻结界面
-    emit_launch_job_progress(&app, &ctx, &job_id, &version, "starting");
+    emit_launch_job_progress(&sink, &job_id, "starting");
 
     let vdir2 = vdir.clone();
     let home2 = home.clone();
@@ -144,7 +100,7 @@ pub(crate) async fn launch_window(
         Err(e) => {
             let m = format!("启动任务失败: {}", e);
             logging::log_app_error(&dirs.root, "launch_window", &format!("{} ({})", version, m));
-            fail_launch_job(&app, &ctx, &job_id, &version, "spawn_failed", &m);
+            fail_launch_job(&sink, &job_id, "spawn_failed", &m);
             return Err(m);
         }
     };
@@ -152,7 +108,7 @@ pub(crate) async fn launch_window(
         Ok(v) => v,
         Err(e) => {
             logging::log_app_error(&dirs.root, "launch_window", &format!("{} ({})", version, e));
-            fail_launch_job(&app, &ctx, &job_id, &version, "spawn_failed", &e);
+            fail_launch_job(&sink, &job_id, "spawn_failed", &e);
             return Err(e);
         }
     };
@@ -194,7 +150,7 @@ pub(crate) async fn launch_window(
         Ok(p) => p,
         Err(e) => {
             let msg = format!("URL 解析失败: {}", e);
-            fail_launch_job(&app, &ctx, &job_id, &version, "window_failed", &msg);
+            fail_launch_job(&sink, &job_id, "window_failed", &msg);
             return Err(msg);
         }
     };
@@ -227,7 +183,7 @@ pub(crate) async fn launch_window(
                 &format!("{} 创建窗口失败: {}", version, e),
             );
             let msg = format!("创建窗口失败: {}", e);
-            fail_launch_job(&app, &ctx, &job_id, &version, "window_failed", &msg);
+            fail_launch_job(&sink, &job_id, "window_failed", &msg);
             return Err(msg);
         }
     };
@@ -359,8 +315,8 @@ pub(crate) async fn launch_window(
         );
     }
 
-    emit_launch_job_progress(&app, &ctx, &job_id, &version, "ready");
-    finish_launch_job(&app, &ctx, &job_id, &version, "launch ready");
+    emit_launch_job_progress(&sink, &job_id, "ready");
+    finish_launch_job(&sink, &job_id, "launch ready");
 
     // 关窗回调里要注销进程登记，故提前把 root 算好（闭包不能捕获 app —— 它随后还要用）
     #[cfg(unix)]

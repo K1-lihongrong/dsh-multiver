@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 /// dsh CLI 路径（`<版本目录>/node_modules/.bin/dsh[.cmd]`）。
+#[allow(dead_code)]
 pub fn dsh_bin(version_dir: &Path) -> Option<PathBuf> {
     let bin = version_dir
         .join("node_modules")
@@ -25,8 +26,14 @@ pub struct DshCli {
     pub js: Option<PathBuf>,
 }
 
-pub fn dsh_cli(version_dir: &Path) -> Option<DshCli> {
-    let bin = dsh_bin(version_dir)?;
+/// 用调用方（dsh adapter）决定的 CLI 入口构造 `DshCli`，JS 入口仍按版本目录解析。
+///
+/// 这样不同 DSH 代际可以统一决定 `.bin/dsh[.cmd]` 的命名，同时保留
+/// `node_modules/@deepseek-ai/dsh/lib/bin.js` 的直接执行能力。
+pub fn dsh_cli_from_bin(version_dir: &Path, bin: PathBuf) -> Option<DshCli> {
+    if !bin.exists() {
+        return None;
+    }
     let js = version_dir
         .join("node_modules")
         .join("@deepseek-ai")
@@ -37,6 +44,12 @@ pub fn dsh_cli(version_dir: &Path) -> Option<DshCli> {
         bin,
         js: js.exists().then_some(js),
     })
+}
+
+#[allow(dead_code)]
+pub fn dsh_cli(version_dir: &Path) -> Option<DshCli> {
+    let bin = dsh_bin(version_dir)?;
+    dsh_cli_from_bin(version_dir, bin)
 }
 
 /// 剥离 ANSI 转义序列（`ESC [ … 终止字节`），让日志/toast 不出现彩色控制码。

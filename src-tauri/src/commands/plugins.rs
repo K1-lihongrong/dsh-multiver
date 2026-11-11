@@ -13,11 +13,23 @@ fn resolve_dsh(
         return Err(format!("版本 {} 未安装", version));
     }
     let home = crate::paths::resolve_home(&cfg, &dirs, version);
-    let cli = crate::dsplugins::dsh_cli(&vdir)
-        .ok_or_else(|| format!("版本 {} 缺少 dsh 入口", version))?;
     let adapter = crate::dsh_adapter::adapter_for(version);
-    let _ = adapter.generation();
+    let caps = adapter.capabilities();
+    if !caps.supports_plugin_commands() {
+        return Err(format!(
+            "版本 {}（{:?}）不支持插件命令",
+            version,
+            adapter.generation()
+        ));
+    }
+    let cli = crate::dsplugins::dsh_cli_from_bin(&vdir, adapter.cli_entry(&vdir))
+        .ok_or_else(|| format!("版本 {} 缺少 dsh 入口", version))?;
     Ok((cli, home))
+}
+
+/// profile 目录由 adapter 决定；未知版本走保守的标准布局。
+fn resolve_profile_dir(version: &str, home: &std::path::Path, profile: &str) -> std::path::PathBuf {
+    crate::dsh_adapter::adapter_for(version).profile_dir(home, profile)
 }
 
 /// dsh 插件管理（双向桥 B1）：列某版本下的所有 profile 与插件。
@@ -66,7 +78,7 @@ pub(crate) fn ds_profile_info(
     crate::dsplugins::validate_profile_name(&profile)?;
     let (cfg, dirs) = ctx.config_dirs();
     let home = crate::paths::resolve_home(&cfg, &dirs, &version);
-    let pdir = crate::dsplugins::profiles_dir(&home).join(&profile);
+    let pdir = resolve_profile_dir(&version, &home, &profile);
     Ok(DsProfileInfo {
         runtime_version: crate::dsplugins::runtime_version(&dirs.versions.join(&version)),
         exemptions: crate::dsplugins::read_exemptions(&home, &profile),
@@ -103,7 +115,7 @@ pub(crate) async fn ds_exemption_action(
     if !adapter.supports_allow_version() {
         return Err("当前 DSH 版本不支持精确版本豁免".into());
     }
-    let _ = adapter.profile_dir(&home, &profile);
+
     let args: Vec<String> = match action.as_str() {
         "allow" => vec![
             "allow-version".into(),
@@ -159,7 +171,7 @@ pub(crate) fn ds_approve_builds(
     crate::dsplugins::validate_profile_name(&profile)?;
     let (cfg, dirs) = ctx.config_dirs();
     let home = crate::paths::resolve_home(&cfg, &dirs, &version);
-    let pdir = crate::dsplugins::profiles_dir(&home).join(&profile);
+    let pdir = resolve_profile_dir(&version, &home, &profile);
     for p in &packages {
         crate::dsplugins::validate_package_spec(p)?;
     }
@@ -178,8 +190,7 @@ pub(crate) fn ds_open_plugin_logs(
     crate::dsplugins::validate_profile_name(&profile)?;
     let (cfg, dirs) = ctx.config_dirs();
     let home = crate::paths::resolve_home(&cfg, &dirs, &version);
-    let dir = crate::dsplugins::profiles_dir(&home)
-        .join(&profile)
+    let dir = resolve_profile_dir(&version, &home, &profile)
         .join(".plugin-manager")
         .join("logs");
     let _ = std::fs::create_dir_all(&dir);
@@ -252,7 +263,7 @@ pub(crate) async fn ds_inspect_spec(
         crate::dsplugins::validate_registry_url(url)?;
     }
     let (cli, home) = resolve_dsh(ctx.inner(), &version)?;
-    let pdir = crate::dsplugins::profiles_dir(&home).join(&profile);
+    let pdir = resolve_profile_dir(&version, &home, &profile);
     let s = spec.trim().to_string();
     let lower = s.to_ascii_lowercase();
     let is_url = lower.starts_with("http://")
@@ -497,7 +508,7 @@ pub(crate) async fn ds_plugin_action(
         crate::dsplugins::validate_registry_url(url)?;
     }
     let (cli, home) = resolve_dsh(ctx.inner(), &version)?;
-    let pdir = crate::dsplugins::profiles_dir(&home).join(&profile);
+    let pdir = resolve_profile_dir(&version, &home, &profile);
     let before = read_dep_map(&pdir);
     let is_add = action == "add";
     let package = package.trim().to_string();
@@ -513,15 +524,15 @@ pub(crate) async fn ds_plugin_action(
         _ => return Err(format!("未知操作：{}", action)),
     };
 
-    let job_id = Some(
-        ctx.jobs()
-            .create("plugin", &format!("{}/{}/{}", version, profile, action)),
-    );
-    let jobs = Some(ctx.jobs().clone());
+    let job_target = format!("{}/{}/{}", version, profile, action);
+    let sink = ctx.job_sink(app.clone());
+    let job_id = sink.create("plugin", &job_target);
+    let sink2 = sink.clone();
+    let job_id2 = job_id.clone();
     let app2 = app.clone();
     let version2 = version.clone();
     let profile2 = profile.clone();
-    let result: Result<String, String> = tauri::async_runtime::spawn_blocking(move || {
+    let result = tauri::async_runtime::spawn_blocking(move || {
         use tauri::Emitter;
         let args_ref: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
         let res = crate::dsplugins::run_dsh_plugin(
@@ -540,18 +551,13 @@ pub(crate) async fn ds_plugin_action(
                         "line": line,
                     }),
                 );
-                if let (Some(jid), Some(reg)) = (job_id.as_deref(), jobs.as_ref()) {
-                    reg.progress(jid, "running", 0, None);
-                    let _ = app2.emit(
-                        "job:progress",
-                        serde_json::json!({
-                            "id": jid,
-                            "kind": "plugin",
-                            "target": format!("{}/{}/{}", version2, profile2, action),
-                            "stage": "running",
-                        }),
-                    );
-                }
+                sink2.progress(
+                    &job_id2,
+                    "running",
+                    0,
+                    None,
+                    Some(serde_json::json!({ "line": line })),
+                );
             },
         );
         let outcome = if res.timed_out {
@@ -564,40 +570,30 @@ pub(crate) async fn ds_plugin_action(
         } else {
             Err(res.output)
         };
-        if let (Some(jid), Some(reg)) = (job_id.as_deref(), jobs.as_ref()) {
-            match &outcome {
-                Ok(_) => {
-                    reg.finish(jid, "plugin action done");
-                    let _ = app2.emit(
-                        "job:done",
-                        serde_json::json!({
-                            "id": jid,
-                            "kind": "plugin",
-                            "target": format!("{}/{}/{}", version2, profile2, action),
-                        }),
-                    );
-                }
-                Err(raw) => {
-                    let f = crate::plugin_failure::classify(raw);
-                    reg.fail(jid, f.code.as_str(), &f.message);
-                    let _ = app2.emit(
-                        "job:failed",
-                        serde_json::json!({
-                            "id": jid,
-                            "kind": "plugin",
-                            "target": format!("{}/{}/{}", version2, profile2, action),
-                            "code": f.code,
-                            "message": f.message,
-                            "raw": f.raw,
-                        }),
-                    );
-                }
+        match &outcome {
+            Ok(_) => sink2.finish(&job_id2, "plugin action done", None),
+            Err(raw) => {
+                let f = crate::plugin_failure::classify(raw);
+                sink2.fail(
+                    &job_id2,
+                    f.code.as_str(),
+                    &f.message,
+                    Some(serde_json::json!({ "raw": &f.raw })),
+                );
             }
         }
         outcome
     })
-    .await
-    .map_err(|e| format!("插件操作执行失败：{e}"))?;
+    .await;
+
+    let result = match result {
+        Ok(v) => v,
+        Err(e) => {
+            let msg = format!("插件操作执行失败：{e}");
+            sink.fail(&job_id, "internal", &msg, None);
+            return Err(msg);
+        }
+    };
     let output = result?;
     let name = if is_add {
         let after = read_dep_map(&pdir);
@@ -624,10 +620,15 @@ pub(crate) async fn ds_init_profile(
     crate::dsplugins::validate_profile_name(&profile)?;
     let (cli, home) = resolve_dsh(ctx.inner(), &version)?;
 
+    let job_target = format!("{}/{}/init", version, profile);
+    let sink = ctx.job_sink(app.clone());
+    let job_id = sink.create("plugin", &job_target);
+    let sink2 = sink.clone();
+    let job_id2 = job_id.clone();
     let app2 = app.clone();
     let version2 = version.clone();
     let profile2 = profile.clone();
-    tauri::async_runtime::spawn_blocking(move || {
+    let result = tauri::async_runtime::spawn_blocking(move || {
         use tauri::Emitter;
         let res = crate::dsplugins::run_dsh_plugin(
             &cli.bin,
@@ -645,9 +646,16 @@ pub(crate) async fn ds_init_profile(
                         "line": line,
                     }),
                 );
+                sink2.progress(
+                    &job_id2,
+                    "running",
+                    0,
+                    None,
+                    Some(serde_json::json!({ "line": line })),
+                );
             },
         );
-        if res.timed_out {
+        let outcome = if res.timed_out {
             Err(format!(
                 "初始化超时（{} 秒），已中止",
                 crate::dsplugins::PLUGIN_TIMEOUT.as_secs()
@@ -656,12 +664,32 @@ pub(crate) async fn ds_init_profile(
             Ok(res.output)
         } else {
             Err(res.output)
+        };
+        match &outcome {
+            Ok(_) => sink2.finish(&job_id2, "plugin init done", None),
+            Err(raw) => {
+                let f = crate::plugin_failure::classify(raw);
+                sink2.fail(
+                    &job_id2,
+                    f.code.as_str(),
+                    &f.message,
+                    Some(serde_json::json!({ "raw": &f.raw })),
+                );
+            }
         }
+        outcome
     })
-    .await
-    .map_err(|e| format!("初始化执行失败：{e}"))?
-}
+    .await;
 
+    match result {
+        Ok(v) => v,
+        Err(e) => {
+            let msg = format!("初始化执行失败：{e}");
+            sink.fail(&job_id, "internal", &msg, None);
+            Err(msg)
+        }
+    }
+}
 /// 打开某版本的 profile 目录（资源管理器）。
 #[tauri::command]
 #[specta::specta]
@@ -673,7 +701,7 @@ pub(crate) fn ds_open_profile_dir(
     crate::dsplugins::validate_profile_name(&profile)?;
     let (cfg, dirs) = ctx.config_dirs();
     let home = crate::paths::resolve_home(&cfg, &dirs, &version);
-    let dir = crate::dsplugins::profiles_dir(&home).join(&profile);
+    let dir = resolve_profile_dir(&version, &home, &profile);
     if !dir.exists() {
         return Err(format!("目录不存在：{}", dir.to_string_lossy()));
     }
@@ -696,15 +724,17 @@ pub(crate) fn ds_classify_plugin_failure(output: String) -> crate::plugin_failur
 #[tauri::command]
 #[specta::specta]
 pub(crate) fn ds_shared_home_health(
+    app: tauri::AppHandle,
     ctx: tauri::State<'_, crate::AppCtx>,
     version: String,
 ) -> Result<crate::shared_home::SharedHomeHealth, String> {
     let (cfg, dirs) = ctx.config_dirs();
     let home = crate::paths::resolve_home(&cfg, &dirs, &version);
-    let job = ctx.jobs().create("health", &version);
-    ctx.jobs().progress(&job, "scanning", 0, None);
+    let sink = ctx.job_sink(app);
+    let job = sink.create("health", &version);
+    sink.progress(&job, "scanning", 0, None, None);
     let report = crate::shared_home::scan(&home, &version);
-    ctx.jobs().finish(&job, "shared home health scanned");
+    sink.finish(&job, "shared home health scanned", None);
     Ok(report)
 }
 
@@ -834,7 +864,7 @@ pub(crate) async fn ds_plugin_update_batch(
     let Some(profile_info) = profiles.iter().find(|p| p.name == profile) else {
         return Err(format!("profile 不存在：{}", profile));
     };
-    let pdir = crate::dsplugins::profiles_dir(&home).join(&profile);
+    let pdir = resolve_profile_dir(&version, &home, &profile);
 
     let mut seen = std::collections::HashSet::new();
     let mut plans: Vec<(usize, crate::dsplugins::PluginUpdatePlan)> = Vec::new();
@@ -906,11 +936,11 @@ pub(crate) async fn ds_plugin_update_batch(
         return Ok(results.into_iter().map(|r| r.unwrap()).collect());
     }
 
-    let job_id = Some(
-        ctx.jobs()
-            .create("update", &format!("{}/{}", version, profile)),
-    );
-    let jobs = Some(ctx.jobs().clone());
+    let job_target = format!("{}/{}", version, profile);
+    let sink = ctx.job_sink(app.clone());
+    let job_id = sink.create("update", &job_target);
+    let sink2 = sink.clone();
+    let job_id2 = job_id.clone();
     let app2 = app.clone();
     let version2 = version.clone();
     let profile2 = profile.clone();
@@ -919,39 +949,20 @@ pub(crate) async fn ds_plugin_update_batch(
     let pdir2 = pdir;
     let outcome = tauri::async_runtime::spawn_blocking(move || {
         use tauri::Emitter;
-        if let (Some(jid), Some(reg)) = (job_id.as_deref(), jobs.as_ref()) {
-            reg.progress(jid, "batch", 0, Some(total as u64));
-            let _ = app2.emit(
-                "job:progress",
-                serde_json::json!({
-                    "id": jid,
-                    "kind": "update",
-                    "target": format!("{}/{}", version2, profile2),
-                    "stage": "batch",
-                    "done": 0,
-                    "total": total,
-                }),
-            );
-        }
+        sink2.progress(&job_id2, "batch", 0, Some(total as u64), None);
         let mut out = results;
         for (pos, (idx, plan)) in plans.into_iter().enumerate() {
             let index = pos + 1;
-            if let (Some(jid), Some(reg)) = (job_id.as_deref(), jobs.as_ref()) {
-                reg.progress(jid, "update", pos as u64, Some(total as u64));
-                let _ = app2.emit(
-                    "job:progress",
-                    serde_json::json!({
-                        "id": jid,
-                        "kind": "update",
-                        "target": format!("{}/{}", version2, profile2),
-                        "stage": "update",
-                        "done": pos,
-                        "total": total,
-                        "name": plan.name,
-                    }),
-                );
-            }
+            sink2.progress(
+                &job_id2,
+                "update",
+                pos as u64,
+                Some(total as u64),
+                Some(serde_json::json!({ "index": index, "name": &plan.name })),
+            );
             let app3 = app2.clone();
+            let sink_for_run = sink2.clone();
+            let job_for_run = job_id2.clone();
             let version3 = version2.clone();
             let profile3 = profile2.clone();
             let name3 = plan.name.clone();
@@ -975,6 +986,17 @@ pub(crate) async fn ds_plugin_update_batch(
                         "total": total,
                         "phase": phase,
                     }),
+                );
+                sink_for_run.progress(
+                    &job_for_run,
+                    "update",
+                    pos as u64,
+                    Some(total as u64),
+                    Some(serde_json::json!({
+                        "name": name3,
+                        "index": index,
+                        "phase": phase,
+                    })),
                 );
                 let res = crate::dsplugins::run_dsh_plugin(
                     &cli2.bin,
@@ -1033,26 +1055,37 @@ pub(crate) async fn ds_plugin_update_batch(
         let failed = out
             .iter()
             .filter(|r| {
-                !r.as_ref()
-                    .is_some_and(|x| matches!(&x.status, crate::dsplugins::PluginUpdateStatus::Updated))
+                !r.as_ref().is_some_and(|x| {
+                    matches!(&x.status, crate::dsplugins::PluginUpdateStatus::Updated)
+                })
             })
             .count();
-        if let (Some(jid), Some(reg)) = (job_id.as_deref(), jobs.as_ref()) {
-            if failed == 0 {
-                reg.finish(jid, "plugin update done");
-                let _ = app2.emit("job:done", serde_json::json!({ "id": jid, "kind": "update" }));
-            } else {
-                reg.fail(jid, "partial_failure", "some plugin updates failed");
-                let _ = app2.emit(
-                    "job:failed",
-                    serde_json::json!({ "id": jid, "kind": "update", "code": "partial_failure", "failed": failed }),
-                );
-            }
+        if failed == 0 {
+            sink2.finish(
+                &job_id2,
+                "plugin update done",
+                Some(serde_json::json!({ "total": total })),
+            );
+        } else {
+            sink2.fail(
+                &job_id2,
+                "partial_failure",
+                "some plugin updates failed",
+                Some(serde_json::json!({ "failed": failed, "total": total })),
+            );
         }
         out
     })
-    .await
-    .map_err(|e| format!("批量更新任务失败：{e}"))?;
+    .await;
+
+    let outcome = match outcome {
+        Ok(v) => v,
+        Err(e) => {
+            let msg = format!("批量更新任务失败：{e}");
+            sink.fail(&job_id, "internal", &msg, None);
+            return Err(msg);
+        }
+    };
 
     Ok(outcome
         .into_iter()

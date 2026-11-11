@@ -156,6 +156,11 @@ impl AppCtx {
         &self.jobs
     }
 
+    /// A2-4: unified job event sink bound to this app handle and registry.
+    pub(crate) fn job_sink(&self, app: tauri::AppHandle) -> jobs::JobEventSink {
+        jobs::JobEventSink::new(app, self.jobs.clone())
+    }
+
     pub(crate) fn next_generation(&self) -> u64 {
         self.generation.fetch_add(1, Ordering::Relaxed)
     }
