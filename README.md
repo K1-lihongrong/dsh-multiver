@@ -5,7 +5,7 @@
 <p align="center"><strong>轻量、便携的 DeepSeek Harness 版本管理器</strong><br>
 同一份数据挂多个版本，同一版本开多个实例。</p>
 
-<p align="center"><strong>中文</strong> | <a href="README.en.md">English</a></p>
+<p align="center"><strong>简体中文</strong> | <a href="README.en.md">English</a> | <a href="README.ja.md">日本語</a> | <a href="README.ko.md">한국어</a> | <a href="README.zh-TW.md">繁體中文</a></p>
 
 <p align="center">
   <a href="https://github.com/K1-lihongrong/dsh-multiver/releases"><img alt="Release" src="https://img.shields.io/github/v/release/K1-lihongrong/dsh-multiver?style=flat-square&color=4F6EF7"></a>
