@@ -46,7 +46,7 @@ pub fn dispatch(cmd: CliCommand, dry_run: bool, json: bool) -> i32 {
             InstanceAction::Create { name, attaches } => {
                 instance::cmd_create(&name, &attaches, dry_run, json)
             }
-            InstanceAction::List => instance::cmd_list(json),
+            InstanceAction::List { sizes } => instance::cmd_list(json, sizes),
             InstanceAction::Rename { id, name } => instance::cmd_rename(&id, &name, json),
             InstanceAction::Remove { id } => instance::cmd_remove(&id, dry_run, json),
         },

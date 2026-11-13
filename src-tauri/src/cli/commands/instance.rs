@@ -102,12 +102,14 @@ pub fn cmd_create(name: &str, attaches: &[String], dry_run: bool, json: bool) ->
     0
 }
 
-pub fn cmd_list(json: bool) -> i32 {
+pub fn cmd_list(json: bool, sizes: bool) -> i32 {
     let ctx = load_ctx();
     let mut view = instances::views(&ctx.cfg, &ctx.dirs, &std::collections::BTreeMap::new());
-    for inst in &mut view.instances {
-        let path = std::path::Path::new(&inst.home);
-        inst.size = Some(versions::dir_size(path));
+    if sizes {
+        for inst in &mut view.instances {
+            let path = std::path::Path::new(&inst.home);
+            inst.size = Some(versions::dir_size(path));
+        }
     }
 
     if json {

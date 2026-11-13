@@ -162,16 +162,6 @@ fn next_value(rest: &[String], i: usize, key: &str) -> Result<String, String> {
     }
 }
 
-fn ensure_only_globals(rest: &[String], cmd: &str) -> Result<(), String> {
-    for a in rest {
-        if is_global_flag(a) {
-            continue;
-        }
-        return Err(format!("{cmd} 不接受参数：{a}"));
-    }
-    Ok(())
-}
-
 /// 解析 `<版本> [--instance <id>]` 形式。
 fn parse_version_with_instance(
     rest: &[String],
@@ -282,8 +272,20 @@ fn parse_instance(rest: &[String]) -> Result<CliCommand, String> {
             InstanceAction::Create { name, attaches }
         }
         "list" => {
-            ensure_only_globals(&rest[1..], "instance list")?;
-            InstanceAction::List
+            let mut sizes = false;
+            for a in &rest[1..] {
+                match a.as_str() {
+                    "--sizes" => {
+                        if sizes {
+                            return Err("--sizes 只能出现一次".into());
+                        }
+                        sizes = true;
+                    }
+                    a if is_global_flag(a) => {}
+                    a => return Err(format!("instance list 不接受参数：{a}")),
+                }
+            }
+            InstanceAction::List { sizes }
         }
         "rename" => {
             let mut positional = Vec::new();
@@ -533,9 +535,17 @@ mod tests {
         assert!(matches!(
             parse(&args(&["instance", "list"])),
             Ok(Some(CliCommand::Instance {
-                action: InstanceAction::List
+                action: InstanceAction::List { sizes: false }
             }))
         ));
+        assert!(matches!(
+            parse(&args(&["instance", "list", "--sizes"])),
+            Ok(Some(CliCommand::Instance {
+                action: InstanceAction::List { sizes: true }
+            }))
+        ));
+        assert!(parse(&args(&["instance", "list", "--sizes", "--sizes"])).is_err());
+        assert!(parse(&args(&["instance", "list", "--unknown"])).is_err());
         match parse(&args(&["instance", "rename", "i1", "B"])) {
             Ok(Some(CliCommand::Instance {
                 action: InstanceAction::Rename { id, name },

@@ -51,7 +51,7 @@ pub enum IsolateAction {
 #[derive(Debug)]
 pub enum InstanceAction {
     Create { name: String, attaches: Vec<String> },
-    List,
+    List { sizes: bool },
     Rename { id: String, name: String },
     Remove { id: String },
 }

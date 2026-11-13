@@ -26,7 +26,7 @@ pub fn print_help() {
   isolate <版本> --attach <id>     把实例挂载到该版本
   isolate <版本> --detach <id>     解除该版本与实例的挂载
   instance create --name <名称> [--attach <版本>...]  创建实例（不建目录）
-  instance list [--json]           列出全部实例（含孤儿）
+  instance list [--sizes] [--json] 列出全部实例（含孤儿；默认不算占用）
   instance rename <id> <新名>      改实例显示名
   instance remove <id>             删除实例（home 移入回收站）
   shortcut <版本>                  为某版本创建桌面快捷方式
