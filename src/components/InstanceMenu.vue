@@ -1,5 +1,5 @@
 <script setup>
-import { onMounted, onUnmounted, computed } from "vue";
+import { onMounted, onUnmounted, computed, nextTick, ref } from "vue";
 import { t } from "../composables/useI18n.js";
 
 const props = defineProps({
@@ -43,15 +43,85 @@ function runLabel(id) {
 function removeDisabled(inst) {
   return !!inst.running_on || !!runningOn(inst.id);
 }
+const rootEl = ref(null);
+let anchorEl = null;
+let resizeObserver = null;
+
+/// 浮层用 fixed 定位，并按「左开优先、右侧兜底」夹在视口内。
+/// 操作区换行到左侧时，若仍按右对齐展开，420px 菜单会伸出屏幕左边
+/// （v0.4.0 实机 bug）；两侧都不够时贴边并受 max-width 限制。
+function placeMenu() {
+  const el = rootEl.value;
+  if (!el || !anchorEl) return;
+  const anchor = anchorEl.getBoundingClientRect();
+  const menu = el.getBoundingClientRect();
+  const margin = 8;
+  const vw = window.innerWidth;
+  const vh = window.innerHeight;
+
+  // 最小化或窗口暂时不可见时，视口可能是 0×0；此时重排会把浮层丢到左上角，
+  // 恢复后再跳回。保留上一次位置，等窗口恢复（resize/visibilitychange）再算。
+  if (vw < 1 || vh < 1 || menu.width < 1 || menu.height < 1) return;
+
+  const spaceLeft = anchor.right - margin;
+  const spaceRight = vw - margin - anchor.left;
+  let left;
+  if (menu.width <= spaceLeft) {
+    // 默认：右边缘贴按钮组，向左展开。
+    left = anchor.right - menu.width;
+  } else if (menu.width <= spaceRight) {
+    // 左边放不下：翻到右边，左边缘贴按钮组。
+    left = anchor.left;
+  } else {
+    // 两边都放不下：在视口内居中，避免贴左显得偏；宽度由 max-width 限制。
+    left = Math.max(margin, Math.round((vw - menu.width) / 2));
+  }
+
+  let top = anchor.bottom + 6;
+  if (top + menu.height > vh - margin) {
+    top = anchor.top - menu.height - 6;
+  }
+  top = Math.max(margin, Math.min(top, vh - margin - menu.height));
+
+  el.style.left = `${Math.round(left)}px`;
+  el.style.top = `${Math.round(top)}px`;
+}
+
 function onDocClick() {
   emit("close");
 }
-onMounted(() => document.addEventListener("click", onDocClick));
-onUnmounted(() => document.removeEventListener("click", onDocClick));
+function onKeydown(e) {
+  if (e.key === "Escape") emit("close");
+}
+function onVisibilityChange() {
+  if (document.visibilityState === "visible") placeMenu();
+}
+onMounted(async () => {
+  anchorEl = rootEl.value?.parentElement || null;
+  await nextTick();
+  placeMenu();
+  window.addEventListener("resize", placeMenu);
+  window.addEventListener("scroll", placeMenu, true);
+  document.addEventListener("click", onDocClick);
+  document.addEventListener("keydown", onKeydown);
+  document.addEventListener("visibilitychange", onVisibilityChange);
+  if (typeof ResizeObserver !== "undefined" && rootEl.value) {
+    resizeObserver = new ResizeObserver(placeMenu);
+    resizeObserver.observe(rootEl.value);
+  }
+});
+onUnmounted(() => {
+  window.removeEventListener("resize", placeMenu);
+  window.removeEventListener("scroll", placeMenu, true);
+  document.removeEventListener("click", onDocClick);
+  document.removeEventListener("keydown", onKeydown);
+  document.removeEventListener("visibilitychange", onVisibilityChange);
+  resizeObserver?.disconnect();
+});
 </script>
 
 <template>
-  <div class="instance-menu" @click.stop>
+  <div ref="rootEl" class="instance-menu" @click.stop>
     <div class="im-head">
       <span class="im-title">{{ version }}</span>
       <span class="im-sub">{{ t("instances.panelTitle") }}</span>
@@ -91,7 +161,6 @@ onUnmounted(() => document.removeEventListener("click", onDocClick));
         <span v-if="runningOn(inst.id)" class="im-running">
           {{ t("instances.runningOn", { v: runningOn(inst.id) }) }}
         </span>
-        <span v-else class="im-muted">{{ inst.id }}</span>
         <button class="im-act" @click="$emit('run', { version, instance: inst.id })">
           {{ runLabel(inst.id) }}
         </button>
@@ -117,8 +186,11 @@ onUnmounted(() => document.removeEventListener("click", onDocClick));
 
 <style scoped>
 .instance-menu {
-  position: absolute; top: calc(100% + 6px); right: 0; z-index: 60;
-  min-width: 420px; max-width: 560px; max-height: 60vh; overflow: auto;
+  position: fixed; top: 0; left: 0; right: auto; z-index: 80;
+  width: max-content;
+  min-width: min(420px, calc(100vw - 16px));
+  max-width: min(560px, calc(100vw - 16px));
+  max-height: min(60vh, calc(100vh - 16px)); overflow: auto;
   background: var(--panel-bg); border: 1px solid var(--surface-5); border-radius: 10px;
   box-shadow: 0 10px 28px var(--shadow-pop2); padding: 8px;
 }
@@ -134,7 +206,6 @@ onUnmounted(() => document.removeEventListener("click", onDocClick));
 .im-row input { accent-color: var(--accent); }
 .im-name { font-size: 13px; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1 1 120px; min-width: 0; }
 .im-running { font-size: 11px; color: var(--ok); white-space: nowrap; }
-.im-muted { font-size: 11px; color: var(--text-muted); }
 .im-act {
   border: 1px solid var(--border); background: var(--panel-bg); color: var(--text-2);
   border-radius: 6px; padding: 3px 7px; font-size: 11px; cursor: pointer; font-family: inherit;

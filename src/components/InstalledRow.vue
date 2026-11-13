@@ -1,5 +1,5 @@
 <script setup>
-import { computed, ref } from "vue";
+import { computed } from "vue";
 import { t } from "../composables/useI18n.js";
 import InstanceMenu from "./InstanceMenu.vue";
 import NotesPanel from "./NotesPanel.vue";
@@ -24,6 +24,7 @@ const props = defineProps({
   runningVersion: { type: String, default: "" },
   pluginPanelOpen: { type: Boolean, default: false },
   notesOpen: { type: Boolean, default: false },
+  menuOpen: { type: Boolean, default: false },
   instances: { type: Array, default: () => [] },
   selectedTarget: { type: String, default: null },
   runningTargets: { type: Array, default: () => [] },
@@ -48,13 +49,14 @@ const emit = defineEmits([
   "close-plugin",
   "close-notes",
   "open-url",
+  "toggle-menu",
+  "close-menu",
 ]);
 
 const isBlocked = computed(
   () => props.uninstallingVersion === props.item.version || (props.batchBusy && props.selected),
 );
 const isUninstalling = computed(() => props.uninstallingVersion === props.item.version);
-const menuOpen = ref(false);
 const targetInstance = computed(
   () => props.instances.find((i) => i.id === props.selectedTarget) || null
 );
@@ -89,27 +91,30 @@ function runMain() {
     instance: targetInstance.value ? targetInstance.value.id : null,
   });
 }
+function closeMenu() {
+  emit("close-menu");
+}
 function onMenuRun(payload) {
-  menuOpen.value = false;
+  closeMenu();
   emit("run", payload);
 }
 function onSelectTarget(instance) {
   emit("select-target", { version: props.item.version, instance });
 }
 function onOpenInstanceDir(instance) {
-  menuOpen.value = false;
+  closeMenu();
   emit("open-instance-dir", { version: props.item.version, instance });
 }
 function onRenameInstance(inst) {
-  menuOpen.value = false;
+  closeMenu();
   emit("rename-instance", inst);
 }
 function onRemoveInstance(inst) {
-  menuOpen.value = false;
+  closeMenu();
   emit("remove-instance", inst);
 }
 function onCreateInstance() {
-  menuOpen.value = false;
+  closeMenu();
   emit("create-instance", props.item.version);
 }
 
@@ -163,7 +168,7 @@ function filePercent(p) {
     <div class="ver-actions">
       <div class="run-wrap">
         <button class="btn primary run-main" @click="runMain" :disabled="runLocked">{{ runLabel }}</button>
-        <button class="btn run-caret" @click.stop="menuOpen = !menuOpen" :disabled="isBlocked" :aria-label="t('instances.panelTitle')">▾</button>
+        <button class="btn run-caret" @click.stop="emit('toggle-menu')" :disabled="isBlocked" :aria-label="t('instances.panelTitle')" :aria-expanded="menuOpen">▾</button>
         <InstanceMenu
           v-if="menuOpen"
           :version="item.version"
@@ -171,7 +176,7 @@ function filePercent(p) {
           :selected-target="selectedTarget"
           :running-targets="runningTargets"
           :use-official-home="useOfficialHome"
-          @close="menuOpen = false"
+          @close="emit('close-menu')"
           @select-target="onSelectTarget"
           @run="onMenuRun"
           @open-dir="onOpenInstanceDir"

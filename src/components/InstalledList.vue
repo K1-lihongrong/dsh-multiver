@@ -102,6 +102,7 @@ const uninstalling = ref("");   // 正在卸载的版本号
 const browserOpenResult = ref(null); // 浏览器打开失败时展示 URL
 const installedNoteVer = ref(null); // 当前展开更新说明的版本号
 const pluginPanelVer = ref(null);   // 当前展开 dsh 插件面板的版本号
+const openInstanceMenu = ref(null); // 同一时间只允许一个实例浮层展开
 
 // ---- 批量操作 ----
 const selected = ref(new Set());
@@ -357,6 +358,9 @@ async function batchUninstall() {
 function toggleInstalledNote(v) {
   installedNoteVer.value = installedNoteVer.value === v ? null : v;
 }
+function toggleInstanceMenu(v) {
+  openInstanceMenu.value = openInstanceMenu.value === v ? null : v;
+}
 </script>
 
 <template>
@@ -422,8 +426,11 @@ function toggleInstalledNote(v) {
         :running-version="runningVersion"
         :plugin-panel-open="pluginPanelVer === v.version"
         :notes-open="installedNoteVer === v.version"
+        :menu-open="openInstanceMenu === v.version"
         @select="toggleSelect(v.version)"
         @toggle-notes="toggleInstalledNote(v.version)"
+        @toggle-menu="toggleInstanceMenu(v.version)"
+        @close-menu="openInstanceMenu = null"
         @run="run"
         @open-browser="openInBrowser"
         @set-default="setDefault(v.version)"

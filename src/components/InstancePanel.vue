@@ -174,7 +174,6 @@ async function submitCreate() {
             </template>
             <template v-else>
               <span class="ip-name">{{ inst.name }}</span>
-              <span class="ip-id">{{ inst.id }}</span>
               <span v-if="inst.orphan" class="ip-badge">{{ t("instances.unmounted") }}</span>
               <span v-if="runningOn(inst)" class="ip-running">{{ t("instances.runningOn", { v: runningOn(inst) }) }}</span>
               <button class="ip-dir" :title="inst.home" @click="openDir(inst)">{{ t("instances.openDir") }}</button>
@@ -265,7 +264,6 @@ async function submitCreate() {
 .ip-row.orphan { border-color: var(--warn-border); background: var(--warn-weak); }
 .ip-main { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .ip-name { font-size: 14px; font-weight: 600; color: var(--text); }
-.ip-id { font-size: 11px; color: var(--text-muted); font-family: ui-monospace, Consolas, monospace; }
 .ip-badge {
   background: var(--warn-weak-2); color: var(--warn); border-radius: 9px;
   padding: 1px 7px; font-size: 11px;
