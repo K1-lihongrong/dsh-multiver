@@ -7,7 +7,7 @@
 
 ---
 
-## [0.4.0] - 2026-11-11
+## [0.4.0] - 2026-11-13
 
 ### 同版本多实例
 
@@ -24,6 +24,7 @@
 - 隔离 home 从 versions/<版本>/home 改为 homes/<id>。
 - WebView2 数据目录改为 webview/<版本>/_shared 与 <版本>/<id>，旧目录自动改名。
 - 卸载版本不再删除仅属于该版本的实例数据。
+- instance list 默认不扫占用，新增 --sizes 显式开启。
 
 ### 修复
 
@@ -34,7 +35,7 @@
 ### 验证
 
 - Rust 单测 271 passed / 1 ignored；fmt、clippy、pnpm build、check-commands、check-i18n 通过。
-- E2E 68 passed（新增 5 条多实例用例）。
+- E2E 71 passed（新增多实例浮层、运行参数、跨版本运行态、实例面板与窄视口菜单用例）。
 
 ### Linux
 

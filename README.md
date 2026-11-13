@@ -42,7 +42,7 @@
 
 | 平台 | 文件 | 说明 |
 | :--- | :--- | :--- |
-| **Windows** | `dsh-multiver.exe` | 便携版，放到任意目录双击运行（需 WebView2，Win11 及 Win10 1803+ 自带） |
+| **Windows** | `dsh-multiver.exe` | 便携版，放到**普通可写目录**双击运行（需 WebView2，Win11 及 Win10 1803+ 自带）。不要放 DSH workspace、`C:\Program Files` 或只读目录 |
 
 > Linux 当前**不打包、不发布**（AppImage/deb 均不提供）；仅保留 CI 编译与单测。未来条件合适再恢复。
 
@@ -61,7 +61,7 @@
 5. 点「运行」即可在应用**内嵌窗口**中打开该版本的 `dsh web`，或点「浏览器打开」在系统浏览器中打开
 6. 点某版本的「**插件**」按钮，可查看 / 安装 / 卸载该版本的 dsh 插件，或从「推荐」页一键安装社区插件
 
-数据默认存放在 **exe 所在目录**下（`versions/`、`home/`、`store/`），也可在界面「路径设置」里改到任意位置。
+数据默认存放在 **exe 所在目录**下（`versions/`、`home/`、`store/`），因此该目录必须可写；也可在界面「路径设置」里改到任意位置。
 
 ### 运行方式
 
@@ -102,14 +102,16 @@ dsh web
 
 ### 数据隔离
 
-点某个版本的「隔离」按钮，可为它开启独立数据目录（`versions/<版本号>/home/`）。隔离版本的会话、插件、配置与共享环境互不干扰，适合测试不兼容插件。
+版本行右侧的「实例」下拉用于选择/管理隔离实例。实例是全局实体，一份 `homes/<id>` 可挂到多个版本，同一版本也可建多个实例；会话、插件、配置与共享环境互不干扰，适合测试不兼容插件或对比版本行为。
 
-隔离版本的「已隔离 ▾」菜单还提供：
+实例菜单还提供：
 
-- 打开隔离目录
-- 扫描占用大小
-- 复制共享数据到此（不覆盖已存在文件）
-- 清理隔离数据
+- 运行 / 聚焦、打开实例目录
+- 改名、删除（删除走回收站）
+- 新建实例、切换该版本的主按钮目标
+- 全局面板「实例管理」集中查看孤儿、挂载/解除、扫描占用
+
+实例的内部 id 只用于路径、CLI/JSON 和日志，界面只显示实例名称。
 
 ### 查看版本更新说明
 
@@ -145,7 +147,8 @@ dsh-multiver.exe uninstall <版本>                        # 无头卸载
 dsh-multiver.exe set-default <版本>                      # 设默认版本
 dsh-multiver.exe maintenance [--cleanup|--prune]         # 无头维护
 dsh-multiver.exe instance create --name 对比用 --attach <版本>   # 创建实例
-dsh-multiver.exe instance list --json                    # 实例列表（含孤儿）
+dsh-multiver.exe instance list --json                    # 实例列表（含孤儿；默认不算占用）
+dsh-multiver.exe instance list --sizes --json            # 同时扫描各实例占用
 dsh-multiver.exe run <版本> --instance <id>              # 指定实例启动
 dsh-multiver.exe install <版本> --dry-run                # 只预览，不执行
 dsh-multiver.exe help                                    # 帮助
