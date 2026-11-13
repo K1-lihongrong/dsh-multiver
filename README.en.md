@@ -18,7 +18,7 @@ One home can be mounted to multiple versions; one version can run multiple isola
 <p align="center">
   <a href="#download">Download</a> ·
   <a href="#quick-start">Quick start</a> ·
-  <a href="docs/使用手册.md">Manual</a> ·
+  <a href="docs/使用手册.en.md">Manual</a> ·
   <a href="docs/插件兼容矩阵.md">Plugin compatibility</a> ·
   <a href="docs/问题日志查看指南.md">Troubleshooting</a>
 </p>
@@ -77,7 +77,7 @@ Download from [Releases](https://github.com/K1-lihongrong/dsh-multiver/releases)
 
 > Linux is currently **not packaged or released** (neither AppImage nor deb are provided); only CI builds and unit tests are retained. Packaging will be restored when conditions are suitable in the future.
 
-📖 **For complete instructions, see the [User Manual](docs/使用手册.md)** — including environment setup, all features, and troubleshooting common issues.
+📖 **For complete instructions, see the [User Manual](docs/使用手册.en.md)** — including environment setup, all features, and troubleshooting common issues.
 
 🔍 **Having issues? See the [Log Viewing Guide](docs/问题日志查看指南.md)** — where logs are located, what each records, and how to troubleshoot based on symptoms.
 
@@ -190,7 +190,7 @@ dsh-multiver.exe help                                      # Help
 - Destructive commands have **no interactive confirmation**; ensure parameters are correct
 - **Upgrading from v0.2.x**: Old `--flag` syntax has been removed; current commands are in the command table above or run `dsh-multiver.exe help`
 
-See [User Manual · Command Line Mode](docs/使用手册.md#八命令行模式cli).
+See [User Manual · Command Line Mode](docs/使用手册.en.md#s8).
 
 ## Differences from other dsh tools
 
