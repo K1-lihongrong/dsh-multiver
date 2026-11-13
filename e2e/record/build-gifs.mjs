@@ -1,17 +1,10 @@
-// 批量转码：test-results 下的录屏 → docs/screenshots/manual 下的 WebP（含多语字幕）。
+// 批量转码：test-results 下的录屏 → docs/screenshots/manual 下的五语 WebP。
 //
-// 用法：node e2e/record/build-gifs.mjs [--skip-gif] [--lang=zh|en|ja|all] [--gif]
+// 用法：node e2e/record/build-gifs.mjs --lang=zh|en|ja|ko|zh-TW [--gif] [--skip-gif]
 //
-// 默认只出中文版（--lang=zh）。多语种适配待后续专项处理（见 GAP-019）。
-// spec 里的 cue(zh, en, ja) 写入 %TEMP%/dsh-multiver/cues/<key>.json，
-// 本脚本按 --lang 生成对应 ASS 烧进 WebP：
-//   <key>.webp      中文（默认，手册引用的是这份）
-//   <key>.en.webp   英文（--lang=en 或 --lang=all）
-//   <key>.ja.webp   日文（--lang=ja 或 --lang=all）
-//
-// 格式选型（2026-11-04 实测）：默认输出 WebP 有损 q75，体积约为 GIF 的 38.6%，
-// 画质肉眼无差。加 --gif 可退回 GIF（用于离线文档等不支持 WebP 的场景）。
-// 详见 .cuckoo/skills/manual-gif/SKILL.md 第七节。
+// 每次录屏只对应一种界面语言（REC_LANG）；本脚本按 --lang 输出对应后缀：
+//   zh → <key>.webp；en → <key>.en.webp；ja → .ja；ko → .ko；zh-TW → .zh-TW。
+// 字幕缺失时用本地 Ollama 翻译并缓存到 %TEMP%/dsh-multiver/cues/i18n-cache.json。
 //
 // 关键坑：
 // - -ss 0.8 裁掉启动白屏，ASS 里的时间轴要同步减 0.8。
@@ -29,27 +22,35 @@ const SRC = join(ROOT, "test-results");
 const DEST = join(ROOT, "docs", "screenshots", "manual");
 const TMP = join(tmpdir(), "dsh-multiver", "rec");
 const CUE_DIR = join(tmpdir(), "dsh-multiver", "cues");
+const CUE_CACHE = join(CUE_DIR, "i18n-cache.json");
 
-/** 裁掉的起始秒数（启动白屏 + 启动页） */
 const TRIM = 0.8;
-/** 输出帧率 */
 const FPS = 6;
-/** 输出宽度（高度按比例） */
 const WIDTH = 960;
-/** WebP 有损质量（0-100）。实测 75 最优：q90 反而比 GIF 大 */
 const QUALITY = 75;
-/** 底部字幕黑边高度（像素）。界面尺寸不变，画布向下扩张 */
 const SUBTITLE_BAND = 44;
-/** 输出格式：webp（默认）| gif（--gif 时） */
 const FORMAT = process.argv.includes("--gif") ? "gif" : "webp";
-/** 输出扩展名 */
 const EXT = "." + FORMAT;
 
-// 默认只出中文版；需要多语种时显式传 --lang=all 或 --lang=en
-const LANG_ARG = (process.argv.find((a) => a.startsWith("--lang=")) || "--lang=zh").split("=")[1];
-const LANGS = LANG_ARG === "all" ? ["zh", "en", "ja"] : [LANG_ARG];
+const LANGS = {
+  zh: { suffix: "", ui: "zh-CN", font: "Microsoft YaHei" },
+  en: { suffix: ".en", ui: "en-US", font: "Segoe UI" },
+  ja: { suffix: ".ja", ui: "ja-JP", font: "Yu Gothic" },
+  ko: { suffix: ".ko", ui: "ko-KR", font: "Malgun Gothic" },
+  "zh-TW": { suffix: ".zh-TW", ui: "zh-TW", font: "Microsoft JhengHei" },
+};
 
-// spec 前缀 → 输出文件名
+const langArg = (process.argv.find((a) => a.startsWith("--lang=")) || "--lang=zh").split("=")[1];
+if (langArg === "all" || !LANGS[langArg]) {
+  console.error("--lang 只接受 zh、en、ja、ko、zh-TW；界面语言必须与本次录屏的 REC_LANG 一致。");
+  process.exit(2);
+}
+const LANG = LANGS[langArg];
+if (process.env.REC_LANG && process.env.REC_LANG !== LANG.ui) {
+  console.error("REC_LANG=" + process.env.REC_LANG + " 与 --lang=" + langArg + "（应为 " + LANG.ui + "）不一致。");
+  process.exit(2);
+}
+
 const MAP = {
   "01-main": "01-main",
   "02-env-fail": "02-env-fail",
@@ -66,12 +67,12 @@ const MAP = {
   "13-plugin-installed": "13-plugin-installed",
   "14-plugin-catalog": "14-plugin-catalog",
   "15-appearance": "15-appearance",
+  "17-instance-panel": "17-instance-panel",
+  "18-plugin-add": "18-plugin-add",
 };
 
-// 各语言字体：中 → 微软雅黑，英 → Segoe UI，日 → 游ゴシック
-const FONT = { zh: "Microsoft YaHei", en: "Segoe UI", ja: "Yu Gothic" };
+const SKIP = process.argv.includes("--skip-gif");
 
-/** 秒 → ASS 时间戳 H:MM:SS.cc */
 function assTime(sec) {
   const s = Math.max(0, sec);
   const h = Math.floor(s / 3600);
@@ -82,7 +83,6 @@ function assTime(sec) {
   return h + ":" + p(m) + ":" + p(ss) + "." + p(cs);
 }
 
-/** 由 cues 生成 ASS 内容（单语言）。 */
 function buildAss(cues, lang, duration) {
   const lines = [];
   lines.push("[Script Info]");
@@ -98,11 +98,8 @@ function buildAss(cues, lang, duration) {
       "Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, " +
       "Alignment, MarginL, MarginR, MarginV, Encoding",
   );
-  // 黑底条上字幕用描边（BorderStyle=1）+ 加粗，文字直接浮在黑边上
-  // Alignment=2（底部居中）+ MarginV=12：字幕落在 pad 出的底部黑边内，不遮挡界面
-  // Outline=2 保证浅色文字在纯黑底上边缘清晰
   lines.push(
-    "Style: Default," + FONT[lang] + ",22,&H00FFFFFF,&H000000FF,&H00000000,&H00000000," +
+    "Style: Default," + LANGS[lang].font + ",22,&H00FFFFFF,&H000000FF,&H00000000,&H00000000," +
       "1,0,0,0,100,100,0,0,1,2,0,2,24,24,12,1",
   );
   lines.push("");
@@ -112,97 +109,135 @@ function buildAss(cues, lang, duration) {
   for (let i = 0; i < cues.length; i++) {
     const c = cues[i];
     const text = c[lang];
-    if (!text) continue;
-    // 起点减 TRIM（裁掉的起始段），终点为下一条起点，末条到视频末尾
+    if (!text) throw new Error("字幕缺失：" + lang + " / " + (c.zh || "").slice(0, 20));
     const start = Math.max(0, c.t - TRIM);
     const next = cues[i + 1];
     const end = next ? Math.max(start + 0.4, next.t - TRIM) : Math.max(start + 0.4, duration - TRIM);
     if (end <= 0) continue;
-    lines.push(
-      "Dialogue: 0," + assTime(start) + "," + assTime(end) + ",Default,,0,0,0,," + text,
-    );
+    lines.push("Dialogue: 0," + assTime(start) + "," + assTime(end) + ",Default,,0,0,0,," + text);
   }
   return lines.join("\n") + "\n";
 }
 
-const SKIP = process.argv.includes("--skip-gif");
-mkdirSync(DEST, { recursive: true });
-mkdirSync(TMP, { recursive: true });
+function loadCache() {
+  try { return JSON.parse(readFileSync(CUE_CACHE, "utf8")); } catch (_) { return {}; }
+}
+const cache = loadCache();
+function saveCache() {
+  mkdirSync(CUE_DIR, { recursive: true });
+  writeFileSync(CUE_CACHE, JSON.stringify(cache, null, 2), "utf8");
+}
 
-const dirs = readdirSync(SRC, { withFileTypes: true }).filter((d) => d.isDirectory());
-let ok = 0;
-let fail = 0;
+/** 单条字幕翻译：只在缺语言时调用，结果写入缓存。 */
+async function translateCaption(text, lang) {
+  const key = lang + "|" + text;
+  if (cache[key]) return cache[key];
+  const body = {
+    model: "qwen3.5:9b",
+    stream: false,
+    think: false,
+    messages: [
+      { role: "system", content: "You translate one short UI caption. Preserve product names, paths, commands and punctuation. Output only the translation, no quotes." },
+      { role: "user", content: "Translate to " + lang + ": " + text },
+    ],
+    options: { num_ctx: 2048, num_predict: 256, temperature: 0.2 },
+  };
+  const res = await fetch("http://127.0.0.1:11434/api/chat", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error("Ollama HTTP " + res.status);
+  const json = await res.json();
+  const out = String(json.message?.content || "").trim().replace(/^["'“”]+|["'“”]+$/g, "");
+  if (!out) throw new Error("Ollama 返回空字幕：" + text.slice(0, 20));
+  cache[key] = out;
+  saveCache();
+  return out;
+}
 
-for (const dir of dirs) {
-  const key = Object.keys(MAP).find((k) => dir.name.startsWith(k));
-  if (!key) continue;
-  const src = join(SRC, dir.name, "video.webm");
-  if (!existsSync(src)) {
-    console.log("跳过（无视频）：" + dir.name);
-    continue;
+async function resolveCues(cues, target) {
+  const out = [];
+  for (const c of cues) {
+    const row = { t: c.t, zh: c.zh };
+    if (target !== "zh") {
+      row[target] = c[target] || await translateCaption(c.zh, target);
+    }
+    out.push(row);
   }
-  if (SKIP) {
-    console.log("[dry] " + src + " -> " + MAP[key]);
-    continue;
-  }
+  return out;
+}
 
-  // 复制到纯 ASCII 临时路径，避免中文路径在 ffmpeg 下出问题
-  const tmpWebm = join(TMP, key + ".webm");
-  copyFileSync(src, tmpWebm);
+async function main() {
+  mkdirSync(DEST, { recursive: true });
+  mkdirSync(TMP, { recursive: true });
 
-  // 读时间轴（可能不存在 —— 没加 cue 的 spec）
-  const cuePath = join(CUE_DIR, key + ".json");
-  const cues = existsSync(cuePath) ? JSON.parse(readFileSync(cuePath, "utf8")) : null;
+  const dirs = readdirSync(SRC, { withFileTypes: true }).filter((d) => d.isDirectory());
+  let ok = 0;
+  let fail = 0;
 
-  // 取视频总时长，供最后一条字幕定终点
-  let duration = 30;
-  const probe = spawnSync(FFMPEG.replace(/ffmpeg(\.exe)?$/i, "ffprobe$1"), [
-    "-v", "error", "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", tmpWebm,
-  ], { encoding: "utf8" });
-  if (probe.status === 0 && probe.stdout.trim()) duration = parseFloat(probe.stdout.trim());
+  for (const dir of dirs) {
+    const key = Object.keys(MAP).find((k) => dir.name.startsWith(k));
+    if (!key) continue;
+    const src = join(SRC, dir.name, "video.webm");
+    if (!existsSync(src)) {
+      console.log("跳过（无视频）：" + dir.name);
+      continue;
+    }
+    if (SKIP) {
+      console.log("[dry] " + src + " -> " + MAP[key] + LANG.suffix);
+      continue;
+    }
 
-  for (const lang of LANGS) {
-    const suffix = lang === "zh" ? "" : "." + lang;
-    const out = join(DEST, MAP[key] + suffix + EXT);
-    const tmpOut = join(TMP, key + suffix + EXT);
+    const tmpWebm = join(TMP, key + ".webm");
+    copyFileSync(src, tmpWebm);
 
-    // 向下扩张画布，给字幕留出黑边（界面尺寸不变）
+    const cuePath = join(CUE_DIR, key + ".json");
+    const rawCues = existsSync(cuePath) ? JSON.parse(readFileSync(cuePath, "utf8")) : null;
+    const cues = rawCues && rawCues.length ? await resolveCues(rawCues, langArg) : null;
+
+    let duration = 30;
+    const probe = spawnSync(FFMPEG.replace(/ffmpeg(\.exe)?$/i, "ffprobe$1"), [
+      "-v", "error", "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", tmpWebm,
+    ], { encoding: "utf8" });
+    if (probe.status === 0 && probe.stdout.trim()) duration = parseFloat(probe.stdout.trim());
+
+    const out = join(DEST, MAP[key] + LANG.suffix + EXT);
+    const tmpOut = join(TMP, key + LANG.suffix + EXT);
+
     const vfParts = [
       "fps=" + FPS,
       "scale=" + WIDTH + ":-2:flags=lanczos",
       "pad=iw:ih+" + SUBTITLE_BAND + ":0:0:color=black",
     ];
     if (cues && cues.length) {
-      // 生成 ASS 到临时目录，用相对文件名 + cwd 规避路径转义
-      const assName = "sub_" + key + "_" + lang + ".ass";
-      writeFileSync(join(TMP, assName), buildAss(cues, lang, duration), "utf8");
+      const assName = "sub_" + key + "_" + langArg + ".ass";
+      writeFileSync(join(TMP, assName), buildAss(cues, langArg, duration), "utf8");
       vfParts.push("subtitles=" + assName);
     }
 
-    // 编码参数：WebP 用 libwebp_anim 有损；GIF 用默认调色板编码
     const codecArgs = FORMAT === "webp"
       ? ["-c:v", "libwebp_anim", "-lossless", "0", "-quality", String(QUALITY)]
       : [];
 
     const args = [
-      "-y",
-      "-ss", String(TRIM),
-      "-i", tmpWebm,
-      "-vf", vfParts.join(","),
-      "-loop", "0",
-      ...codecArgs,
-      tmpOut,
+      "-y", "-ss", String(TRIM), "-i", tmpWebm,
+      "-vf", vfParts.join(","), "-loop", "0",
+      ...codecArgs, tmpOut,
     ];
     const r = spawnSync(FFMPEG, args, { cwd: TMP, encoding: "utf8" });
     if (r.status !== 0) {
-      console.log("失败：" + MAP[key] + suffix);
+      console.log("失败：" + MAP[key] + LANG.suffix);
       console.log((r.stderr || "").slice(-500));
       fail++;
       continue;
     }
     copyFileSync(tmpOut, out);
     ok++;
+    console.log("已生成 " + MAP[key] + LANG.suffix + (cues && cues.length ? "（字幕 " + cues.length + " 条）" : "（无字幕）"));
   }
-  console.log("已生成 " + MAP[key] + (cues && cues.length ? "（含字幕 " + cues.length + " 条）" : "（无字幕）"));
+  console.log("\n完成：" + ok + " 个文件，失败：" + fail + " 个");
+  if (fail) process.exit(1);
 }
-console.log("\n完成：" + ok + " 个文件，失败：" + fail + " 个");
+
+await main();

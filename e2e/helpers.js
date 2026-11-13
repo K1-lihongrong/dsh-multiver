@@ -30,6 +30,8 @@ export async function mockTauri(page, opts = {}) {
   const instances = opts.instances || [];
   const versionTargets = opts.versionTargets || {};
   const runningTargets = opts.runningTargets || [];
+  // 录屏五语：默认 zh-CN；REC_LANG 由 scripts/record-manual.ps1 注入。
+  const lang = opts.lang || process.env.REC_LANG || "zh-CN";
 
   // extra 序列化：JSON 值原样，字符串（函数体）标记，页面内 eval
   const extraSerialized = JSON.stringify(extra);
@@ -37,8 +39,11 @@ export async function mockTauri(page, opts = {}) {
     .filter(([, v]) => typeof v === "function" || (typeof v === "string" && v.trim().startsWith("(")))
     .map(([k, v]) => ({ key: k, src: typeof v === "function" ? v.toString() : v }));
 
-  await page.addInitScript(({ state, installed, launchMode, extraSerialized, extraFnKeys, instances, versionTargets, runningTargets }) => {
-    try { localStorage.setItem("dsh-multiver.lang", "zh-CN"); } catch (_) {}
+  await page.addInitScript(({ state, installed, launchMode, extraSerialized, extraFnKeys, instances, versionTargets, runningTargets, lang }) => {
+    try { localStorage.setItem("dsh-multiver.lang", lang); } catch (_) {}
+    // 录屏 spec（实例面板）需要可变的实例表；普通 E2E 不修改它。
+    window.__mockInstances = instances;
+    window.__mockVersionTargets = versionTargets;
     const listeners = new Map();
     const callbacks = {
       get_state: () => state,
@@ -49,15 +54,15 @@ export async function mockTauri(page, opts = {}) {
         { name: "pnpm", name_key: "env.pnpm.name", ok: true, detail: "v11.17.0", detail_key: "", detail_args: {}, critical: true, install_hint: "", hint_key: "", install_url: "" },
         { name: "git", name_key: "env.git.name", ok: true, detail: "git version 2.47.3", detail_key: "", detail_args: {}, critical: false, install_hint: "", hint_key: "", install_url: "" },
         { name: "根目录可写", name_key: "env.writable.name", ok: true, detail: "D:/dsh-data", detail_key: "", detail_args: {}, critical: true, install_hint: "", hint_key: "", install_url: "" },
-        { name: "磁盘空间", name_key: "env.disk.name", ok: true, detail: "可用 100 GB", detail_key: "", detail_args: {}, critical: false, install_hint: "", hint_key: "", install_url: "" },
-        { name: "npm 源连通", name_key: "env.registry.name", ok: true, detail: "可达", detail_key: "", detail_args: {}, critical: false, install_hint: "", hint_key: "", install_url: "" },
+        { name: "磁盘空间", name_key: "env.disk.name", ok: true, detail: "", detail_key: "env.disk.detail_ok", detail_args: { size: "100 GB" }, critical: false, install_hint: "", hint_key: "", install_url: "" },
+        { name: "npm 源连通", name_key: "env.registry.name", ok: true, detail: "", detail_key: "env.registry.detail_ok", detail_args: {}, critical: false, install_hint: "", hint_key: "", install_url: "" },
       ],
       runtime_status: () => ({ system_node_ok: true, system_pnpm_ok: true, bundled_node_ok: false, bundled_pnpm_ok: false, portable_supported: true }),
       check_update: () => ({ has_update: false }),
       log_frontend: () => null,
       is_version_open: () => false,
       is_instance_open: () => false,
-      list_instances: () => ({ instances, version_targets: versionTargets }),
+      list_instances: () => ({ instances: window.__mockInstances, version_targets: window.__mockVersionTargets }),
       list_running_targets: () => runningTargets,
       set_selected_target: () => null,
       instance_create: (args) => "i1",
@@ -143,7 +148,7 @@ export async function mockTauri(page, opts = {}) {
       metadata: { currentWindow: { label: "main" }, currentWebview: { label: "main" } },
     };
     window.__TAURI_EVENT_PLUGIN_INTERNALS__ = { unregisterListener: async () => {} };
-  }, { state, installed, launchMode, extraSerialized, extraFnKeys, instances, versionTargets, runningTargets });
+  }, { state, installed, launchMode, extraSerialized, extraFnKeys, instances, versionTargets, runningTargets, lang });
 
   // 注意：mockTauri 调用后，页面才能 goto。
 }

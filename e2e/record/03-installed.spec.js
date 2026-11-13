@@ -1,6 +1,7 @@
 import { test } from "@playwright/test";
 import { mockTauri, makeVersion, makeInstance } from "../helpers.js";
 import { installCursor, glide, clickAt, hover, waitReady, startCues, cue, saveCues, HOLD_START, HOLD_END } from "./_rec.js";
+import { T } from "./i18n.js";
 
 // 03 已安装版本：对应正文 115-128 行。
 // "每个版本显示：版本号、安装日期、是否默认、是否隔离、占用大小"
@@ -88,7 +89,7 @@ test("03 已安装版本与占用", async ({ page }) => {
     "Click \"Scan all sizes\": each version shows its total size, split into shared and exclusive parts",
     "「すべてのサイズをスキャン」をクリック。各バージョンの使用容量が、共有部分と専有部分に分けて表示されます",
   );
-  const scanBtn = page.getByRole("button", { name: /扫描全部占用/ }).first();
+  const scanBtn = page.getByRole("button", { name: T("installed.scanAll") }).first();
   await clickAt(page, scanBtn);
   await page.waitForTimeout(300);
   await playScan(page, ["0.2.1-rc.2", "0.2.0-rc.1", "0.1.8"]);
@@ -96,11 +97,11 @@ test("03 已安装版本与占用", async ({ page }) => {
 
   // 2) 依次悬停各操作按钮，让观众看清可用的 8 个操作
   cue(
-    "每个版本提供 8 个操作：运行、浏览器打开、设为默认、快捷方式、插件、扫描占用、实例、卸载",
-    "Each version offers eight actions: run, open in browser, set default, shortcut, plugins, scan size, instances, uninstall",
-    "各バージョンには 8 つの操作があります：実行、ブラウザで開く、既定に設定、ショートカット、プラグイン、サイズスキャン、インスタンス、アンインストール",
+    "每个版本提供 7 个操作 + 实例下拉：运行、浏览器打开、设为默认、快捷方式、插件、扫描占用、卸载",
+    "Each version offers seven actions plus the instance menu: run, open in browser, set default, shortcut, plugins, scan size, uninstall",
+    "各バージョンには 7 つの操作とインスタンスメニューがあります：実行、ブラウザで開く、既定に設定、ショートカット、プラグイン、サイズスキャン、アンインストール",
   );
-  for (const name of ["运行", "浏览器打开", "设为默认", "快捷方式"]) {
+  for (const name of [T("installed.run"), T("installed.openBrowser"), T("installed.setDefault"), T("installed.shortcut")]) {
     const btn = page.getByRole("button", { name, exact: true }).first();
     if (await btn.count()) await hover(page, btn);
   }
@@ -111,7 +112,7 @@ test("03 已安装版本与占用", async ({ page }) => {
     "Click \"Plugins\" to manage this version's dsh plugins. The button highlights while the panel is open, and the triangle rotates 90°",
     "「プラグイン」をクリックすると、そのバージョンの dsh プラグインを管理できます。パネル表示中はボタンがハイライトされ、三角矢印が 90 度回転します",
   );
-  const pluginBtn = page.getByRole("button", { name: "插件", exact: true }).first();
+  const pluginBtn = page.getByRole("button", { name: T("dsplugins.button"), exact: true }).first();
   if (await pluginBtn.count()) {
     await clickAt(page, pluginBtn);
     await page.waitForTimeout(700);

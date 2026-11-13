@@ -1,6 +1,7 @@
 import { test } from "@playwright/test";
 import { mockTauri } from "../helpers.js";
 import { installCursor, glide, clickAt, waitReady, startCues, cue, saveCues, HOLD_START, HOLD_END } from "./_rec.js";
+import { T } from "./i18n.js";
 
 // 08 私有包下架：安装抛 404 + @deepseek-ai → private-package → 弹对应说明框。
 test("08 私有包下架", async ({ page }) => {
@@ -41,7 +42,7 @@ test("08 私有包下架", async ({ page }) => {
     await page.keyboard.type("0.0.1-rc.1", { delay: 70 });
     await page.waitForTimeout(300);
   }
-  await clickAt(page, page.getByRole("button", { name: "安装", exact: true }).first());
+  await clickAt(page, page.getByRole("button", { name: T("remote.install"), exact: true }).first());
   await page.locator(".modal-mask .modal").first().waitFor({ state: "visible", timeout: 10000 });
   await page.waitForTimeout(900);
 

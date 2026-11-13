@@ -459,5 +459,13 @@ export default {
     "instances.scan": "使用量をスキャン",
     "instances.mountedTo": "マウント: {v}",
     "instances.orphanCount": "未マウント {n} 件",
+    "install.stage.prepare": "ディレクトリ準備",
+    "install.stage.config": "設定書き込み",
+    "install.stage.pnpm": "pnpm 起動",
+    "install.stage.resolve": "依存解決",
+    "install.stage.download": "依存パッケージのダウンロード",
+    "install.stage.write": "ファイル書き込み",
+    "install.stage.build": "ネイティブモジュールのビルド",
+    "install.stage.done": "完了",
     "instances.target": "メインボタン",
 };

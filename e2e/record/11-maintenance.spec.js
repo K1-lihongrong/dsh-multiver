@@ -1,6 +1,7 @@
 import { test } from "@playwright/test";
 import { mockTauri, makeVersion } from "../helpers.js";
 import { installCursor, glide, clickAt, scrollTo, waitReady, startCues, cue, saveCues, HOLD_START, HOLD_END } from "./_rec.js";
+import { T } from "./i18n.js";
 
 // 11 维护面板：滚动到路径设置里的维护区，展示开关、上次执行时间与三个按钮。
 test("11 维护面板", async ({ page }) => {
@@ -59,7 +60,7 @@ test("11 维护面板", async ({ page }) => {
     "Three manual actions: clean orphan cache, prune dependency store, open log folder. Last run time and result are shown above",
     "手動ボタンは 3 つ：孤立キャッシュを削除 / 依存ストアを整理 / ログフォルダを開く。上部に前回の実行時刻と結果が表示されます",
   );
-  for (const name of [/清理孤立缓存/, /回收依赖仓库/, /打开日志目录/]) {
+  for (const name of [T("paths.cleanup"), T("paths.prune"), T("paths.openLogs")]) {
     const btn = page.getByRole("button", { name }).first();
     if (await btn.count()) {
       const bb = await btn.boundingBox();

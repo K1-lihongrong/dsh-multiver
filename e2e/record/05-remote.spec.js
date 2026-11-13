@@ -1,6 +1,16 @@
 import { test } from "@playwright/test";
 import { mockTauri, makeVersion } from "../helpers.js";
 import { installCursor, glide, clickAt, hover, waitReady, startCues, cue, saveCues, HOLD_START, HOLD_END } from "./_rec.js";
+import { T, REC_LANG } from "./i18n.js";
+
+// Release Note 是 dsh 上游内容；录屏按当前界面语言给示例，避免五语画面里出现中文正文。
+const RELEASE_BODY = {
+  "zh-CN": "## 本次更新\n- 修复插件面板在窄窗口下的溢出\n- 安装失败时按错误类别给出针对性提示\n- 内嵌窗口顶栏圆点支持一键重启",
+  "zh-TW": "## 本次更新\n- 修正外掛面板在窄視窗下的溢出\n- 安裝失敗時依錯誤類別提供對應提示\n- 內嵌視窗頂欄圓點支援一鍵重新啟動",
+  "en-US": "## What's new\n- Fixed plugin panel overflow in narrow windows\n- Install failures now show category-specific hints\n- The embedded-window topbar dot can restart dsh in one click",
+  "ja-JP": "## 今回の更新\n- 狭いウィンドウでプラグインパネルがはみ出す問題を修正\n- インストール失敗時に原因別のヒントを表示\n- 埋め込みウィンドウの頂欄ドットからワンクリック再起動",
+  "ko-KR": "## 이번 업데이트\n- 좁은 창에서 플러그인 패널이 넘치는 문제 수정\n- 설치 실패 시 오류 유형별 안내 표시\n- 내장 창 상단 점에서 원클릭 재시작",
+};
 
 // 05 可用版本列表：对应正文 180-185 行。
 // "支持搜索版本号"
@@ -25,7 +35,7 @@ test("05 可用版本列表", async ({ page }) => {
     extra: {
       fetch_release_note: {
         version: "0.2.1-rc.2",
-        body: "## 本次更新\n- 修复插件面板在窄窗口下的溢出\n- 安装失败时按错误类别给出针对性提示\n- 内嵌窗口顶栏圆点支持一键重启",
+        body: RELEASE_BODY[REC_LANG] || RELEASE_BODY["zh-CN"],
         html_url: "https://github.com/deepseek-ai/dsh/releases",
       },
     },
@@ -40,7 +50,7 @@ test("05 可用版本列表", async ({ page }) => {
     "Available versions: all installable dsh versions fetched from npm, newest first",
     "利用可能なバージョン一覧：npm から取得したインストール可能な dsh の全バージョン（新しい順）",
   );
-  await clickAt(page, page.getByRole("button", { name: /刷新列表/ }).first());
+  await clickAt(page, page.getByRole("button", { name: T("remote.refresh") }).first());
   await page.waitForTimeout(900);
 
   // 2) 搜索版本号（正文 180 行）

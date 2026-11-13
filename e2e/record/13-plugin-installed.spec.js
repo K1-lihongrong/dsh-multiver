@@ -4,6 +4,7 @@ import {
   installCursor, glide, clickAt, hover, scrollTo, waitReady,
   startCues, cue, saveCues, HOLD_START, HOLD_END,
 } from "./_rec.js";
+import { T } from "./i18n.js";
 
 // 13 插件面板 · 已安装标签：打开面板 → 看 profile 与插件列表 → 搜包名 → 悬停卸载 → 检查更新
 const PROFILE = {
@@ -69,7 +70,7 @@ test("13 插件面板 · 已安装", async ({ page }) => {
     "バージョンの「プラグイン」ボタンをクリックすると、そのバージョンのプラグインパネルが開きます",
   );
   await scrollTo(page, ".ver-list", -120);
-  const pluginBtn = page.getByRole("button", { name: "插件", exact: true }).first();
+  const pluginBtn = page.getByRole("button", { name: T("dsplugins.button"), exact: true }).first();
   await clickAt(page, pluginBtn);
   await page.locator(".dp-head").waitFor({ state: "visible", timeout: 8000 });
   await page.waitForTimeout(1200);
@@ -106,7 +107,7 @@ test("13 插件面板 · 已安装", async ({ page }) => {
     "Hovering \"Uninstall\" turns it solid red — distinct from normal buttons. Large plugins show a spinner and elapsed seconds while removing",
     "「アンインストール」にカーソルを合わせると赤い塗りつぶしに変わり、通常のボタンと区別できます。大きなプラグインは削除中にスピナーと経過秒数を表示します",
   );
-  const uninstall = page.getByRole("button", { name: "卸载", exact: true }).last();
+  const uninstall = page.getByRole("button", { name: T("dsplugins.remove"), exact: true }).last();
   if (await uninstall.count()) {
     await hover(page, uninstall);
     await page.waitForTimeout(1200);
@@ -118,7 +119,7 @@ test("13 插件面板 · 已安装", async ({ page }) => {
     "\"Check for updates\" looks for newer versions; when one exists, a red badge and an \"Update\" button appear on the row",
     "「更新を確認」で新しいバージョンがあるか確認できます。ある場合は赤いバッジと「更新」ボタンが行に表示されます",
   );
-  const checkBtn = page.getByRole("button", { name: /检查更新/ }).first();
+  const checkBtn = page.getByRole("button", { name: T("dsplugins.checkUpdates") }).first();
   if (await checkBtn.count()) {
     await clickAt(page, checkBtn);
     await page.waitForTimeout(1600);

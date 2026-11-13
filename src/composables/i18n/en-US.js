@@ -459,5 +459,13 @@ export default {
     "instances.scan": "Scan usage",
     "instances.mountedTo": "Mounted: {v}",
     "instances.orphanCount": "{n} unmounted",
+    "install.stage.prepare": "Preparing directory",
+    "install.stage.config": "Writing config",
+    "install.stage.pnpm": "Starting pnpm",
+    "install.stage.resolve": "Resolving dependencies",
+    "install.stage.download": "Downloading packages",
+    "install.stage.write": "Writing files",
+    "install.stage.build": "Building native modules",
+    "install.stage.done": "Done",
     "instances.target": "Main button",
 };

@@ -1,6 +1,7 @@
 import { test } from "@playwright/test";
 import { mockTauri } from "../helpers.js";
 import { installCursor, glide, hover, waitReady, startCues, cue, saveCues, HOLD_START, HOLD_END } from "./_rec.js";
+import { T } from "./i18n.js";
 
 // 02 环境检查未通过：对应正文 86-102 行。
 //   "启动时自动检查 6 项"
@@ -14,8 +15,8 @@ test("02 环境检查未通过", async ({ page }) => {
   await mockTauri(page, {
     extra: {
       check_env: [
-        { name: "Node.js", name_key: "env.node.name", ok: false, detail: "未安装", detail_key: "", detail_args: {}, critical: true, install_hint: "安装 Node.js 22.19+ 或 24.2+，安装后重新检查", hint_key: "", install_url: "https://nodejs.org/" },
-        { name: "pnpm", name_key: "env.pnpm.name", ok: false, detail: "未安装", detail_key: "", detail_args: {}, critical: true, install_hint: "安装 pnpm 10+（建议 11+）", hint_key: "", install_url: "https://pnpm.io/installation" },
+        { name: "Node.js", name_key: "env.node.name", ok: false, detail: "", detail_key: "env.node.detail_missing", detail_args: {}, critical: true, install_hint: "", hint_key: "env.node.hint_missing", install_url: "https://nodejs.org/" },
+        { name: "pnpm", name_key: "env.pnpm.name", ok: false, detail: "", detail_key: "env.pnpm.detail_missing", detail_args: {}, critical: true, install_hint: "", hint_key: "env.pnpm.hint_missing", install_url: "https://pnpm.io/installation" },
         { name: "git", name_key: "env.git.name", ok: true, detail: "git version 2.47.3", detail_key: "", detail_args: {}, critical: false, install_hint: "", hint_key: "", install_url: "" },
         { name: "根目录可写", name_key: "env.writable.name", ok: true, detail: "D:/dsh-data", detail_key: "", detail_args: {}, critical: true, install_hint: "", hint_key: "", install_url: "" },
         { name: "磁盘空间", name_key: "env.disk.name", ok: true, detail: "可用 100 GB", detail_key: "", detail_args: {}, critical: false, install_hint: "", hint_key: "", install_url: "" },
@@ -45,7 +46,7 @@ test("02 环境检查未通过", async ({ page }) => {
     "Each missing item has an \"Open download page\" button that jumps to the official installer",
     "不足している項目には「ダウンロードページを開く」ボタンがあり、公式サイトへ直接移動できます",
   );
-  const dlBtns = page.getByRole("button", { name: /打开下载页/ });
+  const dlBtns = page.getByRole("button", { name: T("env.openDownload") });
   if (await dlBtns.count()) {
     await hover(page, dlBtns.nth(0));
     await page.waitForTimeout(900);
@@ -70,7 +71,7 @@ test("02 环境检查未通过", async ({ page }) => {
     "The banner offers three options: prepare portable runtime, install from official site, or dismiss",
     "上部バナーには 3 つの選択肢があります：ポータブル版を準備 / 公式サイトからインストール / 無視",
   );
-  for (const name of [/准备便携版/, /去官网安装/, /忽略/]) {
+  for (const name of [T("runtime.prepare"), T("runtime.guide"), T("runtime.ignore")]) {
     const btn = page.getByRole("button", { name }).first();
     if (await btn.count()) {
       const bb = await btn.boundingBox();
@@ -87,7 +88,7 @@ test("02 环境检查未通过", async ({ page }) => {
     "\"Prepare runtime\" downloads portable Node and pnpm into the data root without touching the system",
     "「ランタイムを自動準備」は、ポータブル版の Node と pnpm をデータフォルダにダウンロードします（システムには影響しません）",
   );
-  const prep = page.getByRole("button", { name: /自动准备运行时/ }).first();
+  const prep = page.getByRole("button", { name: T("env.prepareRuntime") }).first();
   if (await prep.count()) {
     await hover(page, prep);
     await page.waitForTimeout(1000);
@@ -99,7 +100,7 @@ test("02 环境检查未通过", async ({ page }) => {
     "You can also install manually and click \"Recheck\" to re-run the check immediately",
     "手動でインストールした場合は「再チェック」をクリックすると、すぐに再検査できます",
   );
-  for (const name of [/^去官网安装$/, /重新检查/]) {
+  for (const name of [T("env.installGuide"), T("env.recheck")]) {
     const btn = page.getByRole("button", { name }).first();
     if (await btn.count()) {
       const bb = await btn.boundingBox();

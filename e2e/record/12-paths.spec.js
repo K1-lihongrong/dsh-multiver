@@ -1,6 +1,17 @@
 import { test } from "@playwright/test";
 import { mockTauri, makeVersion } from "../helpers.js";
 import { installCursor, glide, clickAt, scrollTo, waitReady, startCues, cue, saveCues, HOLD_START, HOLD_END } from "./_rec.js";
+import { T, REC_LANG } from "./i18n.js";
+
+// 额外目录说明是后端中文常量；录屏按当前语言给本地化示例，避免画面混语。
+const DIR_DESC = {
+  "zh-CN": { logs: "启动错误与维护日志", homes: "实例隔离 home", webview: "各版本内嵌窗口数据", trash: "卸载回收站", assets: "内部资源（快捷方式图标）" },
+  "zh-TW": { logs: "啟動錯誤與維護日誌", homes: "執行個體隔離 home", webview: "各版本內嵌視窗資料", trash: "解除安裝回收站", assets: "內部資源（捷徑圖示）" },
+  "en-US": { logs: "Startup and maintenance logs", homes: "Instance home directories", webview: "Embedded-window data per version", trash: "Uninstall trash", assets: "Internal assets (shortcut icons)" },
+  "ja-JP": { logs: "起動エラーとメンテナンスログ", homes: "インスタンス専用 home", webview: "バージョン別埋め込みウィンドウデータ", trash: "アンインストールのゴミ箱", assets: "内部リソース（ショートカットアイコン）" },
+  "ko-KR": { logs: "시작 오류 및 유지보수 로그", homes: "인스턴스 격리 home", webview: "버전별 내장 창 데이터", trash: "제거 휴지통", assets: "내부 리소스(바로가기 아이콘)" },
+};
+const D = DIR_DESC[REC_LANG] || DIR_DESC["zh-CN"];
 
 // 12 路径设置：展示根目录输入框、目录列表，点「展开全部目录」展示额外目录。
 test("12 路径设置", async ({ page }) => {
@@ -15,10 +26,11 @@ test("12 路径设置", async ({ page }) => {
       cache_dir: "D:/dsh-data/cache",
       state_dir: "D:/dsh-data/state",
       extra_dirs: [
-        { name: "logs", desc: "启动错误与维护日志", path: "D:/dsh-data/logs" },
-        { name: "webview", desc: "各版本内嵌窗口数据", path: "D:/dsh-data/webview" },
-        { name: "trash", desc: "卸载回收站", path: "D:/dsh-data/trash" },
-        { name: "assets", desc: "内部资源（快捷方式图标）", path: "D:/dsh-data/assets" },
+        { name: "logs", desc: D.logs, path: "D:/dsh-data/logs" },
+        { name: "homes", desc: D.homes, path: "D:/dsh-data/homes" },
+        { name: "webview", desc: D.webview, path: "D:/dsh-data/webview" },
+        { name: "trash", desc: D.trash, path: "D:/dsh-data/trash" },
+        { name: "assets", desc: D.assets, path: "D:/dsh-data/assets" },
       ],
       default_version: null,
       isolated_versions: [],
@@ -44,11 +56,11 @@ test("12 路径设置", async ({ page }) => {
 
   // 点「展开全部目录」
   cue(
-    "默认展示 5 个核心目录；点「展开全部目录」可看到 logs / webview / trash / assets",
-    "Five core directories are shown by default; click \"Show all directories\" to reveal logs, webview, trash and assets",
-    "既定では主要 5 ディレクトリを表示。「すべてのディレクトリを表示」で logs / webview / trash / assets も確認できます",
+    "默认展示 5 个核心目录；点「展开全部目录」可看到 logs / homes / webview / trash / assets",
+    "Five core directories are shown by default; click \"Show all directories\" to reveal logs, homes, webview, trash and assets",
+    "既定では主要 5 ディレクトリを表示。「すべてのディレクトリを表示」で logs / homes / webview / trash / assets も確認できます",
   );
-  const expand = page.getByRole("button", { name: /展开全部目录/ }).first();
+  const expand = page.getByRole("button", { name: T("paths.expandAll") }).first();
   if (await expand.count()) {
     await clickAt(page, expand);
     await page.waitForTimeout(800);
@@ -77,7 +89,7 @@ test("12 路径设置", async ({ page }) => {
     "\"Export config\" saves the current settings and version list as JSON; \"Import config\" previews changes before applying",
     "「設定をエクスポート」は現在の設定とバージョン一覧を JSON に保存します。「設定をインポート」はバックアップを選択し、変更点を確認してから適用します",
   );
-  for (const name of [/导出配置/, /导入配置/]) {
+  for (const name of [T("paths.exportBackup"), T("paths.importBackup")]) {
     const btn = page.getByRole("button", { name }).first();
     if (await btn.count()) {
       const bb = await btn.boundingBox();

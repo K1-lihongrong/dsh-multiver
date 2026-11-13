@@ -132,8 +132,8 @@ export function startCues() {
   __t0 = Date.now();
 }
 
-export function cue(zh, en, ja) {
-  __cues.push({ t: Number(((Date.now() - __t0) / 1000).toFixed(2)), zh, en, ja });
+export function cue(zh, en, ja, zhTW, ko) {
+  __cues.push({ t: Number(((Date.now() - __t0) / 1000).toFixed(2)), zh, en, ja, zhTW, ko });
 }
 
 export function saveCues(name) {

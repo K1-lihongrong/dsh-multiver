@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { mockTauri, makeVersion } from "../helpers.js";
 import { installCursor, glide, clickAt, scrollTo, waitReady, startCues, cue, saveCues, HOLD_START, HOLD_END } from "./_rec.js";
+import { T } from "./i18n.js";
 
 // 01 快速上手四步：对应正文 73-78 行。
 //   1. 看环境检查
@@ -95,7 +96,7 @@ test("01 快速上手四步", async ({ page }) => {
     "Step 2: Click \"Refresh list\" to fetch all installable dsh versions from npm",
     "ステップ 2：「リスト更新」をクリックし、npm からインストール可能な dsh バージョンを取得",
   );
-  await clickAt(page, page.getByRole("button", { name: /刷新列表/ }).first());
+  await clickAt(page, page.getByRole("button", { name: T("remote.refresh") }).first());
   await page.locator(".chip").first().waitFor({ state: "visible", timeout: 8000 });
   await page.waitForTimeout(900);
 
@@ -120,7 +121,7 @@ test("01 快速上手四步", async ({ page }) => {
     await page.waitForTimeout(400);
   }
 
-  await clickAt(page, page.getByRole("button", { name: "安装", exact: true }).first());
+  await clickAt(page, page.getByRole("button", { name: T("remote.install"), exact: true }).first());
   await page.waitForTimeout(500);
   await playInstall(page);
   await page.waitForTimeout(1200);
@@ -134,7 +135,7 @@ test("01 快速上手四步", async ({ page }) => {
   // 滚到已安装列表，确保按钮在可视区
   await scrollTo(page, ".ver-list", -120);
   await page.waitForTimeout(500);
-  const runBtn = page.getByRole("button", { name: "运行", exact: true }).first();
+  const runBtn = page.getByRole("button", { name: T("installed.run"), exact: true }).first();
   if (await runBtn.count()) {
     await clickAt(page, runBtn);
     // 等启动态出现（内嵌窗口打开中）

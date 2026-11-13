@@ -1,6 +1,7 @@
 import { test } from "@playwright/test";
 import { mockTauri, makeVersion } from "../helpers.js";
 import { installCursor, glide, clickAt, waitReady, startCues, cue, saveCues, HOLD_START, HOLD_END } from "./_rec.js";
+import { T } from "./i18n.js";
 
 // 07 网络失败换源：安装抛网络错误 → 弹出换源对话框 → 切换源下拉。
 test("07 换源弹窗", async ({ page }) => {
@@ -41,7 +42,7 @@ test("07 换源弹窗", async ({ page }) => {
     await page.keyboard.type("0.2.1-rc.5", { delay: 70 });
     await page.waitForTimeout(300);
   }
-  await clickAt(page, page.getByRole("button", { name: "安装", exact: true }).first());
+  await clickAt(page, page.getByRole("button", { name: T("remote.install"), exact: true }).first());
   // 等换源弹窗真正出现（安装失败 → 分类 → 弹框，链路有几次 await）
   await page.locator(".modal-mask .modal").first().waitFor({ state: "visible", timeout: 10000 });
   await page.waitForTimeout(900);

@@ -1,6 +1,7 @@
 import { test } from "@playwright/test";
 import { mockTauri, makeVersion } from "../helpers.js";
 import { installCursor, glide, clickAt, waitReady, startCues, cue, saveCues, HOLD_START, HOLD_END } from "./_rec.js";
+import { T } from "./i18n.js";
 
 // 04 批量操作栏：对应正文 169-174 行。
 // "每个版本左侧有复选框，勾选后底部出现批量操作栏"
@@ -56,7 +57,7 @@ test("04 批量操作栏", async ({ page }) => {
   }
 
   // 3) 点「清除选择」（正文 172 行）→ 全部取消
-  const clear = page.getByRole("button", { name: /清除选择/ }).first();
+  const clear = page.getByRole("button", { name: T("installed.clearSelection") }).first();
   if (await clear.count()) {
     await clickAt(page, clear);
     await page.waitForTimeout(400);
@@ -72,7 +73,7 @@ test("04 批量操作栏", async ({ page }) => {
   await page.waitForTimeout(200);
   await clickAt(page, boxes.nth(2));
   await page.waitForTimeout(500);
-  const danger = page.getByRole("button", { name: /批量卸载/ }).first();
+  const danger = page.getByRole("button", { name: T("installed.batchUninstall") }).first();
   if (await danger.count()) {
     const box = await danger.boundingBox();
     if (box) {

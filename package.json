@@ -11,6 +11,7 @@
     "test:e2e": "playwright test",
     "test:e2e:ui": "playwright test --ui",
     "test:e2e:report": "playwright show-report",
+    "record:manual": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/record-manual.ps1",
     "check:commands": "node scripts/check-commands.mjs",
     "test:acceptance:ui": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/acceptance-uia.ps1",
     "test:acceptance:update": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/acceptance-update.ps1",

@@ -1,6 +1,7 @@
 import { test } from "@playwright/test";
 import { mockTauri, makeVersion } from "../helpers.js";
 import { installCursor, glide, clickAt, waitReady, startCues, cue, saveCues, HOLD_START, HOLD_END } from "./_rec.js";
+import { T } from "./i18n.js";
 
 // 06 安装进度：点「安装」→ 逐条推 install-progress 事件 → 进度条按阶段推进。
 // 事件字段来自 src-tauri/src/versions/install.rs 的 ProgressEvent：
@@ -44,7 +45,7 @@ test("06 安装进度", async ({ page }) => {
     await page.keyboard.type("0.2.2-alpha.2", { delay: 70 });
     await page.waitForTimeout(300);
   }
-  await clickAt(page, page.getByRole("button", { name: "安装", exact: true }).first());
+  await clickAt(page, page.getByRole("button", { name: T("remote.install"), exact: true }).first());
   await page.waitForTimeout(300);
 
   // 逐条推进度事件，节奏与真实安装相近（8 个阶段）

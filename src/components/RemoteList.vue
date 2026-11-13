@@ -47,6 +47,22 @@ const REGISTRIES = computed(() => REGISTRY_VALUES.map((r) => ({ label: t(r.key),
 const remoteNoteVer = ref(null);
 let unlistenProgress = null;
 
+/// 后端 install-progress 的 stage 仍是固定中文；展示层按词条本地化，
+/// 未知值原样回退，避免后端新增阶段时界面空白。
+const STAGE_I18N = {
+  "准备目录": "install.stage.prepare",
+  "写入配置": "install.stage.config",
+  "启动 pnpm": "install.stage.pnpm",
+  "解析依赖": "install.stage.resolve",
+  "下载依赖": "install.stage.download",
+  "写入文件": "install.stage.write",
+  "构建原生模块": "install.stage.build",
+  "完成": "install.stage.done",
+};
+function stageLabel(s) {
+  return STAGE_I18N[s] ? t(STAGE_I18N[s]) : s;
+}
+
 /// 各阶段的「起始百分比」与「权重百分比」（按实际耗时分配，和 ≈ 100）
 /// 索引 = step - 1。写入阶段（step 6）最耗时，权重最大。
 const STAGE_START = [0, 1, 2, 4, 10, 35, 90, 97];
@@ -261,7 +277,7 @@ onUnmounted(() => {
       <div class="spinner"></div>
       <div class="prog-body">
         <div class="prog-line">
-          <span class="stage-text">{{ installStage }}</span>
+          <span class="stage-text">{{ stageLabel(installStage) }}</span>
           <span class="prog-detail" v-if="installDetail">{{ installDetail }}</span>
           <span class="prog-count" v-if="installTotal">{{ installStep }}/{{ installTotal }}</span>
         </div>

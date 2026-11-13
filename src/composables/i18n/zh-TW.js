@@ -459,5 +459,13 @@ export default {
     "instances.scan": "掃描佔用",
     "instances.mountedTo": "掛載：{v}",
     "instances.orphanCount": "{n} 個未掛載",
+    "install.stage.prepare": "準備目錄",
+    "install.stage.config": "寫入設定",
+    "install.stage.pnpm": "啟動 pnpm",
+    "install.stage.resolve": "解析相依性",
+    "install.stage.download": "下載相依套件",
+    "install.stage.write": "寫入檔案",
+    "install.stage.build": "建置原生模組",
+    "install.stage.done": "完成",
     "instances.target": "主按鈕",
 };

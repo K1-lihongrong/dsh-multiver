@@ -459,5 +459,13 @@ export default {
     "instances.scan": "사용량 스캔",
     "instances.mountedTo": "마운트: {v}",
     "instances.orphanCount": "마운트 안 됨 {n}개",
+    "install.stage.prepare": "디렉터리 준비",
+    "install.stage.config": "설정 작성",
+    "install.stage.pnpm": "pnpm 시작",
+    "install.stage.resolve": "의존성 해석",
+    "install.stage.download": "패키지 다운로드",
+    "install.stage.write": "파일 작성",
+    "install.stage.build": "네이티브 모듈 빌드",
+    "install.stage.done": "완료",
     "instances.target": "기본 버튼",
 };

@@ -459,5 +459,13 @@ export default {
     "instances.scan": "扫描占用",
     "instances.mountedTo": "挂载：{v}",
     "instances.orphanCount": "{n} 个未挂载",
+    "install.stage.prepare": "准备目录",
+    "install.stage.config": "写入配置",
+    "install.stage.pnpm": "启动 pnpm",
+    "install.stage.resolve": "解析依赖",
+    "install.stage.download": "下载依赖",
+    "install.stage.write": "写入文件",
+    "install.stage.build": "构建原生模块",
+    "install.stage.done": "完成",
     "instances.target": "主按钮",
 };
