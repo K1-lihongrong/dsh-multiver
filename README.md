@@ -1,6 +1,40 @@
-# dsh-multiver
+<h1 align="center">
+  <img src="docs/assets/readme/hero.png" alt="dsh-multiver" width="680">
+</h1>
 
-一个**轻量、便携**的 DeepSeek Harness（dsh）版本管理器，用于在同一台机器上安装、切换、运行多个 dsh 版本。
+<p align="center"><strong>轻量、便携的 DeepSeek Harness 版本管理器</strong><br>
+同一份数据挂多个版本，同一版本开多个实例。</p>
+
+<p align="center"><strong>中文</strong> | <a href="README.en.md">English</a></p>
+
+<p align="center">
+  <a href="https://github.com/K1-lihongrong/dsh-multiver/releases"><img alt="Release" src="https://img.shields.io/github/v/release/K1-lihongrong/dsh-multiver?style=flat-square&color=4F6EF7"></a>
+  <img alt="Windows 10+" src="https://img.shields.io/badge/Windows-10%2B-4F6EF7?style=flat-square&logo=windows&logoColor=white">
+  <a href="https://github.com/K1-lihongrong/dsh-multiver/releases"><img alt="Downloads" src="https://img.shields.io/github/downloads/K1-lihongrong/dsh-multiver/total?style=flat-square&color=30A46C"></a>
+  <a href="https://github.com/K1-lihongrong/dsh-multiver/stargazers"><img alt="Stars" src="https://img.shields.io/github/stars/K1-lihongrong/dsh-multiver?style=flat-square&color=F5C542"></a>
+  <a href="LICENSE"><img alt="MIT License" src="https://img.shields.io/badge/license-MIT-8B5CF6?style=flat-square"></a>
+</p>
+
+<p align="center">
+  <a href="#下载">下载</a> ·
+  <a href="#使用">快速开始</a> ·
+  <a href="docs/使用手册.md">使用手册</a> ·
+  <a href="docs/插件兼容矩阵.md">插件兼容</a> ·
+  <a href="docs/问题日志查看指南.md">问题排查</a>
+</p>
+
+一个**轻量、便携**的 DeepSeek Harness（dsh）版本管理器，用于在同一台机器上安装、切换、运行多个 dsh 版本。它把版本、实例、插件与运行态放在同一个界面里，也提供完整的命令行入口。
+
+## Highlights
+
+- 🪶 **轻量便携**：Windows 约 10 MB 单 exe，无需安装，放在普通可写目录双击即用。
+- 💾 **多版本管理**：安装、切换、默认版本与批量卸载；pnpm store 硬链接共享依赖，省磁盘。
+- 🧬 **同版本多实例**：一份 home 可挂多个版本，同一版本可开多个独立实例窗口，运行状态跨版本可见。
+- 🖥️ **内嵌运行**：应用内 WebView2 直接打开 dsh，每个版本/实例使用独立缓存；也可一键交给系统浏览器。
+- 🧩 **插件管理**：查看、安装、卸载、更新社区插件，支持实例 home、推荐页、兼容提示与更新检查。
+- ⌨️ **CLI 自动化**：24 个命令，覆盖版本、实例、运行、导入导出与维护，支持 `--json` 和 `--dry-run`。
+
+## 完整能力
 
 - 🪶 **极致轻量**：Windows 约 10 MB 单 exe，无需安装，双击即用
 - 💾 **省磁盘**：用 pnpm store 硬链接，多个版本共享依赖文件
@@ -10,7 +44,7 @@
 - 🔁 **失败换源重试**：安装失败按类别提示（网络 / 私有包 / 版本不完整），网络问题可一键换 npm 源重试
 - 🚫 **失败版本标记**：依赖已下架的版本自动标灰，避免反复踩坑
 - ☑️ **批量操作**：多选版本一键批量卸载（含防呆禁用）
-- 🔒 **可选数据隔离**：每个版本可用独立数据目录，测试插件不污染主力环境
+- 🔒 **实例数据隔离**：每个版本可选择共享 home 或挂载独立实例，测试插件不污染主力环境
 - 🧬 **同版本多实例**：一份数据可挂多个版本；同一版本可开多个独立实例窗口，运行状态跨版本可见
 - 🔗 **可复用官方配置**：一键复用 dsh 官方 `~/.dsh`（会话/凭据/插件立即可用），默认关闭、随时可退
 - 🔄 **自动更新**：启动后检查新版本；确认后可下载、SHA256 校验并替换自身 exe 后重启（GitHub 直连失败时自动回退镜像）
