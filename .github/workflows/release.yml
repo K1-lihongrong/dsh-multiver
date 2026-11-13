@@ -17,9 +17,66 @@ permissions:
   contents: write
 
 jobs:
+  # 发布门禁：tag 触发时先跑完整检查，verify 失败不构建、不发布。
+  verify:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 11
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: 'pnpm'
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Frontend build
+        run: pnpm build
+
+      - name: i18n key check
+        run: node scripts/check-i18n.mjs
+
+      - name: Command contract check
+        run: pnpm check:commands
+
+      - name: Rust fmt check
+        run: cargo fmt --manifest-path src-tauri/Cargo.toml --check
+
+      - name: Rust clippy
+        run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
+
+      - name: Rust tests
+        run: |
+          cargo test --manifest-path src-tauri/Cargo.toml --lib
+          cargo test --manifest-path src-tauri/Cargo.toml --test contracts
+          cargo test --manifest-path src-tauri/Cargo.toml --test staged_failures
+
+      - name: Install Playwright Chromium
+        run: pnpm exec playwright install chromium
+
+      - name: E2E
+        run: pnpm test:e2e
+
   # ── Windows 单 exe + 插件 tgz ──
   # Linux 明确不打包、不发布；Linux 只保留 ci.yml 的编译/测试。
   build:
+    needs: verify
     runs-on: windows-latest
     steps:
       - name: Checkout

@@ -1,4 +1,4 @@
-# Native UI acceptance for a packaged dsh-multiver.exe.
+﻿# Native UI acceptance for a packaged dsh-multiver.exe.
 # This drives the real Tauri window and real Rust backend.
 #
 # Typical use:
@@ -211,13 +211,16 @@ try {
         $versionText = Wait-DshElement -Window $mainWindow -ControlType Text -Name $LaunchVersion -TimeoutSec 10
         $rowY = $versionText.Current.BoundingRectangle.Y
         $runButton = $null
+        $bestDistance = [double]::MaxValue
         foreach ($el in (Get-DshElements -Window $mainWindow)) {
             try {
                 if ($el.Current.ControlType.ProgrammaticName -eq 'ControlType.Button' -and
-                    $el.Current.Name -eq '运行' -and $el.Current.IsEnabled -and
-                    [math]::Abs($el.Current.BoundingRectangle.Y - $rowY) -lt 35) {
-                    $runButton = $el
-                    break
+                    $el.Current.Name -match '^运行' -and $el.Current.IsEnabled) {
+                    $distance = [math]::Abs($el.Current.BoundingRectangle.Y - $rowY)
+                    if ($distance -lt $bestDistance) {
+                        $runButton = $el
+                        $bestDistance = $distance
+                    }
                 }
             }
             catch {}
@@ -227,7 +230,7 @@ try {
         $frontendOffset = if (Test-Path -LiteralPath $frontendLog) { (Get-Item -LiteralPath $frontendLog).Length } else { 0 }
         $null = Invoke-DshElement -Element $runButton
 
-        $launchTitle = '^DSH\s+' + [regex]::Escape($LaunchVersion) + '\s*$'
+        $launchTitle = '^DSH\s+' + [regex]::Escape($LaunchVersion) + '(\s+.*)?$'
         $dshWindow = Wait-DshWindow -ProcessId $appProcess.Id -TitlePattern $launchTitle -TimeoutSec $LaunchTimeoutSec
         $result.launch_window = $true
         $readyPattern = '\[topbar\] injected ver=' + [regex]::Escape($LaunchVersion)

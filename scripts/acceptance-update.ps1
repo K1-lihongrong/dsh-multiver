@@ -1,4 +1,4 @@
-# End-to-end update pipeline smoke test.
+﻿# End-to-end update pipeline smoke test.
 #
 # It copies the release exe to .tmp, points DSH_MULTIVER_UPDATE_API_BASE at a
 # local mock server, runs `update --json`, and verifies:
@@ -32,7 +32,7 @@ if (-not $BaseExe) {
         $BaseExe = $builtExe
     }
     else {
-        $BaseExe = 'E:\.Vibe_Coding\deepseek-Desktop\dsh-multiver.exe'
+        $BaseExe = 'E:\.LLM-AGENTS\deepseek-harness\dsh-multiver.exe'
     }
 }
 if (-not $OutputDir) {
