@@ -140,24 +140,25 @@ jobs:
       - name: Download artifact
         uses: actions/download-artifact@v4
         with:
-          path: artifacts
+          name: dsh-multiver-windows
+          path: release-assets
 
       - name: List artifacts
-        run: find artifacts -type f
+        run: find release-assets -type f
 
       # 生成 SHA256SUMS.txt：插件部署引导用它校验下载的 exe
       - name: Generate SHA256SUMS
-        working-directory: artifacts
+        working-directory: release-assets
         run: |
           set -euo pipefail
           {
-            if [ -f dsh-multiver-windows/dsh-multiver.exe ]; then
-              (cd dsh-multiver-windows && sha256sum dsh-multiver.exe)
+            if [ -f dsh-multiver.exe ]; then
+              sha256sum dsh-multiver.exe
             fi
             # 插件 tarball：插件部署引导与用户手工校验都靠它
             while IFS= read -r -d '' f; do
               (cd "$(dirname "$f")" && sha256sum "$(basename "$f")")
-            done < <(find dsh-multiver-windows -type f -name '*.tgz' -print0)
+            done < <(find . -type f -name '*.tgz' -print0)
           } > SHA256SUMS.txt
           cat SHA256SUMS.txt
 
@@ -167,10 +168,11 @@ jobs:
           tag_name: ${{ github.event.inputs.tag || github.ref_name }}
           name: DSH 版本管理器 ${{ github.event.inputs.tag || github.ref_name }}
           files: |
-            artifacts/dsh-multiver-windows/dsh-multiver.exe
-            artifacts/dsh-multiver-windows/**/*.tgz
-            artifacts/SHA256SUMS.txt
+            release-assets/dsh-multiver.exe
+            release-assets/*.tgz
+            release-assets/SHA256SUMS.txt
           body_path: RELEASE_NOTES.md
           draft: false
+          allowUpdates: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
