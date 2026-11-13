@@ -32,7 +32,7 @@ if (-not $BaseExe) {
         $BaseExe = $builtExe
     }
     else {
-        $BaseExe = 'E:\.Vibe_Coding\deepseek-Desktop\dsh-multiver.exe'
+        $BaseExe = 'E:\.LLM-AGENTS\deepseek-harness\dsh-multiver.exe'
     }
 }
 if (-not $OutputDir) {
@@ -195,7 +195,7 @@ try {
         ($result.replaced_sha256 -ne $baseHash),
         ($result.old_backup_sha256 -eq $baseHash),
         ($null -ne $result.post_update_version),
-        ($result.post_update_version -ne '0.4.0-alpha.3')
+        ($result.post_update_version -ne '0.4.0')
     )
     $result.ok = -not ($checks -contains $false)
 }

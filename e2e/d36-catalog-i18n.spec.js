@@ -39,9 +39,10 @@ const TAB_LABEL = {
 const KO_VER = "\ubc84\uc804 \uad00\ub9ac";
 const KO_REM = "\uc6d0\uaca9 \uc811\uc18d";
 
-// 「插件」按钮在各语言下文字不同，按 aria-expanded 属性定位
+// 「插件」按钮在各语言下文字不同；用专属 class + aria-expanded 定位，
+// 避免和同样带 aria-expanded 的实例菜单箭头混淆。
 function pluginButton(page) {
-  return page.locator("button[aria-expanded]");
+  return page.locator("button.btn-plugin-toggle[aria-expanded]");
 }
 
 async function openCatalog(page, lang, catalog = CATALOG) {

@@ -7,6 +7,40 @@
 
 ---
 
+## [0.4.0] - 2026-11-13
+
+### 同版本多实例
+
+- 新增全局实例表：instances / version_instances / selected_target / instance_seq；一份 homes/<id> 可挂多个版本。
+- 配置升级到 schema 2；旧 isolated_versions 自动迁移为「默认隔离」实例，迁移中断可重试。
+- CLI 新增 instance create/list/rename/remove；isolate 增加 --list / --attach / --detach；run / copy-shared / clear-isolated 支持 --instance。
+- GUI 主按钮改为分体按钮 + 实例浮层；新增全局实例面板（孤儿置顶、挂载/解除、改名、删除）。
+- 同版本多实例可同时开窗，关 A 不影响 B；实例运行态跨版本显示。
+- 备份导入导出覆盖实例表；旧备份自动合成默认实例。
+
+### 行为变更（破坏性）
+
+- isolate --off 语义改为「解除该版本全部实例挂载」，实例本体保留。
+- 隔离 home 从 versions/<版本>/home 改为 homes/<id>。
+- WebView2 数据目录改为 webview/<版本>/_shared 与 <版本>/<id>，旧目录自动改名。
+- 卸载版本不再删除仅属于该版本的实例数据。
+- instance list 默认不扫占用，新增 --sizes 显式开启。
+
+### 修复
+
+- 迁移目标已存在时复用，源目录保留并写日志。
+- selected_target 缺失/null 回落共享 home。
+- isolate 不重置显式选择的主按钮目标。
+
+### 验证
+
+- Rust 单测 271 passed / 1 ignored；fmt、clippy、pnpm build、check-commands、check-i18n 通过。
+- E2E 71 passed（新增多实例浮层、运行参数、跨版本运行态、实例面板与窄视口菜单用例）。
+
+### Linux
+
+- 明确不打包、不发布 Linux 产物；仅保留 CI 编译/测试，GAP-020 暂缓。
+
 ## [0.4.0-alpha.3] - 2026-11-11
 
 ### 一键更新修复

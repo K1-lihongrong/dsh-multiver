@@ -2,6 +2,7 @@
   if (window.__dshTopbarInjected) return;
   window.__dshTopbarInjected = true;
   var VER = '__VER__';
+  var LABEL = '__LABEL__';
   var URL = '__URL__';
   // 每窗口随机令牌：页面内第三方代码无法读取其他窗口的闭包变量，
   // Rust 侧据此拒绝跨窗口伪造事件（仅靠 label 可猜）。
@@ -81,7 +82,7 @@
       + 'transition:background .15s,border-color .15s,color .15s;';
 
     var label = document.createElement('span');
-    label.textContent = 'DSH ' + VER;
+    label.textContent = 'DSH ' + LABEL;
     label.style.cssText = 'font-weight:600;white-space:nowrap;padding:0 4px;';
     bar.appendChild(label);
 

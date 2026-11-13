@@ -11,6 +11,7 @@ mod dsh_adapter;
 mod dsplugins;
 mod envcheck;
 mod install_service;
+mod instances;
 mod jobobj;
 mod jobs;
 mod launcher;
@@ -44,11 +45,22 @@ pub fn generate_bindings(path: &str) -> Result<(), String> {
     bindings::export(path)
 }
 
-/// 「版本号 → (窗口 label, 代次, dsh 子进程, Job 持有句柄)」映射。
+/// 进程表中一项：窗口/进程身份 + 启动来源。
+///
 /// - label 唯一化（带代次），避免 "a webview with label ... already exists"；
-/// - 代次用于解决窗口替换时的 Destroyed 回调竞态：回调只在自己那一代仍是当前项时才 kill；
-/// - Job 句柄用于"管理器退出即杀光子进程"：持有到进程被移除/窗口关闭时。
-pub(crate) type ProcEntry = (String, u64, Child, Option<jobobj::ProcessGuard>);
+/// - generation 用于解决窗口替换时的 Destroyed 回调竞态；
+/// - job 句柄用于"管理器退出即杀光子进程"；
+/// - version/instance 记录启动来源，供运行态查询与顶部栏重启定位。
+pub(crate) struct ProcEntry {
+    pub label: String,
+    pub generation: u64,
+    pub child: Child,
+    #[allow(dead_code)] // 仅用于 RAII：持有 Job 句柄，Drop 时杀子进程
+    pub job: Option<jobobj::ProcessGuard>,
+    pub version: crate::domain::VersionId,
+    pub instance: Option<crate::domain::InstanceId>,
+}
+
 pub(crate) type ProcMapInner = HashMap<crate::domain::ProcKey, ProcEntry>;
 pub(crate) type ProcMap = Arc<Mutex<ProcMapInner>>;
 
@@ -464,6 +476,7 @@ pub fn run() {
                             app_handle.clone(),
                             ctx_for_launch.clone(),
                             version_for_launch.clone(),
+                            None,
                         )
                         .await
                         {
@@ -616,6 +629,7 @@ pub fn run() {
                         app_handle.clone(),
                         ctx_for_launch.clone(),
                         version_for_launch.clone(),
+                        None,
                     )
                     .await
                     {
@@ -698,8 +712,11 @@ pub fn run() {
                     }
 
                     // 1) 孤立 webview：每次启动都能跑（成本极低）
-                    let removed =
-                        maintenance::cleanup_orphan_webviews(&dirs.versions, &dirs.webview);
+                    let removed = maintenance::cleanup_orphan_webviews(
+                        &dirs.versions,
+                        &dirs.webview,
+                        &cfg.mounted_map(),
+                    );
                     cfg.maintenance.last_cleanup_at = Some(maintenance::now_secs());
                     cfg.maintenance.last_cleanup_count = removed.len() as u64;
                     let _ = cfg.save(&mdir);
@@ -746,15 +763,15 @@ pub fn run() {
             if let tauri::RunEvent::ExitRequested { .. } = event {
                 // 退出时兜底清理所有 dsh 子进程，避免残留
                 let mut map = lock_procs(&ctx_run.procs);
-                for (_, _, child, _job) in map.values_mut() {
+                for entry in map.values_mut() {
                     // Unix：正常退出能跑到这里，注销登记（避免下次启动误清）
                     #[cfg(unix)]
                     {
                         let mdir = manager_dir(_app);
                         let root = Config::load(&mdir).resolve_root(&mdir);
-                        crate::procreg::unregister(&root, child.id() as i32);
+                        crate::procreg::unregister(&root, entry.child.id() as i32);
                     }
-                    launcher::kill_tree(child);
+                    launcher::kill_tree(&mut entry.child);
                 }
                 map.clear();
             }

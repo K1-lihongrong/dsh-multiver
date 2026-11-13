@@ -1,5 +1,5 @@
 import { test, expect } from "@playwright/test";
-import { mockTauri, makeVersion } from "./helpers.js";
+import { mockTauri, makeVersion, makeInstance } from "./helpers.js";
 
 // v0.2.14：启动态（快捷方式启动 / 运行按钮）。
 
@@ -31,16 +31,20 @@ test("普通启动：不显示启动态", async ({ page }) => {
 test("运行按钮：点击后切启动态", async ({ page }) => {
   await mockTauri(page, {
     launchMode: null,
-    // 用隔离版本：跳过"共享 home"确认框（否则启动态会被对话框挡住）
+    // 用隔离版本 + 实例目标：跳过"共享 home"确认框（否则启动态会被对话框挡住）
     installed: [makeVersion("0.2.0-rc.1", { isolated: true })],
+    instances: [
+      makeInstance("i1", "默认隔离", { mounted_versions: ["0.2.0-rc.1"] }),
+    ],
+    versionTargets: { "0.2.0-rc.1": "i1" },
     extra: {
       // run_version 延迟返回（字符串函数体，因 addInitScript 参数不能传函数）
       run_version: "(args) => new Promise((r) => setTimeout(() => r('已在窗口打开 DSH 0.2.0-rc.1'), 500))",
     },
   });
   await page.goto("/");
-  // 点「运行」
-  await page.getByRole("button", { name: "运行", exact: true }).click();
+  // 点「运行」（实例目标时按钮文案为「运行 默认隔离」）
+  await page.locator(".run-main").first().click();
   // 启动页出现
   await expect(page.locator(".splash")).toBeVisible();
   // 500ms 后消失（恢复主界面）

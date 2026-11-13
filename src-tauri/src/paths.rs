@@ -128,15 +128,18 @@ pub(crate) fn resolve_home(cfg: &Config, dirs: &Dirs, version: &str) -> PathBuf 
     resolve_home_ref(dirs, &home_ref)
 }
 
-/// 显式带实例目标的路径解析；None = 该版本默认目标。
-pub(crate) fn resolve_home_for(
-    cfg: &Config,
+/// 某版本 + 目标的 WebView2 数据目录。
+/// 共享窗口用 `<版本>/_shared`，实例窗口用 `<版本>/<id>`。
+pub(crate) fn webview_dir(
     dirs: &Dirs,
     version: &VersionId,
     instance: Option<&InstanceId>,
 ) -> PathBuf {
-    let home_ref = cfg.home_ref_for(version, instance);
-    resolve_home_ref(dirs, &home_ref)
+    let base = dirs.webview.join(version.as_str());
+    match instance {
+        Some(id) => base.join(id.as_str()),
+        None => base.join("_shared"),
+    }
 }
 
 /// 按 HomeRef 解析实际目录。Shared / Official / Instance 三选一，语义不再靠字符串猜测。

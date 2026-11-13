@@ -61,6 +61,9 @@ jobs:
       - name: i18n key check
         run: node scripts/check-i18n.mjs
 
+      - name: Command contract check
+        run: pnpm check:commands
+
       # 代码规范门禁（v0.2.12）：rustfmt 格式 + clippy 零警告。
       # 防止代码质量欠账累积（此前无门禁，曾累积 10 条 clippy 警告 + 全仓未格式化）。
       - name: Rust fmt check
@@ -76,6 +79,36 @@ jobs:
         run: |
           cargo test --manifest-path src-tauri/Cargo.toml --lib
           cargo test --manifest-path src-tauri/Cargo.toml --test staged_failures
+
+  # 纯前端 E2E（Playwright + Vite preview），不依赖 Tauri 窗口。
+  e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 11
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: 'pnpm'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Frontend build
+        run: pnpm build
+
+      - name: Install Playwright Chromium
+        run: pnpm exec playwright install --with-deps chromium
+
+      - name: E2E
+        run: pnpm test:e2e
 
   # A5：外部契约测试（独立 job，不污染主测试矩阵）。
   # fake 输出用例不联网；--ignored 用例真实调用 pnpm，需要网络。

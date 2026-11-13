@@ -1,7 +1,7 @@
 {
   "name": "dsh-multiver",
   "private": true,
-  "version": "0.4.0-alpha.3",
+  "version": "0.4.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -14,6 +14,7 @@
     "check:commands": "node scripts/check-commands.mjs",
     "test:acceptance:ui": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/acceptance-uia.ps1",
     "test:acceptance:update": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/acceptance-update.ps1",
+    "test:acceptance:instances": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/acceptance-instances.ps1",
     "test:compat": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/compat-matrix.ps1",
     "bindings:generate": "cargo run --manifest-path src-tauri/Cargo.toml --bin generate_bindings -- src/api/bindings.ts"
   },

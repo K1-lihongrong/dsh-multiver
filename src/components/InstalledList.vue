@@ -1,6 +1,9 @@
 <script setup>
-import { ref, onMounted, onUnmounted } from "vue";
-import { listRunningVersions, isVersionOpen, runVersion as runVersionApi, openInBrowser as openInBrowserApi, setDefault as setDefaultApi, createShortcut as createShortcutApi, setIsolated, uninstallVersion } from "../api/versions.js";
+import { ref, computed, onMounted, onUnmounted } from "vue";
+import { listRunningTargets, isVersionOpen, isInstanceOpen, runVersion as runVersionApi, openInBrowser as openInBrowserApi, setDefault as setDefaultApi, createShortcut as createShortcutApi, setIsolated, uninstallVersion } from "../api/versions.js";
+import { listInstances, createInstance, renameInstance, removeInstance, setSelectedTarget } from "../api/instances.js";
+import { openIsolatedDir } from "../api/isolated.js";
+import InstancePanel from "./InstancePanel.vue";
 import { logFrontend } from "../api/app.js";
 import { ask } from "@tauri-apps/plugin-dialog";
 import { useToast } from "../composables/useToast.js";
@@ -14,6 +17,7 @@ import { t } from "../composables/useI18n.js";
 // installed 由父组件传入；动作自包含（自己 invoke），完成后 emit refresh 让父组件重拉列表。
 const props = defineProps({
   installed: { type: Array, default: () => [] },
+  useOfficialHome: { type: Boolean, default: false },
 });
 const emit = defineEmits(["refresh", "open-url", "launch", "launch-done"]);
 
@@ -53,21 +57,52 @@ function onSharedHomeChoice(choice) {
   if (r) r(choice !== "cancel");
 }
 
-const runningVersion = ref(""); // 正在启动的版本号
-// M3b：「运行中」徽标——只覆盖 embedded 窗口（内存 ProcMap）。
-// console 启动与终端 dsh 没有进程内记录，不在本列表范围（已知限制）。
-const openVersions = ref(new Set());
+const runningVersion = ref(""); // 正在启动的版本号（全局启动锁）
+// M3b/M4：「运行中」来自结构化运行态，覆盖共享与实例窗口。
+const runningTargets = ref([]);
+const instancesView = ref({ instances: [], version_targets: {} });
+const instancePanelOpen = ref(false);
+const nameDialog = ref(null); // { mode: "create"|"rename", version?, instance?, value }
+const dialogBusy = ref(false);
 let openPollTimer = null;
-async function refreshOpenVersions() {
+
+async function refreshRunningTargets() {
   try {
-    const list = await listRunningVersions();
-    openVersions.value = new Set(list || []);
+    runningTargets.value = (await listRunningTargets()) || [];
   } catch (_) { /* 查询失败保持原状 */ }
 }
+async function refreshInstances() {
+  try {
+    instancesView.value = (await listInstances()) || { instances: [], version_targets: {} };
+  } catch (_) { /* 查询失败保持原状 */ }
+}
+function instancesFor(version) {
+  return (instancesView.value.instances || []).filter((i) =>
+    (i.mounted_versions || []).includes(version)
+  );
+}
+function selectedTargetFor(version) {
+  return (instancesView.value.version_targets || {})[version] ?? null;
+}
+function selectedNameFor(version) {
+  const id = selectedTargetFor(version);
+  if (!id) return "";
+  return (instancesView.value.instances || []).find((i) => i.id === id)?.name || id;
+}
+function sharedRunning(version) {
+  return runningTargets.value.some((x) => x.kind === "shared" && x.version === version);
+}
+function targetRunning(instanceId) {
+  return runningTargets.value.some((x) => x.kind === "instance" && x.instance === instanceId);
+}
+const orphanCount = computed(
+  () => (instancesView.value.instances || []).filter((i) => i.orphan).length
+);
 const uninstalling = ref("");   // 正在卸载的版本号
 const browserOpenResult = ref(null); // 浏览器打开失败时展示 URL
 const installedNoteVer = ref(null); // 当前展开更新说明的版本号
 const pluginPanelVer = ref(null);   // 当前展开 dsh 插件面板的版本号
+const openInstanceMenu = ref(null); // 同一时间只允许一个实例浮层展开
 
 // ---- 批量操作 ----
 const selected = ref(new Set());
@@ -113,16 +148,17 @@ async function cancelScanNow() {
 async function confirmSharedHome(v) {
   if (!warnSharedHomeEnabled.value) return true;
   const ver = props.installed.find((x) => x.version === v);
-  if (!ver || ver.isolated) return true; // 隔离版本无此风险
+  if (!ver || selectedTargetFor(v)) return true; // 目标是实例时无共享风险
   return await sharedHomeDialog(v);
 }
 
 onMounted(() => {
-  refreshOpenVersions();
+  refreshInstances();
+  refreshRunningTargets();
   // 5 秒轮询：打开/关闭内嵌窗口后徽标能跟上。
   // 不在隐藏时轮询——窗口不可见时没必要花这个 IPC。
   openPollTimer = setInterval(() => {
-    if (document.visibilityState === 'visible') refreshOpenVersions();
+    if (document.visibilityState === 'visible') refreshRunningTargets();
   }, 5000);
 });
 
@@ -130,27 +166,31 @@ onUnmounted(() => {
   if (openPollTimer) { clearInterval(openPollTimer); openPollTimer = null; }
 });
 
-async function run(v) {
-  if (!(await confirmSharedHome(v))) return;
+async function run(payload) {
+  const v = payload.version;
+  const instance = payload.instance || null;
+  if (!instance && !(await confirmSharedHome(v))) return;
   if (runningVersion.value) return;
   runningVersion.value = v;
 
-  // v0.2.14：该版本窗口已开 → 直接聚焦（不进启动态，避免一闪）。
-  // 预查询多一次 IPC（~10-50ms），但换来"已开场景不闪启动态"的干净体验。
+  // 已开 → 直接聚焦（不进启动态，避免一闪）。
   try {
-    if (await isVersionOpen(v)) {
-      const msg = await runVersionApi(v);
+    const already = instance ? await isInstanceOpen(instance) : await isVersionOpen(v);
+    if (already) {
+      const msg = await runVersionApi(v, instance);
       notify(msg);
       runningVersion.value = "";
       return;
     }
   } catch (_) { /* 查询失败则照常启动 */ }
 
-  // 未开 → 切启动态（父组件显示覆盖层）。
-  emit("launch", { version: v });
+  const displayName = instance
+    ? selectedNameFor(v)
+    : v;
+  emit("launch", { version: v, displayName });
   const t0 = performance.now();
   try {
-    const msg = await runVersionApi(v);
+    const msg = await runVersionApi(v, instance);
     const ms = (performance.now() - t0).toFixed(0);
     emit("launch-done", { version: v, ok: true });
     notify(msg);
@@ -162,16 +202,81 @@ async function run(v) {
   finally { runningVersion.value = ""; }
 }
 
-async function openInBrowser(v) {
-  if (!(await confirmSharedHome(v))) return;
+async function openInBrowser(payload) {
+  const v = payload.version;
+  const instance = payload.instance || null;
+  if (!instance && !(await confirmSharedHome(v))) return;
   try {
-    const res = await openInBrowserApi(v);
+    const res = await openInBrowserApi(v, instance);
     if (res && res.url && res.opened === false) {
       browserOpenResult.value = res;
       return;
     }
     notify(res?.message || String(res));
   } catch (e) { notify("" + e); }
+}
+
+async function selectTarget({ version, instance }) {
+  try {
+    await setSelectedTarget(version, instance);
+    await refreshInstances();
+  } catch (e) { notify("" + e); }
+}
+
+async function openInstanceDir({ version, instance }) {
+  try { await openIsolatedDir(version, instance); }
+  catch (e) { notify("" + e); }
+}
+
+function openCreateDialog(version = null) {
+  nameDialog.value = { mode: "create", version, value: "" };
+}
+
+function openRenameDialog(inst) {
+  nameDialog.value = { mode: "rename", instance: inst, value: inst.name };
+}
+
+async function submitNameDialog() {
+  if (dialogBusy.value || !nameDialog.value) return;
+  const d = nameDialog.value;
+  const name = String(d.value || "").trim();
+  if (!name) return;
+  dialogBusy.value = true;
+  try {
+    if (d.mode === "create") {
+      await createInstance(name, d.version ? [d.version] : []);
+    } else {
+      await renameInstance(d.instance.id, name);
+    }
+    nameDialog.value = null;
+    await refreshInstances();
+  } catch (e) {
+    notify("" + e);
+  } finally {
+    dialogBusy.value = false;
+  }
+}
+
+async function removeInstanceFlow(inst) {
+  if (targetRunning(inst.id)) {
+    notify(t("instances.removeRunning"));
+    return;
+  }
+  const ok = await ask(t("instances.removeConfirm", { name: inst.name }), {
+    title: t("instances.remove"),
+    kind: "warning",
+  });
+  if (!ok) return;
+  try {
+    await removeInstance(inst.id);
+    await refreshInstances();
+    await refreshRunningTargets();
+  } catch (e) { notify("" + e); }
+}
+
+async function onPanelChanged() {
+  await refreshInstances();
+  await refreshRunningTargets();
 }
 
 async function setDefault(v) {
@@ -205,6 +310,7 @@ async function createShortcut(v) {
 async function toggleIsolated(v, current) {
   try {
     notify(await setIsolated(v, !current));
+    await refreshInstances();
     emit("refresh");
   } catch (e) { notify("" + e); }
 }
@@ -216,6 +322,7 @@ async function uninstall(v) {
   notify(t("installed.uninstallingMsg", { v }));
   try {
     notify(await uninstallVersion(v));
+    await refreshInstances();
     emit("refresh");
   } catch (e) { notify("" + e); }
   finally { uninstalling.value = ""; }
@@ -236,6 +343,7 @@ async function batchUninstall() {
     try { await uninstallVersion(name); okCount++; }
     catch (e) { failed.push(name + ": " + e); }
   }
+  await refreshInstances();
   emit("refresh");
   uninstalling.value = "";
   selected.value = new Set();
@@ -249,6 +357,9 @@ async function batchUninstall() {
 
 function toggleInstalledNote(v) {
   installedNoteVer.value = installedNoteVer.value === v ? null : v;
+}
+function toggleInstanceMenu(v) {
+  openInstanceMenu.value = openInstanceMenu.value === v ? null : v;
 }
 </script>
 
@@ -269,6 +380,10 @@ function toggleInstalledNote(v) {
         @click="cancelScanNow"
         :disabled="cancelling"
       >{{ cancelling ? t("installed.scanCancelling") : t("installed.scanCancel") }}</button>
+      <button class="btn small instance-panel-btn" @click="instancePanelOpen = true">
+        {{ t("instances.panelButton") }}
+        <span v-if="orphanCount" class="orphan-count">{{ orphanCount }}</span>
+      </button>
     </div>
 
     <div class="scan-progress-wrap" v-if="scanning && !single && progress">
@@ -294,7 +409,10 @@ function toggleInstalledNote(v) {
         :key="v.version"
         :item="v"
         :selected="isSelected(v.version)"
-        :open="openVersions.has(v.version)"
+        :instances="instancesFor(v.version)"
+        :selected-target="selectedTargetFor(v.version)"
+        :running-targets="runningTargets"
+        :use-official-home="useOfficialHome"
         :is-scanning="isScanningVer(v.version)"
         :queued="scanning && inQueue(v.version) && !isScanningVer(v.version)"
         :flash="flashVersions.has(v.version)"
@@ -308,15 +426,23 @@ function toggleInstalledNote(v) {
         :running-version="runningVersion"
         :plugin-panel-open="pluginPanelVer === v.version"
         :notes-open="installedNoteVer === v.version"
+        :menu-open="openInstanceMenu === v.version"
         @select="toggleSelect(v.version)"
         @toggle-notes="toggleInstalledNote(v.version)"
-        @run="run(v.version)"
-        @open-browser="openInBrowser(v.version)"
+        @toggle-menu="toggleInstanceMenu(v.version)"
+        @close-menu="openInstanceMenu = null"
+        @run="run"
+        @open-browser="openInBrowser"
         @set-default="setDefault(v.version)"
         @shortcut="createShortcut(v.version)"
         @toggle-plugin="pluginPanelVer = pluginPanelVer === v.version ? null : v.version"
         @scan-size="scanVersionSize(v.version)"
         @toggle-isolated="toggleIsolated(v.version, $event)"
+        @select-target="selectTarget"
+        @create-instance="openCreateDialog"
+        @rename-instance="openRenameDialog"
+        @remove-instance="removeInstanceFlow"
+        @open-instance-dir="openInstanceDir"
         @uninstall="uninstall(v.version)"
         @close-plugin="pluginPanelVer = null"
         @close-notes="installedNoteVer = null"
@@ -360,6 +486,38 @@ function toggleInstalledNote(v) {
         <p class="browser-hint">{{ t("installed.browserUrlHint") }}</p>
         <div class="browser-actions">
           <button class="btn primary" @click="browserOpenResult = null">{{ t("installed.close") }}</button>
+        </div>
+      </div>
+    </div>
+
+    <InstancePanel
+      v-if="instancePanelOpen"
+      :instances="instancesView.instances"
+      :version-targets="instancesView.version_targets"
+      :running-targets="runningTargets"
+      :installed="installed"
+      @close="instancePanelOpen = false"
+      @changed="onPanelChanged"
+    />
+
+    <div class="browser-modal-mask" v-if="nameDialog" @click.self="nameDialog = null">
+      <div class="browser-modal name-modal">
+        <h3>{{ nameDialog.mode === "create" ? t("instances.createTitle") : t("instances.renameTitle") }}</h3>
+        <input
+          v-model="nameDialog.value"
+          class="name-input"
+          :placeholder="t('instances.namePlaceholder')"
+          maxlength="32"
+          @keyup.enter="submitNameDialog"
+        />
+        <p class="name-hint" v-if="nameDialog.mode === 'create' && nameDialog.version">
+          {{ t("instances.mountedTo", { v: nameDialog.version }) }}
+        </p>
+        <div class="browser-actions">
+          <button class="btn" @click="nameDialog = null">{{ t("instances.cancel") }}</button>
+          <button class="btn primary" :disabled="dialogBusy || !nameDialog.value.trim()" @click="submitNameDialog">
+            {{ dialogBusy ? t("instances.create") : t("instances.save") }}
+          </button>
         </div>
       </div>
     </div>
@@ -512,5 +670,18 @@ function toggleInstalledNote(v) {
   color: var(--text); background: var(--surface-1);
 }
 .browser-hint { font-size: 12px; color: var(--text-3); margin: 8px 0 14px; }
-.browser-actions { display: flex; justify-content: flex-end; }
+.browser-actions { display: flex; justify-content: flex-end; gap: 8px; }
+.instance-panel-btn { margin-left: 8px; display: inline-flex; align-items: center; gap: 5px; }
+.orphan-count {
+  background: var(--warn-weak-2); color: var(--warn); border: 1px solid var(--warn-border);
+  border-radius: 9px; padding: 0 6px; font-size: 11px; line-height: 16px;
+}
+.name-modal { width: 420px; }
+.name-input {
+  width: 100%; box-sizing: border-box; padding: 8px 10px;
+  border: 1px solid var(--border); border-radius: 6px; font-size: 13px;
+  color: var(--text); background: var(--surface-1);
+}
+.name-input:focus { outline: 2px solid var(--accent-border); outline-offset: 1px; }
+.name-hint { font-size: 12px; color: var(--text-3); margin: 8px 0 14px; }
 </style>

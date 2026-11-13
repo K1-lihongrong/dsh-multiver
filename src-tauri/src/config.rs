@@ -31,6 +31,13 @@ pub struct Instance {
     pub state: InstanceState,
 }
 
+/// 一次启动/运行的目标：home 类型 + 显式实例 id。
+#[derive(Debug, Clone)]
+pub struct LaunchTarget {
+    pub home_ref: HomeRef,
+    pub instance: Option<InstanceId>,
+}
+
 /// 管理器配置，持久化到 <根目录>/config.json
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
@@ -220,6 +227,23 @@ impl Config {
                         &format!("续完实例删除失败，下次启动重试：{e}"),
                     ),
                 }
+                if cfg.schema_version >= CURRENT_SCHEMA_VERSION {
+                    let cleaned = cfg.sanitize_refs();
+                    if !cleaned.is_empty() {
+                        crate::logging::write_line(
+                            &manager_dir.join("logs"),
+                            "app.log",
+                            &format!("清理实例悬空引用：{}", cleaned.join("；")),
+                        );
+                        if let Err(e) = cfg.save(manager_dir) {
+                            crate::logging::write_line(
+                                &manager_dir.join("logs"),
+                                "app.log",
+                                &format!("清理悬空引用后写盘失败：{e}"),
+                            );
+                        }
+                    }
+                }
                 cfg
             }
             Err(e) => {
@@ -258,32 +282,54 @@ impl Config {
         }
     }
 
-    /// 计算某版本 + 可选实例对应的 home 类型。
+    /// 实例是否已挂载到该版本。
+    pub fn is_mounted(&self, version: &VersionId, id: &InstanceId) -> bool {
+        self.version_instances
+            .get(version)
+            .map(|ids| ids.contains(id))
+            .unwrap_or(false)
+    }
+
+    /// 解析本次启动/运行的目标。
     ///
-    /// 优先显式实例；否则看 selected_target；旧 isolated_versions 仍作为迁移前兼容回退。
+    /// 显式实例必须存在且已挂载，否则报错；未显式指定时看 selected_target，
+    /// 但只有目标实例仍存在且已挂载才使用，否则回共享/官方默认。
+    pub fn resolve_target(
+        &self,
+        version: &VersionId,
+        explicit: Option<&InstanceId>,
+    ) -> Result<LaunchTarget, String> {
+        if let Some(id) = explicit {
+            if !self.instance_exists(id) {
+                return Err(format!("实例 {id} 不存在"));
+            }
+            if !self.is_mounted(version, id) {
+                return Err(format!("实例 {id} 未挂载到 {version}"));
+            }
+            return Ok(LaunchTarget {
+                home_ref: HomeRef::Instance(id.clone()),
+                instance: Some(id.clone()),
+            });
+        }
+        if let Some(Some(id)) = self.selected_target.get(version) {
+            if self.instance_exists(id) && self.is_mounted(version, id) {
+                return Ok(LaunchTarget {
+                    home_ref: HomeRef::Instance(id.clone()),
+                    instance: Some(id.clone()),
+                });
+            }
+        }
+        Ok(LaunchTarget {
+            home_ref: self.default_home_ref(),
+            instance: None,
+        })
+    }
+
+    /// 计算某版本 + 可选实例对应的 home 类型（显式实例非法时退回默认）。
     pub fn home_ref_for(&self, version: &VersionId, instance: Option<&InstanceId>) -> HomeRef {
-        if let Some(id) = instance {
-            return HomeRef::Instance(id.clone());
-        }
-        if let Some(target) = self.selected_target.get(version) {
-            return match target {
-                Some(id) => HomeRef::Instance(id.clone()),
-                None => self.default_home_ref(),
-            };
-        }
-        if let Some(ids) = self.version_instances.get(version) {
-            if let Some(id) = ids.first() {
-                return HomeRef::Instance(id.clone());
-            }
-        }
-        if self.isolated_versions.iter().any(|v| v == version.as_str()) {
-            if let Some(ids) = self.version_instances.get(version) {
-                if let Some(id) = ids.first() {
-                    return HomeRef::Instance(id.clone());
-                }
-            }
-        }
-        self.default_home_ref()
+        self.resolve_target(version, instance)
+            .map(|t| t.home_ref)
+            .unwrap_or_else(|_| self.default_home_ref())
     }
 
     fn default_home_ref(&self) -> HomeRef {
@@ -302,13 +348,20 @@ impl Config {
         root: &Path,
     ) -> Result<InstanceId, String> {
         if let Some(ids) = self.version_instances.get(version) {
-            if let Some(id) = ids.first() {
-                self.selected_target
-                    .insert(version.clone(), Some(id.clone()));
+            if let Some(first) = ids.first() {
+                // 已有映射时只补「主按钮为共享」的情况；用户显式选过的实例不能被重置。
+                let target = match self.selected_target.get(version) {
+                    Some(Some(id)) => id.clone(),
+                    _ => {
+                        self.selected_target
+                            .insert(version.clone(), Some(first.clone()));
+                        first.clone()
+                    }
+                };
                 if !self.isolated_versions.iter().any(|v| v == version.as_str()) {
                     self.isolated_versions.push(version.to_string());
                 }
-                return Ok(id.clone());
+                return Ok(target);
             }
         }
         let id = self.alloc_instance_id()?;
@@ -339,6 +392,249 @@ impl Config {
         self.version_instances.remove(version);
         self.selected_target.remove(version);
         self.isolated_versions.retain(|v| v != version.as_str());
+    }
+
+    /// 校验并规范化实例名称：trim、非空、≤32 Unicode 字符、禁控制字符与路径分隔符、
+    /// 全局唯一（不区分大小写）；重命名时通过 except 排除自身。
+    pub fn validate_instance_name(
+        &self,
+        raw: &str,
+        except: Option<&InstanceId>,
+    ) -> Result<String, String> {
+        let name = raw.trim();
+        if name.is_empty() {
+            return Err("实例名称不能为空".into());
+        }
+        let len = name.chars().count();
+        if len > 32 {
+            return Err(format!("实例名称最多 32 个字符（当前 {len}）"));
+        }
+        if name.chars().any(|c| c.is_control()) {
+            return Err("实例名称不能包含控制字符".into());
+        }
+        if name.contains('/') || name.contains('\\') {
+            return Err("实例名称不能包含 / 或 \\".into());
+        }
+        let lower = name.to_lowercase();
+        if self
+            .instances
+            .iter()
+            .any(|i| Some(&i.id) != except && i.name.to_lowercase() == lower)
+        {
+            return Err(format!("实例名称「{name}」已存在"));
+        }
+        Ok(name.to_string())
+    }
+
+    /// 实例 id 是否存在于实例表。
+    pub fn instance_exists(&self, id: &InstanceId) -> bool {
+        self.instances.iter().any(|i| &i.id == id)
+    }
+
+    /// 版本 -> 已挂载实例 id 列表（供 webview 两级清理使用）。
+    pub fn mounted_map(&self) -> std::collections::HashMap<String, Vec<String>> {
+        self.version_instances
+            .iter()
+            .map(|(v, ids)| (v.to_string(), ids.iter().map(|id| id.to_string()).collect()))
+            .collect()
+    }
+
+    /// 该实例挂载了哪些版本（按版本号排序）。
+    pub fn mounted_versions(&self, id: &InstanceId) -> Vec<VersionId> {
+        let mut out: Vec<VersionId> = self
+            .version_instances
+            .iter()
+            .filter(|(_, ids)| ids.contains(id))
+            .map(|(v, _)| v.clone())
+            .collect();
+        out.sort();
+        out
+    }
+
+    /// 创建实例（不建目录、不自动挂载）。名称规则由 validate_instance_name 负责。
+    pub fn create_instance(&mut self, name: &str, now: u64) -> Result<InstanceId, String> {
+        let name = self.validate_instance_name(name, None)?;
+        let id = self.alloc_instance_id()?;
+        self.instances.push(Instance {
+            id: id.clone(),
+            name,
+            created_at: now,
+            state: InstanceState::Ready,
+        });
+        Ok(id)
+    }
+
+    /// 只改显示名，不动目录与挂载。
+    pub fn rename_instance(&mut self, id: &InstanceId, name: &str) -> Result<(), String> {
+        if !self.instance_exists(id) {
+            return Err(format!("实例 {id} 不存在"));
+        }
+        let name = self.validate_instance_name(name, Some(id))?;
+        if let Some(inst) = self.instances.iter_mut().find(|i| &i.id == id) {
+            inst.name = name;
+        }
+        Ok(())
+    }
+
+    /// 挂载实例到版本；返回是否有实际变化。已挂载时幂等返回 false。
+    /// 若该版本尚无显式实例目标，把主按钮指向新挂载的实例。
+    pub fn attach_instance(
+        &mut self,
+        version: &VersionId,
+        id: &InstanceId,
+    ) -> Result<bool, String> {
+        if !self.instance_exists(id) {
+            return Err(format!("实例 {id} 不存在"));
+        }
+        if let Some(ids) = self.version_instances.get(version) {
+            if ids.contains(id) {
+                return Ok(false);
+            }
+        }
+        self.version_instances
+            .entry(version.clone())
+            .or_default()
+            .push(id.clone());
+        if !self.isolated_versions.iter().any(|v| v == version.as_str()) {
+            self.isolated_versions.push(version.to_string());
+        }
+        if !matches!(self.selected_target.get(version), Some(Some(_))) {
+            self.selected_target
+                .insert(version.clone(), Some(id.clone()));
+        }
+        Ok(true)
+    }
+
+    /// 解除单个实例挂载。实例本体保留；解除最后一个时同步清镜像与主按钮目标。
+    pub fn detach_instance(&mut self, version: &VersionId, id: &InstanceId) -> Result<(), String> {
+        let empty = {
+            let Some(ids) = self.version_instances.get_mut(version) else {
+                return Err(format!("实例 {id} 未挂载到 {version}"));
+            };
+            let Some(pos) = ids.iter().position(|x| x == id) else {
+                return Err(format!("实例 {id} 未挂载到 {version}"));
+            };
+            ids.remove(pos);
+            ids.is_empty()
+        };
+        if empty {
+            self.version_instances.remove(version);
+            self.selected_target.remove(version);
+            self.isolated_versions.retain(|v| v != version.as_str());
+        } else if self.selected_target.get(version).and_then(|t| t.as_ref()) == Some(id) {
+            self.selected_target.insert(version.clone(), None);
+        }
+        Ok(())
+    }
+
+    /// 设置版本主按钮目标；Some 必须已挂载，None 表示共享 home。
+    pub fn set_selected_target(
+        &mut self,
+        version: &VersionId,
+        target: Option<&InstanceId>,
+    ) -> Result<(), String> {
+        if let Some(id) = target {
+            if !self.instance_exists(id) {
+                return Err(format!("实例 {id} 不存在"));
+            }
+            let mounted = self
+                .version_instances
+                .get(version)
+                .map(|ids| ids.contains(id))
+                .unwrap_or(false);
+            if !mounted {
+                return Err(format!("实例 {id} 未挂载到 {version}"));
+            }
+        }
+        self.selected_target
+            .insert(version.clone(), target.cloned());
+        Ok(())
+    }
+
+    /// 更新实例状态（ready / deleting）。
+    pub fn set_instance_state(
+        &mut self,
+        id: &InstanceId,
+        state: InstanceState,
+    ) -> Result<(), String> {
+        let inst = self
+            .instances
+            .iter_mut()
+            .find(|i| &i.id == id)
+            .ok_or_else(|| format!("实例 {id} 不存在"))?;
+        inst.state = state;
+        Ok(())
+    }
+
+    /// 删除实例记录与全部引用；被清空的版本同步清镜像与主按钮目标。
+    pub fn remove_instance_record(&mut self, id: &InstanceId) {
+        self.instances.retain(|i| &i.id != id);
+        for ids in self.version_instances.values_mut() {
+            ids.retain(|x| x != id);
+        }
+        let empty: Vec<VersionId> = self
+            .version_instances
+            .iter()
+            .filter(|(_, ids)| ids.is_empty())
+            .map(|(v, _)| v.clone())
+            .collect();
+        for version in empty {
+            self.version_instances.remove(&version);
+            self.isolated_versions.retain(|v| v != version.as_str());
+            self.selected_target.remove(&version);
+        }
+        self.selected_target
+            .retain(|_, target| target.as_ref().map(|t| t != id).unwrap_or(true));
+    }
+
+    /// 清理迁移后可能残留的悬空引用（未知实例、未挂载的 selected_target）。
+    /// 返回被清理项的说明；不删除孤儿实例。
+    pub fn sanitize_refs(&mut self) -> Vec<String> {
+        let known: std::collections::HashSet<InstanceId> =
+            self.instances.iter().map(|i| i.id.clone()).collect();
+        let mut cleaned = Vec::new();
+        for (version, ids) in self.version_instances.iter_mut() {
+            let before = ids.len();
+            ids.retain(|id| known.contains(id));
+            if ids.len() != before {
+                cleaned.push(format!(
+                    "{version}: 移除 {} 个未知实例引用",
+                    before - ids.len()
+                ));
+            }
+        }
+        let empty: Vec<VersionId> = self
+            .version_instances
+            .iter()
+            .filter(|(_, ids)| ids.is_empty())
+            .map(|(v, _)| v.clone())
+            .collect();
+        for version in empty {
+            self.version_instances.remove(&version);
+            self.selected_target.remove(&version);
+            self.isolated_versions.retain(|v| v != version.as_str());
+            cleaned.push(format!("{version}: 移除空挂载表"));
+        }
+        for (version, target) in self.selected_target.iter_mut() {
+            if let Some(id) = target {
+                let mounted = self
+                    .version_instances
+                    .get(version)
+                    .map(|ids| ids.contains(id))
+                    .unwrap_or(false);
+                if !known.contains(id) || !mounted {
+                    *target = None;
+                    cleaned.push(format!("{version}: 清理悬空主按钮目标"));
+                }
+            }
+        }
+        let mapped: std::collections::HashSet<String> = self
+            .version_instances
+            .keys()
+            .map(|v| v.to_string())
+            .collect();
+        self.isolated_versions.retain(|v| mapped.contains(v));
+        cleaned
     }
 
     fn alloc_instance_id(&mut self) -> Result<InstanceId, String> {
@@ -385,12 +681,8 @@ impl Config {
             return Ok(false);
         }
         for id in &deleting {
-            let home = Dirs::new(root.to_path_buf()).homes.join(id.as_str());
-            if home.exists() {
-                SystemFs
-                    .remove_dir_all(&home)
-                    .map_err(|e| format!("删除实例 home 失败（{}）：{e}", home.display()))?;
-            }
+            // trash 中转：同一卷内改名是瞬时的，目录内容不搬；失败才退化为直接删。
+            let _ = trash_instance_home(root, id)?;
         }
         self.instances.retain(|i| !deleting.contains(&i.id));
         for ids in self.version_instances.values_mut() {
@@ -441,13 +733,29 @@ impl Config {
             let name = self.unique_instance_name("默认隔离");
             let src = dirs.versions.join(version.as_str()).join("home");
             let dst = dirs.homes.join(id.as_str());
-            if dst.exists() {
-                return Err(format!(
-                    "迁移目标已存在，拒绝覆盖：{}",
-                    dst.to_string_lossy()
-                ));
+            let dst_existed = dst.exists();
+            if dst_existed && !dst.is_dir() {
+                return Err(format!("迁移目标不是目录，拒绝使用：{}", dst.display()));
             }
-            if src.exists() {
+            if dst_existed {
+                // 典型场景：上次改名成功但 config.json 没保存。重新分配到同一个 id，
+                // 目标目录里就是用户数据；复用并留痕，不阻塞升级，也不覆盖源目录。
+                let extra = if src.exists() {
+                    format!("；源目录仍保留在 {}，请人工确认", src.display())
+                } else {
+                    String::new()
+                };
+                crate::logging::write_line(
+                    &root.join("logs"),
+                    "app.log",
+                    &format!(
+                        "迁移 {}：复用已存在的实例目录 {}{}",
+                        version.as_str(),
+                        dst.display(),
+                        extra
+                    ),
+                );
+            } else if src.exists() {
                 if SystemFs.rename(&src, &dst).is_err() {
                     let (ok, msg, _) =
                         crate::versions::isolated::copy_shared_to_isolated(&src, &dst);
@@ -502,19 +810,12 @@ impl Config {
         }
     }
 
-    /// 卸载某版本时清理配置中对它的引用：默认版本、隔离标记。
+    /// 卸载某版本时清理配置中对它的引用：默认版本、隔离镜像、挂载与主按钮目标。
+    ///
+    /// 实例本体保留为孤儿：它可能仍被其他版本挂载，也可能只剩这一份数据；
+    /// 是否删除由用户在全局面板决定，卸载版本不代替用户做数据删除。
     /// 返回配置是否发生变化。
-    #[cfg(test)]
     pub fn remove_version_refs(&mut self, version: &str) -> bool {
-        self.remove_version_refs_and_collect_orphans(version).0
-    }
-
-    /// 清理版本引用，并返回因本次卸载而不再被任何版本使用的实例 id。
-    /// 调用方负责删除这些实例的 homes/<id> 目录。
-    pub fn remove_version_refs_and_collect_orphans(
-        &mut self,
-        version: &str,
-    ) -> (bool, Vec<InstanceId>) {
         let mut changed = false;
         if self.default_version.as_deref() == Some(version) {
             self.default_version = None;
@@ -524,34 +825,15 @@ impl Config {
             self.isolated_versions.retain(|v| v != version);
             changed = true;
         }
-        let mut mapped = Vec::new();
         if let Ok(vid) = VersionId::new(version) {
-            if let Some(ids) = self.version_instances.remove(&vid) {
-                mapped = ids;
+            if self.version_instances.remove(&vid).is_some() {
                 changed = true;
             }
             if self.selected_target.remove(&vid).is_some() {
                 changed = true;
             }
         }
-        if mapped.is_empty() {
-            return (changed, Vec::new());
-        }
-        let still_used: std::collections::HashSet<InstanceId> = self
-            .version_instances
-            .values()
-            .flat_map(|ids| ids.iter().cloned())
-            .chain(self.selected_target.values().filter_map(|id| id.clone()))
-            .collect();
-        let orphans: Vec<InstanceId> = mapped
-            .into_iter()
-            .filter(|id| !still_used.contains(id))
-            .collect();
-        if !orphans.is_empty() {
-            self.instances.retain(|i| !orphans.contains(&i.id));
-            changed = true;
-        }
-        (changed, orphans)
+        changed
     }
 }
 
@@ -620,6 +902,36 @@ impl Dirs {
             "root" => self.root.clone(),
             _ => self.root.clone(),
         }
+    }
+}
+
+/// 把实例 home 移到 trash；不存在返回 None。
+/// 同卷 rename 失败时退化为直接删（返回 None）。供删除命令与启动续删共用。
+pub(crate) fn trash_instance_home(root: &Path, id: &InstanceId) -> Result<Option<PathBuf>, String> {
+    let dirs = Dirs::new(root.to_path_buf());
+    let home = dirs.homes.join(id.as_str());
+    if !home.exists() {
+        return Ok(None);
+    }
+    let _ = SystemFs.create_dir_all(&dirs.trash);
+    let stamp = crate::logging::now_secs();
+    let mut dest = dirs
+        .trash
+        .join(format!("instance-{}-{}", id.as_str(), stamp));
+    let mut n = 1u32;
+    while dest.exists() {
+        dest = dirs
+            .trash
+            .join(format!("instance-{}-{}-{}", id.as_str(), stamp, n));
+        n += 1;
+    }
+    if SystemFs.rename(&home, &dest).is_ok() {
+        Ok(Some(dest))
+    } else {
+        SystemFs
+            .remove_dir_all(&home)
+            .map_err(|e| format!("删除实例 home 失败（{}）：{e}", home.display()))?;
+        Ok(None)
     }
 }
 
@@ -1036,7 +1348,82 @@ mod tests {
     }
 
     #[test]
-    fn removing_version_collects_only_orphan_instances() {
+    fn ensure_default_instance_keeps_explicit_target() {
+        let manager = tmp("ensure-target");
+        let root = manager.join("root");
+        let vid = VersionId::new("0.1.0").unwrap();
+        let mut cfg = Config::default();
+        let first = cfg.ensure_default_instance(&vid, &root).unwrap();
+        let second = InstanceId::new("i2").unwrap();
+        cfg.instances.push(Instance {
+            id: second.clone(),
+            name: "对比用".into(),
+            created_at: 0,
+            state: InstanceState::Ready,
+        });
+        cfg.version_instances
+            .get_mut(&vid)
+            .unwrap()
+            .push(second.clone());
+        cfg.selected_target
+            .insert(vid.clone(), Some(second.clone()));
+
+        let target = cfg.ensure_default_instance(&vid, &root).unwrap();
+        assert_eq!(target, second, "已有显式选择时应返回它，而不是首个实例");
+        assert_eq!(cfg.selected_target.get(&vid), Some(&Some(second)));
+        assert_ne!(target, first);
+        let _ = std::fs::remove_dir_all(&manager);
+    }
+
+    #[test]
+    fn migration_reuses_existing_instance_home() {
+        let manager = tmp("migrate-reuse");
+        let root = manager.join("root");
+        let dst = root.join("homes").join("i1");
+        std::fs::create_dir_all(&dst).unwrap();
+        std::fs::write(dst.join("marker.txt"), b"kept").unwrap();
+        write_old_config(&manager, &root, &["0.1.0"]);
+
+        let cfg = Config::load_checked(&manager);
+        assert_eq!(cfg.schema_version, CURRENT_SCHEMA_VERSION);
+        assert_eq!(cfg.instances.len(), 1);
+        assert_eq!(cfg.instances[0].id.to_string(), "i1");
+        assert_eq!(
+            std::fs::read(dst.join("marker.txt")).unwrap(),
+            b"kept",
+            "复用的实例目录内容不能被清掉"
+        );
+        let _ = std::fs::remove_dir_all(&manager);
+    }
+
+    #[test]
+    fn migration_keeps_source_when_destination_exists() {
+        let manager = tmp("migrate-reuse-both");
+        let root = manager.join("root");
+        let src = root.join("versions").join("0.1.0").join("home");
+        let dst = root.join("homes").join("i1");
+        std::fs::create_dir_all(&src).unwrap();
+        std::fs::create_dir_all(&dst).unwrap();
+        std::fs::write(src.join("src.txt"), b"src").unwrap();
+        std::fs::write(dst.join("dst.txt"), b"dst").unwrap();
+        write_old_config(&manager, &root, &["0.1.0"]);
+
+        let cfg = Config::load_checked(&manager);
+        assert_eq!(cfg.instances.len(), 1);
+        assert_eq!(
+            std::fs::read(dst.join("dst.txt")).unwrap(),
+            b"dst",
+            "目标目录应被复用"
+        );
+        assert!(
+            src.exists(),
+            "源目录与目标同时存在时不删源，留给用户人工确认"
+        );
+        let _ = std::fs::remove_dir_all(&manager);
+    }
+
+    #[test]
+    fn uninstall_keeps_orphan_instance() {
         let mut cfg = Config::default();
         let shared_id = InstanceId::new("i1").unwrap();
         cfg.instances.push(Instance {
@@ -1049,13 +1436,13 @@ mod tests {
             cfg.version_instances
                 .insert(VersionId::new(v).unwrap(), vec![shared_id.clone()]);
         }
-        let (changed, orphans) = cfg.remove_version_refs_and_collect_orphans("0.1.0");
-        assert!(changed);
-        assert!(orphans.is_empty(), "仍被 0.2.0 使用，不应删除实例");
-        let (changed, orphans) = cfg.remove_version_refs_and_collect_orphans("0.2.0");
-        assert!(changed);
-        assert_eq!(orphans, vec![shared_id]);
-        assert!(cfg.instances.is_empty());
+        assert!(cfg.remove_version_refs("0.1.0"));
+        assert_eq!(cfg.instances.len(), 1, "仍被 0.2.0 挂载，必须保留");
+        assert!(cfg.remove_version_refs("0.2.0"));
+        assert_eq!(cfg.instances.len(), 1, "孤儿实例保留，由用户决定是否删除");
+        assert_eq!(cfg.instances[0].id, shared_id);
+        assert!(cfg.version_instances.is_empty());
+        assert!(cfg.selected_target.is_empty());
     }
 
     #[test]
@@ -1087,9 +1474,152 @@ mod tests {
         assert!(loaded.instances.is_empty());
         assert!(loaded.version_instances.is_empty());
         assert!(loaded.selected_target.is_empty());
-        assert!(!home.exists());
+        assert!(!home.exists(), "原 home 必须已移走");
         assert_eq!(loaded.instance_seq, 7, "序号仍不复用");
+
+        // 删除走 trash 中转：目录应被改名到 trash/instance-i7-*，内容保留。
+        let trash = Dirs::new(root.clone()).trash;
+        let entries: Vec<String> = std::fs::read_dir(&trash)
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().to_string())
+            .collect();
+        let moved = entries
+            .iter()
+            .find(|n| n.starts_with("instance-i7-"))
+            .unwrap_or_else(|| panic!("trash 中应存在实例目录，实际 {entries:?}"));
+        assert_eq!(
+            std::fs::read(trash.join(moved).join("x")).unwrap(),
+            b"x",
+            "改名不应丢内容"
+        );
         let _ = std::fs::remove_dir_all(&manager);
+    }
+
+    #[test]
+    fn instance_name_validation_and_crud() {
+        let mut cfg = Config::default();
+        assert!(cfg.create_instance("", 0).is_err());
+        assert!(cfg.create_instance("bad/name", 0).is_err());
+        assert!(cfg.create_instance("bad\\name", 0).is_err());
+        assert!(cfg.create_instance(&"x".repeat(33), 0).is_err());
+
+        let first = cfg.create_instance("A", 0).unwrap();
+        assert!(
+            cfg.create_instance("a", 0).is_err(),
+            "名称唯一性不区分大小写"
+        );
+        cfg.rename_instance(&first, "A2").unwrap();
+        assert_eq!(cfg.instances[0].name, "A2");
+        assert!(
+            cfg.rename_instance(&first, "a2").is_ok(),
+            "只改大小写应允许"
+        );
+
+        let second = cfg.create_instance("B", 0).unwrap();
+        assert_eq!(first.to_string(), "i1");
+        assert_eq!(second.to_string(), "i2");
+        assert!(cfg.instance_exists(&first));
+        assert_eq!(cfg.mounted_versions(&first), Vec::<VersionId>::new());
+    }
+
+    #[test]
+    fn resolve_target_prefers_explicit_then_selected_then_shared() {
+        let mut cfg = Config::default();
+        let version = VersionId::new("0.1.0").unwrap();
+        let i1 = cfg.create_instance("A", 0).unwrap();
+        let i2 = cfg.create_instance("B", 0).unwrap();
+
+        assert!(matches!(
+            cfg.resolve_target(&version, None).unwrap().home_ref,
+            HomeRef::Shared
+        ));
+        cfg.attach_instance(&version, &i1).unwrap();
+        assert_eq!(
+            cfg.resolve_target(&version, None).unwrap().instance,
+            Some(i1.clone())
+        );
+        cfg.attach_instance(&version, &i2).unwrap();
+        cfg.set_selected_target(&version, Some(&i2)).unwrap();
+        assert_eq!(
+            cfg.resolve_target(&version, None).unwrap().instance,
+            Some(i2.clone())
+        );
+        assert_eq!(
+            cfg.resolve_target(&version, Some(&i1)).unwrap().instance,
+            Some(i1.clone())
+        );
+        assert!(cfg
+            .resolve_target(&version, Some(&InstanceId::new("i9").unwrap()))
+            .is_err());
+    }
+
+    #[test]
+    fn attach_detach_updates_mirror_and_target() {
+        let mut cfg = Config::default();
+        let version = VersionId::new("0.1.0").unwrap();
+        let i1 = cfg.create_instance("A", 0).unwrap();
+        let i2 = cfg.create_instance("B", 0).unwrap();
+
+        assert!(cfg.attach_instance(&version, &i1).unwrap());
+        assert!(cfg.isolated_versions.iter().any(|v| v == "0.1.0"));
+        assert_eq!(cfg.selected_target.get(&version), Some(&Some(i1.clone())));
+        assert!(
+            !cfg.attach_instance(&version, &i1).unwrap(),
+            "重复挂载应幂等"
+        );
+        assert!(cfg.attach_instance(&version, &i2).unwrap());
+        assert_eq!(
+            cfg.selected_target.get(&version),
+            Some(&Some(i1.clone())),
+            "第二次挂载不应覆盖已有目标"
+        );
+
+        cfg.set_selected_target(&version, Some(&i2)).unwrap();
+        cfg.detach_instance(&version, &i1).unwrap();
+        assert_eq!(cfg.selected_target.get(&version), Some(&Some(i2.clone())));
+        assert_eq!(cfg.mounted_versions(&i2), vec![version.clone()]);
+
+        cfg.detach_instance(&version, &i2).unwrap();
+        assert!(cfg.version_instances.is_empty());
+        assert!(cfg.selected_target.is_empty());
+        assert!(cfg.isolated_versions.is_empty());
+        assert_eq!(cfg.instances.len(), 2, "解除挂载不删实例本体");
+    }
+
+    #[test]
+    fn sanitize_refs_drops_dangling_targets() {
+        let mut cfg = Config::default();
+        let version = VersionId::new("0.1.0").unwrap();
+        let good = cfg.create_instance("A", 0).unwrap();
+        let ghost = InstanceId::new("i9").unwrap();
+        cfg.version_instances
+            .insert(version.clone(), vec![good.clone(), ghost.clone()]);
+        cfg.selected_target
+            .insert(version.clone(), Some(ghost.clone()));
+        cfg.isolated_versions.push("0.1.0".into());
+
+        let cleaned = cfg.sanitize_refs();
+        assert!(!cleaned.is_empty());
+        assert_eq!(
+            cfg.version_instances.get(&version),
+            Some(&vec![good.clone()])
+        );
+        assert_eq!(cfg.selected_target.get(&version), Some(&None));
+        assert_eq!(cfg.instances.len(), 1);
+    }
+
+    #[test]
+    fn remove_instance_record_clears_every_reference() {
+        let mut cfg = Config::default();
+        let version = VersionId::new("0.1.0").unwrap();
+        let i1 = cfg.create_instance("A", 0).unwrap();
+        cfg.attach_instance(&version, &i1).unwrap();
+        cfg.remove_instance_record(&i1);
+        assert!(cfg.instances.is_empty());
+        assert!(cfg.version_instances.is_empty());
+        assert!(cfg.selected_target.is_empty());
+        assert!(cfg.isolated_versions.is_empty());
     }
 
     #[test]

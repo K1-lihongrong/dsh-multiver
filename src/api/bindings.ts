@@ -12,18 +12,18 @@ export const commands = {
 	clear_broken: (version: string | null) => typedError<null, string>(__TAURI_INVOKE("clear_broken", { version })),
 	uninstall_version: (version: string) => typedError<string, string>(__TAURI_INVOKE("uninstall_version", { version })),
 	set_default: (version: string | null, force: boolean | null) => typedError<string, string>(__TAURI_INVOKE("set_default", { version, force })),
-	run_version: (version: string) => typedError<string, string>(__TAURI_INVOKE("run_version", { version })),
+	run_version: (version: string, instance: string | null) => typedError<string, string>(__TAURI_INVOKE("run_version", { version, instance })),
 	/**
 	 *  - 若该版本已有内嵌窗口（ProcMap 中存在 dsh-<版本>），先弹原生对话框确认「再开一个？」
 	 *  - 端口固定 3080；若被占用，弹原生对话框让用户选择「换随机端口」或「取消」
 	 */
-	open_in_browser: (version: string) => typedError<OpenInBrowserResult_Serialize, string>(__TAURI_INVOKE("open_in_browser", { version })),
+	open_in_browser: (version: string, instance: string | null) => typedError<OpenInBrowserResult_Serialize, string>(__TAURI_INVOKE("open_in_browser", { version, instance })),
 	create_shortcut: (version: string) => typedError<string, string>(__TAURI_INVOKE("create_shortcut", { version })),
 	/**
 	 *  重启某版本窗口对应的 dsh web 进程：
 	 *  kill 旧进程 → 用同版本起新进程（端口重分配）→ 窗口导航到新 URL。
 	 */
-	restart_version: (version: string) => typedError<null, string>(__TAURI_INVOKE("restart_version", { version })),
+	restart_version: (version: string, instance: string | null) => typedError<null, string>(__TAURI_INVOKE("restart_version", { version, instance })),
 	set_root: (root: string | null) => typedError<string, string>(__TAURI_INVOKE("set_root", { root })),
 	open_dir: (which: string) => typedError<null, string>(__TAURI_INVOKE("open_dir", { which })),
 	open_url: (url: string) => typedError<null, string>(__TAURI_INVOKE("open_url", { url })),
@@ -62,20 +62,20 @@ export const commands = {
 	run_maintenance: (kind: string) => typedError<string, string>(__TAURI_INVOKE("run_maintenance", { kind })),
 	/**  设置自动维护开关。 */
 	set_auto_maintenance: (enabled: boolean) => typedError<null, string>(__TAURI_INVOKE("set_auto_maintenance", { enabled })),
-	scan_isolated_size: (version: string) => typedError<number, string>(__TAURI_INVOKE("scan_isolated_size", { version })),
-	copy_shared_to_isolated: (version: string) => typedError<string, string>(__TAURI_INVOKE("copy_shared_to_isolated", { version })),
-	clear_isolated_data: (version: string) => typedError<string, string>(__TAURI_INVOKE("clear_isolated_data", { version })),
-	open_isolated_dir: (version: string) => typedError<null, string>(__TAURI_INVOKE("open_isolated_dir", { version })),
+	scan_isolated_size: (version: string, instance: string | null) => typedError<number, string>(__TAURI_INVOKE("scan_isolated_size", { version, instance })),
+	copy_shared_to_isolated: (version: string, instance: string | null) => typedError<string, string>(__TAURI_INVOKE("copy_shared_to_isolated", { version, instance })),
+	clear_isolated_data: (version: string, instance: string | null) => typedError<string, string>(__TAURI_INVOKE("clear_isolated_data", { version, instance })),
+	open_isolated_dir: (version: string, instance: string | null) => typedError<null, string>(__TAURI_INVOKE("open_isolated_dir", { version, instance })),
 	log_frontend: (msg: string) => __TAURI_INVOKE<void>("log_frontend", { msg }),
 	check_update: () => __TAURI_INVOKE<UpdateInfo_Serialize>("check_update"),
 	/**
-	 *  执行一键更新（C2，v0.2.10）：下载新 exe → 校验 → 生成替换批处理 → 返回；
-	 *  调用方收到成功后应**退出管理器**，由批处理完成替换并重启。
+	 *  执行一键更新（C2，v0.2.10）：下载新 exe → 校验 → 进程内替换 → 安排重启。
+	 *  调用方收到成功后应退出管理器，由延迟脚本拉起新 exe。
 	 * 
 	 *  返回成功消息（含新版本号）。失败时返回 Err（不触碰原 exe）。
 	 */
 	perform_update: (url: string, sha256: string | null) => typedError<string, string>(__TAURI_INVOKE("perform_update", { url, sha256 })),
-	/**  请求管理器退出（供一键更新用：替换批处理需主进程退出后才能覆盖 exe）。 */
+	/**  请求管理器退出（供一键更新用：新 exe 已替换，退出后由延迟脚本拉起）。 */
 	exit_app: () => __TAURI_INVOKE<void>("exit_app"),
 	/**  导出配置 + 版本清单到指定文件。返回写入路径。 */
 	export_backup: (file: string) => typedError<string, string>(__TAURI_INVOKE("export_backup", { file })),
@@ -113,13 +113,25 @@ export const commands = {
 	 *  前端 run() 先查——已开则直接聚焦（不进启动态），避免"杀掉重开"的误导。
 	 */
 	is_version_open: (version: string) => __TAURI_INVOKE<boolean>("is_version_open", { version }),
+	/**  是否有该实例的内嵌窗口在运行。 */
+	is_instance_open: (instance: string) => __TAURI_INVOKE<boolean>("is_instance_open", { instance }),
 	/**
-	 *  M3b：列出当前有内嵌窗口在运行的版本号。
+	 *  列出当前有内嵌窗口在运行的版本号。
 	 * 
-	 *  只覆盖 embedded 窗口——基于内存 ProcMap。console 启动与终端 dsh
-	 *  没有进程内记录，不在本命令范围（已知限制，见 M3b 交接单）。
+	 *  只返回共享窗口的版本号；实例窗口用 list_running_targets。
+	 *  console 启动与终端 dsh 没有进程内记录，不在本命令范围。
 	 */
 	list_running_versions: () => __TAURI_INVOKE<string[]>("list_running_versions"),
+	list_running_targets: () => __TAURI_INVOKE<RunningTarget_Serialize[]>("list_running_targets"),
+	list_instances: () => __TAURI_INVOKE<InstancesView_Serialize>("list_instances"),
+	instance_create: (name: string, attach: string[]) => typedError<string, string>(__TAURI_INVOKE("instance_create", { name, attach })),
+	instance_rename: (id: string, name: string) => typedError<null, string>(__TAURI_INVOKE("instance_rename", { id, name })),
+	instance_remove: (id: string) => typedError<null, string>(__TAURI_INVOKE("instance_remove", { id })),
+	attach_instance: (version: string, id: string) => typedError<null, string>(__TAURI_INVOKE("attach_instance", { version, id })),
+	detach_instance: (version: string, id: string) => typedError<null, string>(__TAURI_INVOKE("detach_instance", { version, id })),
+	set_selected_target: (version: string, instance: string | null) => typedError<null, string>(__TAURI_INVOKE("set_selected_target", { version, instance })),
+	scan_instance_size: (id: string) => typedError<number, string>(__TAURI_INVOKE("scan_instance_size", { id })),
+	open_instance_dir: (id: string) => typedError<null, string>(__TAURI_INVOKE("open_instance_dir", { id })),
 	/**
 	 *  dsh 插件管理（双向桥 B1）：列某版本下的所有 profile 与插件。
 	 * 
@@ -610,6 +622,52 @@ export type ImportPreview = {
 	missing_versions: string[],
 };
 
+/**  单个实例的展示数据。 */
+export type InstanceView = InstanceView_Serialize | InstanceView_Deserialize;
+
+/**  单个实例的展示数据。 */
+export type InstanceView_Deserialize = {
+	id: string,
+	name: string,
+	created_at: number,
+	state: string,
+	home: string,
+	mounted_versions: string[],
+	orphan: boolean,
+	running_on?: string | null,
+	size?: number | null,
+};
+
+/**  单个实例的展示数据。 */
+export type InstanceView_Serialize = {
+	id: string,
+	name: string,
+	created_at: number,
+	state: string,
+	home: string,
+	mounted_versions: string[],
+	orphan: boolean,
+	running_on: string | null,
+	size: number | null,
+};
+
+/**  GUI 一次读取所需的全部实例数据。 */
+export type InstancesView = InstancesView_Serialize | InstancesView_Deserialize;
+
+/**  GUI 一次读取所需的全部实例数据。 */
+export type InstancesView_Deserialize = {
+	instances: InstanceView_Deserialize[],
+	/**  版本 -> 主按钮目标；缺失表示共享 home。 */
+	version_targets: { [key in string]: string | null },
+};
+
+/**  GUI 一次读取所需的全部实例数据。 */
+export type InstancesView_Serialize = {
+	instances: InstanceView_Serialize[],
+	/**  版本 -> 主按钮目标；缺失表示共享 home。 */
+	version_targets: { [key in string]: string | null },
+};
+
 export type JobSnapshot = JobSnapshot_Serialize | JobSnapshot_Deserialize;
 
 export type JobSnapshot_Deserialize = {
@@ -622,6 +680,11 @@ export type JobSnapshot_Deserialize = {
 	total?: number | null,
 	message?: string | null,
 	code?: string | null,
+	/**
+	 *  Unix seconds at which the job was created. Additive field: existing
+	 *  frontend payloads keep all of their previous keys.
+	 */
+	started_at?: number,
 };
 
 export type JobSnapshot_Serialize = {
@@ -634,6 +697,11 @@ export type JobSnapshot_Serialize = {
 	total: number | null,
 	message: string | null,
 	code: string | null,
+	/**
+	 *  Unix seconds at which the job was created. Additive field: existing
+	 *  frontend payloads keep all of their previous keys.
+	 */
+	started_at: number,
 };
 
 /**  维护相关配置与状态。 */
@@ -742,6 +810,25 @@ export type PluginUpdateStatus = "updated" | "rolled_back" | "rollback_failed" |
 export type PluginUpdateTarget = {
 	name: string,
 	latest: string,
+};
+
+/**  结构化运行态：区分共享窗口与实例窗口，并带启动版本。 */
+export type RunningTarget = RunningTarget_Serialize | RunningTarget_Deserialize;
+
+/**  结构化运行态：区分共享窗口与实例窗口，并带启动版本。 */
+export type RunningTarget_Deserialize = {
+	kind: string,
+	version: string,
+	instance?: string | null,
+	name?: string | null,
+};
+
+/**  结构化运行态：区分共享窗口与实例窗口，并带启动版本。 */
+export type RunningTarget_Serialize = {
+	kind: string,
+	version: string,
+	instance: string | null,
+	name: string | null,
 };
 
 /**  运行时状态：当前环境缺什么。 */

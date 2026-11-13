@@ -39,6 +39,7 @@ function goToRootSettings() {
 // launching：是否显示启动态；launchVersion：启动的版本号；launchStage：preparing/waiting/error
 const launching = ref(!!props.launchMode);
 const launchVersion = ref(props.launchMode || "");
+const launchDisplay = ref("");
 // 首帧就带错误 → 直接进错误态，不依赖事件（单实例路径的事件可能早于监听）
 const launchStage = ref(props.launchError ? "error" : "preparing");
 const launchError = ref(props.launchError || "");
@@ -47,16 +48,17 @@ let unlistenModeStart = null;
 let unlistenOpenSettings = null;
 
 /// 进入启动态（运行按钮 / 事件兜底）。
-function enterLaunch(version) {
+function enterLaunch(version, displayName = "") {
   launching.value = true;
   launchVersion.value = version || "";
+  launchDisplay.value = displayName || version || "";
   launchStage.value = "preparing";
   launchError.value = "";
 }
 
 /// 运行按钮触发启动态（父组件监听 InstalledList 的 launch 事件）
 function onLaunch(payload) {
-  enterLaunch(payload.version);
+  enterLaunch(payload.version, payload.displayName);
 }
 /// 运行结束：成功→恢复主界面；失败→启动态显示错误
 async function onLaunchDone(payload) {
@@ -294,6 +296,7 @@ onUnmounted(() => {
     <LaunchScreen
       v-if="launching"
       :version="launchVersion"
+      :display-name="launchDisplay"
       :stage="launchStage"
       :error-text="launchError"
       @back="cancelLaunch"
@@ -326,6 +329,7 @@ onUnmounted(() => {
 
   <InstalledList
     :installed="installed"
+    :use-official-home="!!state?.use_official_dsh_home"
     @refresh="refresh"
     @open-url="openUrl"
     @launch="onLaunch"

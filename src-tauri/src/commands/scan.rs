@@ -287,9 +287,16 @@ pub(crate) fn cancel_scan(ctx: tauri::State<'_, crate::AppCtx>) -> Result<(), St
 pub(crate) async fn scan_isolated_size(
     ctx: tauri::State<'_, crate::AppCtx>,
     version: String,
+    instance: Option<String>,
 ) -> Result<u64, String> {
     let (cfg, dirs) = ctx.config_dirs();
-    let home = crate::paths::resolve_home(&cfg, &dirs, &version);
+    let vid = crate::domain::VersionId::new(&version)?;
+    let explicit = match instance {
+        Some(raw) => Some(crate::domain::InstanceId::new(raw)?),
+        None => None,
+    };
+    let target = cfg.resolve_target(&vid, explicit.as_ref())?;
+    let home = crate::paths::resolve_home_ref(&dirs, &target.home_ref);
     // 目录扫描可能很慢，放到后台线程
     let size = tauri::async_runtime::spawn_blocking(move || versions::dir_size(&home))
         .await
@@ -323,12 +330,14 @@ pub(crate) async fn run_maintenance(
     let root = dirs.root.clone();
     let _ = dirs.ensure();
     let mdir2 = mdir.clone();
+    let mounted = cfg.mounted_map();
 
     let result = tauri::async_runtime::spawn_blocking(move || -> Result<String, String> {
         let mut parts: Vec<String> = Vec::new();
 
         if kind == "cleanup" || kind == "all" {
-            let removed = maintenance::cleanup_orphan_webviews(&dirs.versions, &dirs.webview);
+            let removed =
+                maintenance::cleanup_orphan_webviews(&dirs.versions, &dirs.webview, &mounted);
             cfg.maintenance.last_cleanup_at = Some(maintenance::now_secs());
             cfg.maintenance.last_cleanup_count = removed.len() as u64;
             logging::log_maintenance(

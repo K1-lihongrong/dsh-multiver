@@ -1,5 +1,5 @@
 import { test } from "@playwright/test";
-import { mockTauri, makeVersion } from "../helpers.js";
+import { mockTauri, makeVersion, makeInstance } from "../helpers.js";
 import { installCursor, glide, clickAt, waitReady, startCues, cue, saveCues, HOLD_START, HOLD_END } from "./_rec.js";
 
 // 09 隔离状态与「已隔离 ▾」菜单：隔离版本有专属菜单，点开后展示五项操作。
@@ -21,6 +21,11 @@ test("09 隔离菜单", async ({ page }) => {
       makeVersion("0.2.1-rc.2", { isDefault: true, installed_at: "2026-10-01" }),
       makeVersion("0.2.0-rc.1", { isolated: true, installed_at: "2026-09-28" }),
     ],
+    instances: [
+      makeInstance("i1", "默认隔离", { mounted_versions: ["0.2.0-rc.1"] }),
+      makeInstance("i2", "对比用", { mounted_versions: ["0.2.0-rc.1"] }),
+    ],
+    versionTargets: { "0.2.0-rc.1": "i1" },
     extra: {
       scan_isolated_size: { total: 339294618 },
     },
@@ -34,8 +39,8 @@ test("09 隔离菜单", async ({ page }) => {
     "Click the \"Isolated ▾\" menu: isolated versions use their own home directory, so data stays separate",
     "「隔離済み ▾」メニューをクリック：隔離バージョンは専用の home を使用し、データが互いに影響しません",
   );
-  // 点第二个版本的「已隔离 ▾」
-  const menuBtn = page.getByRole("button", { name: /已隔离/ }).first();
+  // 点第二个版本的分体按钮小三角
+  const menuBtn = page.locator(".run-caret").nth(1);
   await clickAt(page, menuBtn);
   await page.waitForTimeout(600);
 
@@ -46,7 +51,7 @@ test("09 隔离菜单", async ({ page }) => {
     "5 つの操作：隔離を解除 / 隔離フォルダを開く / サイズをスキャン / 共有データをここにコピー / 隔離データをクリア",
   );
   // 打开隔离目录 / 扫描占用大小 / 复制共享数据到此 / 清理隔离数据 / 关闭隔离
-  const items = page.locator(".menu-item");
+  const items = page.locator(".im-act");
   const count = await items.count();
   for (let i = 0; i < count; i++) {
     const ib = await items.nth(i).boundingBox();
@@ -56,7 +61,7 @@ test("09 隔离菜单", async ({ page }) => {
     }
   }
   // 停在最后一项「清理隔离数据」（danger 红字）上收尾
-  const danger = page.locator(".menu-item.danger").first();
+  const danger = page.locator(".im-act.danger").first();
   if (await danger.count()) {
     const db = await danger.boundingBox();
     if (db) {

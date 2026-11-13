@@ -3,7 +3,8 @@
 //! 导出**配置 + 版本清单**（小体积），供换机迁移参考。
 //! **不导出**依赖（大）、**不导出**会话/凭据（敏感）。
 
-use crate::config::Config;
+use crate::config::{Config, CURRENT_SCHEMA_VERSION};
+use crate::domain::VersionId;
 use crate::versions;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
@@ -28,6 +29,12 @@ pub struct VersionEntry {
     pub is_default: bool,
     pub isolated: bool,
     pub installed_at: String,
+    /// 该版本挂载的实例数（旧备份缺省为 0）。
+    #[serde(default)]
+    pub instance_count: usize,
+    /// 该版本主按钮目标（旧备份缺省为 None）。
+    #[serde(default)]
+    pub selected_target: Option<String>,
 }
 
 /// 构造备份清单（不写盘）。
@@ -39,11 +46,25 @@ pub fn build_manifest(cfg: &Config, versions_dir: &Path) -> BackupManifest {
     );
     let versions = list
         .into_iter()
-        .map(|v| VersionEntry {
-            version: v.version,
-            is_default: v.is_default,
-            isolated: v.isolated,
-            installed_at: v.installed_at,
+        .map(|v| {
+            let version = v.version;
+            let vid = VersionId::new(&version).ok();
+            VersionEntry {
+                instance_count: vid
+                    .as_ref()
+                    .and_then(|id| cfg.version_instances.get(id))
+                    .map(|ids| ids.len())
+                    .unwrap_or(0),
+                selected_target: vid
+                    .as_ref()
+                    .and_then(|id| cfg.selected_target.get(id))
+                    .and_then(|t| t.as_ref())
+                    .map(|id| id.to_string()),
+                version,
+                is_default: v.is_default,
+                isolated: v.isolated,
+                installed_at: v.installed_at,
+            }
         })
         .collect();
     BackupManifest {
@@ -78,6 +99,46 @@ pub struct ImportPreview {
     pub missing_versions: Vec<String>,
 }
 
+/// 归一化备份配置：
+/// - 旧快照（schema<2，只有 isolated_versions）为每个隔离版本合成“默认隔离”实例；
+/// - 新快照清理实例/挂载/主按钮中的悬空引用。
+fn normalize_backup_config(source: &Config) -> (Config, Vec<String>) {
+    let mut out = source.clone();
+    let mut notes = Vec::new();
+    if out.schema_version < CURRENT_SCHEMA_VERSION {
+        let legacy = out.isolated_versions.clone();
+        out.instances.clear();
+        out.version_instances.clear();
+        out.selected_target.clear();
+        out.instance_seq = 0;
+        for raw in &legacy {
+            let Ok(vid) = VersionId::new(raw) else {
+                notes.push(format!("旧备份：跳过非法版本号 {raw}"));
+                continue;
+            };
+            let Ok(id) = out.create_instance("默认隔离", 0) else {
+                notes.push(format!("旧备份：{} 的默认实例创建失败", vid));
+                continue;
+            };
+            if let Err(e) = out.attach_instance(&vid, &id) {
+                notes.push(format!("旧备份：{} 挂载失败：{e}", vid));
+                continue;
+            }
+            let _ = out.set_selected_target(&vid, Some(&id));
+        }
+        out.schema_version = CURRENT_SCHEMA_VERSION;
+        if !legacy.is_empty() {
+            notes.push(format!(
+                "旧备份：为 {} 个隔离版本生成默认实例（不搬 home 数据）",
+                legacy.len()
+            ));
+        }
+    } else {
+        notes.extend(out.sanitize_refs());
+    }
+    (out, notes)
+}
+
 /// 读取并校验备份文件，生成导入预览（不应用）。
 pub fn preview_import(
     file: &Path,
@@ -88,8 +149,8 @@ pub fn preview_import(
     let manifest: BackupManifest = serde_json::from_str(&text)
         .map_err(|e| format!("解析失败（不是有效的备份文件）：{}", e))?;
 
-    let b = &manifest.config;
-    let mut changes = Vec::new();
+    let (b, notes) = normalize_backup_config(&manifest.config);
+    let mut changes = notes;
     if b.root_dir != current.root_dir {
         changes.push(format!(
             "数据根目录：{} -> {}",
@@ -115,6 +176,18 @@ pub fn preview_import(
             "复用官方配置：{} -> {}",
             current.use_official_dsh_home, b.use_official_dsh_home
         ));
+    }
+    if b.instances.len() != current.instances.len() {
+        changes.push(format!(
+            "实例：{} -> {}",
+            current.instances.len(),
+            b.instances.len()
+        ));
+    }
+    let current_links: usize = current.version_instances.values().map(Vec::len).sum();
+    let backup_links: usize = b.version_instances.values().map(Vec::len).sum();
+    if current_links != backup_links {
+        changes.push(format!("实例挂载：{} -> {}", current_links, backup_links));
     }
 
     // 备份里本机未安装的版本
@@ -142,7 +215,7 @@ pub fn apply_import(file: &Path, current: &mut Config) -> Result<Vec<String>, St
     let text = std::fs::read_to_string(file).map_err(|e| format!("读取文件失败：{}", e))?;
     let manifest: BackupManifest =
         serde_json::from_str(&text).map_err(|e| format!("解析失败：{}", e))?;
-    let b = manifest.config;
+    let (b, _notes) = normalize_backup_config(&manifest.config);
 
     let mut applied = Vec::new();
     if b.root_dir != current.root_dir {
@@ -155,11 +228,22 @@ pub fn apply_import(file: &Path, current: &mut Config) -> Result<Vec<String>, St
     }
     if b.isolated_versions != current.isolated_versions {
         applied.push("隔离版本列表".to_string());
-        current.isolated_versions = b.isolated_versions;
+        current.isolated_versions = b.isolated_versions.clone();
     }
     if b.use_official_dsh_home != current.use_official_dsh_home {
         applied.push("复用官方配置".to_string());
         current.use_official_dsh_home = b.use_official_dsh_home;
+    }
+    let instances_changed = b.instances.len() != current.instances.len()
+        || b.version_instances.len() != current.version_instances.len()
+        || b.selected_target.len() != current.selected_target.len();
+    current.instances = b.instances.clone();
+    current.version_instances = b.version_instances.clone();
+    current.selected_target = b.selected_target.clone();
+    current.instance_seq = b.instance_seq;
+    current.schema_version = CURRENT_SCHEMA_VERSION;
+    if instances_changed {
+        applied.push("实例表".to_string());
     }
     Ok(applied)
 }
@@ -234,6 +318,56 @@ mod tests {
         assert_eq!(cur.default_version.as_deref(), Some("0.1.7"));
         assert!(cur.use_official_dsh_home);
 
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn instance_tables_roundtrip_through_export_import() {
+        let base = tmp("instance-roundtrip");
+        let versions_dir = base.join("versions");
+        std::fs::create_dir_all(versions_dir.join("0.1.0").join("node_modules")).unwrap();
+        let version = VersionId::new("0.1.0").unwrap();
+        let mut src = Config::default();
+        let id = src.create_instance("A", 0).unwrap();
+        src.attach_instance(&version, &id).unwrap();
+        let file = base.join("backup.json");
+        export_to_file(&src, &versions_dir, &file).unwrap();
+
+        let mut cur = Config::default();
+        let preview = preview_import(&file, &cur, &versions_dir).unwrap();
+        assert!(preview.changes.iter().any(|c| c.contains("实例")));
+        apply_import(&file, &mut cur).unwrap();
+        assert_eq!(cur.instances.len(), 1);
+        assert_eq!(cur.instances[0].name, "A");
+        assert_eq!(cur.version_instances.get(&version), Some(&vec![id.clone()]));
+        assert_eq!(cur.selected_target.get(&version), Some(&Some(id)));
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn old_backup_generates_default_instances() {
+        let base = tmp("old-backup");
+        let versions_dir = base.join("versions");
+        std::fs::create_dir_all(versions_dir.join("0.1.0").join("node_modules")).unwrap();
+        let src = Config {
+            schema_version: 1,
+            isolated_versions: vec!["0.1.0".to_string()],
+            ..Default::default()
+        };
+        let file = base.join("old.json");
+        export_to_file(&src, &versions_dir, &file).unwrap();
+
+        let mut cur = Config::default();
+        let preview = preview_import(&file, &cur, &versions_dir).unwrap();
+        assert!(preview.changes.iter().any(|c| c.contains("旧备份")));
+        apply_import(&file, &mut cur).unwrap();
+        assert_eq!(cur.schema_version, CURRENT_SCHEMA_VERSION);
+        assert_eq!(cur.instances.len(), 1);
+        assert_eq!(cur.instances[0].name, "默认隔离");
+        assert_eq!(
+            cur.selected_target.get(&VersionId::new("0.1.0").unwrap()),
+            Some(&Some(cur.instances[0].id.clone()))
+        );
         let _ = std::fs::remove_dir_all(&base);
     }
 

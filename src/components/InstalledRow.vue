@@ -1,7 +1,7 @@
 <script setup>
 import { computed } from "vue";
 import { t } from "../composables/useI18n.js";
-import IsolatedMenu from "./IsolatedMenu.vue";
+import InstanceMenu from "./InstanceMenu.vue";
 import NotesPanel from "./NotesPanel.vue";
 import DsPluginPanel from "./DsPluginPanel.vue";
 
@@ -24,6 +24,11 @@ const props = defineProps({
   runningVersion: { type: String, default: "" },
   pluginPanelOpen: { type: Boolean, default: false },
   notesOpen: { type: Boolean, default: false },
+  menuOpen: { type: Boolean, default: false },
+  instances: { type: Array, default: () => [] },
+  selectedTarget: { type: String, default: null },
+  runningTargets: { type: Array, default: () => [] },
+  useOfficialHome: { type: Boolean, default: false },
 });
 const emit = defineEmits([
   "select",
@@ -35,17 +40,83 @@ const emit = defineEmits([
   "toggle-plugin",
   "scan-size",
   "toggle-isolated",
+  "select-target",
+  "create-instance",
+  "rename-instance",
+  "remove-instance",
+  "open-instance-dir",
   "uninstall",
   "close-plugin",
   "close-notes",
   "open-url",
+  "toggle-menu",
+  "close-menu",
 ]);
 
 const isBlocked = computed(
   () => props.uninstallingVersion === props.item.version || (props.batchBusy && props.selected),
 );
-const isRunning = computed(() => props.runningVersion === props.item.version);
 const isUninstalling = computed(() => props.uninstallingVersion === props.item.version);
+const targetInstance = computed(
+  () => props.instances.find((i) => i.id === props.selectedTarget) || null
+);
+const targetRunningOn = computed(() => {
+  if (!targetInstance.value) return "";
+  const hit = props.runningTargets.find(
+    (x) => x.kind === "instance" && x.instance === targetInstance.value.id
+  );
+  return hit ? hit.version : "";
+});
+const sharedRunning = computed(() =>
+  props.runningTargets.some(
+    (x) => x.kind === "shared" && x.version === props.item.version
+  )
+);
+const isRunning = computed(() =>
+  targetInstance.value ? !!targetRunningOn.value : sharedRunning.value
+);
+const runLabel = computed(() => {
+  if (targetInstance.value) {
+    return targetRunningOn.value
+      ? t("instances.focusInstance", { name: targetInstance.value.name })
+      : t("instances.runInstance", { name: targetInstance.value.name });
+  }
+  return sharedRunning.value ? t("instances.focus") : t("installed.run");
+});
+const runLocked = computed(() => isBlocked.value || !!props.runningVersion);
+
+function runMain() {
+  emit("run", {
+    version: props.item.version,
+    instance: targetInstance.value ? targetInstance.value.id : null,
+  });
+}
+function closeMenu() {
+  emit("close-menu");
+}
+function onMenuRun(payload) {
+  closeMenu();
+  emit("run", payload);
+}
+function onSelectTarget(instance) {
+  emit("select-target", { version: props.item.version, instance });
+}
+function onOpenInstanceDir(instance) {
+  closeMenu();
+  emit("open-instance-dir", { version: props.item.version, instance });
+}
+function onRenameInstance(inst) {
+  closeMenu();
+  emit("rename-instance", inst);
+}
+function onRemoveInstance(inst) {
+  closeMenu();
+  emit("remove-instance", inst);
+}
+function onCreateInstance() {
+  closeMenu();
+  emit("create-instance", props.item.version);
+}
 
 function fmtSize(bytes) {
   if (bytes == null) return "";
@@ -73,9 +144,9 @@ function filePercent(p) {
       <span class="ver-num ver-num-clickable" :title="t('installed.clickNotes')" @click="emit('toggle-notes')">
         {{ item.version }}<span class="ver-caret">{{ notesOpen ? "▼" : "▶" }}</span>
       </span>
-      <span class="badge badge-running" v-if="open" :title="t('installed.openWindowTip')">{{ t("installed.openWindow") }}</span>
+      <span class="badge badge-running" v-if="isRunning" :title="t('installed.openWindowTip')">{{ t("instances.running") }}</span>
       <span class="badge" v-if="item.is_default">{{ t("installed.default") }}</span>
-      <span class="badge badge-iso" v-if="item.isolated">{{ t("installed.isolated") }}</span>
+      <span class="badge badge-iso" v-if="selectedTarget">{{ t("installed.isolated") }}</span>
       <span class="badge badge-shared" v-else :title="t('installed.sharedHomeTip')">{{ t("installed.sharedHome") }}</span>
       <span class="ver-meta" v-if="item.installed_at">{{ t("installed.installedAt") }} {{ item.installed_at }}</span>
       <span class="ver-meta" v-if="sizeInfo != null">
@@ -95,8 +166,26 @@ function filePercent(p) {
       </span>
     </div>
     <div class="ver-actions">
-      <button class="btn primary" @click="emit('run')" :disabled="!!runningVersion || isBlocked">{{ isRunning ? t("installed.running") : t("installed.run") }}</button>
-      <button class="btn" @click="emit('open-browser')" :disabled="isBlocked" :title="t('installed.openBrowserTip')">{{ t("installed.openBrowser") }}</button>
+      <div class="run-wrap">
+        <button class="btn primary run-main" @click="runMain" :disabled="runLocked">{{ runLabel }}</button>
+        <button class="btn run-caret" @click.stop="emit('toggle-menu')" :disabled="isBlocked" :aria-label="t('instances.panelTitle')" :aria-expanded="menuOpen">▾</button>
+        <InstanceMenu
+          v-if="menuOpen"
+          :version="item.version"
+          :instances="instances"
+          :selected-target="selectedTarget"
+          :running-targets="runningTargets"
+          :use-official-home="useOfficialHome"
+          @close="emit('close-menu')"
+          @select-target="onSelectTarget"
+          @run="onMenuRun"
+          @open-dir="onOpenInstanceDir"
+          @rename="onRenameInstance"
+          @remove="onRemoveInstance"
+          @create="onCreateInstance"
+        />
+      </div>
+      <button class="btn" @click="emit('open-browser', { version: item.version, instance: targetInstance ? targetInstance.id : null })" :disabled="isBlocked" :title="t('installed.openBrowserTip')">{{ t("installed.openBrowser") }}</button>
       <button class="btn" @click="emit('set-default')" :disabled="item.is_default || isBlocked">{{ t("installed.setDefault") }}</button>
       <button class="btn" @click="emit('shortcut')" :disabled="isBlocked" :title="t('installed.shortcutTip')">{{ t("installed.shortcut") }}</button>
       <button
@@ -109,19 +198,6 @@ function filePercent(p) {
       <button class="btn" @click="emit('scan-size')" :disabled="scanPending || isBlocked" :title="t('installed.scanTip')">
         {{ isScanning ? t("installed.scanning") : (sizeInfo != null ? t("installed.rescanSize") : t("installed.scanSize")) }}
       </button>
-      <IsolatedMenu
-        v-if="item.isolated"
-        :version="item.version"
-        :disabled="isBlocked"
-        @toggle-isolated="emit('toggle-isolated', $event)"
-      />
-      <button
-        v-else
-        class="btn"
-        @click="emit('toggle-isolated', false)"
-        :disabled="isBlocked"
-        :title="t('installed.isolateTip')"
-      >{{ t("installed.isolate") }}</button>
       <button class="btn danger" @click="emit('uninstall')" :disabled="!!uninstallingVersion || batchBusy || scanPending">{{ isUninstalling ? t("installed.uninstalling") : t("installed.uninstall") }}</button>
     </div>
     <DsPluginPanel
@@ -158,6 +234,13 @@ function filePercent(p) {
 .ver-caret { font-size: 10px; margin-left: 3px; color: var(--text-muted); }
 .ver-meta { color: var(--text-muted); font-size: 11px; }
 .ver-actions { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; justify-content: flex-start; }
+.run-wrap { position: relative; display: inline-flex; }
+.run-main { border-top-right-radius: 0; border-bottom-right-radius: 0; }
+.run-caret {
+  border-top-left-radius: 0; border-bottom-left-radius: 0;
+  padding-left: 7px; padding-right: 7px; margin-left: -1px;
+}
+.run-caret:hover:not(:disabled) { border-color: var(--accent-border); color: var(--accent); }
 
 /* 插件面板展开按钮：展开时显示浅主色底 + 描边，三角箭头转 90°。 */
 .btn-plugin-toggle::before {

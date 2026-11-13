@@ -11,6 +11,7 @@ import dshLogo from "../assets/dsh-logo.png";
 // 视觉参考设计稿；logo/版本号布局修正；加载动画改为三段式流光。
 const props = defineProps({
   version: { type: String, default: "" },
+  displayName: { type: String, default: "" },
   stage: { type: String, default: "preparing" }, // preparing | waiting | error
   errorText: { type: String, default: "" },
 });
@@ -105,7 +106,7 @@ const statusText = computed(() => {
         <div class="splash-brand">
           <img class="splash-mark" :src="dshLogo" alt="DeepSeek Harness" />
           <span class="splash-wordmark">DSH</span>
-          <span class="splash-version" v-if="version">{{ version }}</span>
+          <span class="splash-version" v-if="version">{{ displayName || version }}</span>
 
         </div>
 

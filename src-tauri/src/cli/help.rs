@@ -21,11 +21,18 @@ pub fn print_help() {
   uninstall <版本>                 卸载指定版本
   set-default <版本>               设为默认版本，并重生成终端 dsh 命令
   set-root <目录>                  设置数据根目录（绝对路径；含旧 root 残留进程清理）
-  isolate <版本> [--off]           开启某版本的数据隔离（加 --off 则关闭）
+  isolate <版本> [--off]           开启某版本的数据隔离（加 --off 则解除全部挂载）
+  isolate <版本> --list [--json]   列出该版本挂载的实例
+  isolate <版本> --attach <id>     把实例挂载到该版本
+  isolate <版本> --detach <id>     解除该版本与实例的挂载
+  instance create --name <名称> [--attach <版本>...]  创建实例（不建目录）
+  instance list [--sizes] [--json] 列出全部实例（含孤儿；默认不算占用）
+  instance rename <id> <新名>      改实例显示名
+  instance remove <id>             删除实例（home 移入回收站）
   shortcut <版本>                  为某版本创建桌面快捷方式
-  copy-shared <版本>               把共享 home 数据复制到某隔离版本的独立 home（需先开隔离）
-  clear-isolated <版本>            清空某隔离版本的独立 home（保留版本本身）
-  run <版本>                       启动 dsh web（新控制台 + 自动打开浏览器；关窗口即停止）
+  copy-shared <版本> [--instance <id>]  把共享 home 数据复制到目标实例 home
+  clear-isolated <版本> [--instance <id>] 清空目标实例 home（保留版本本身）
+  run <版本> [--instance <id>]     启动 dsh web（新控制台 + 自动打开浏览器；关窗口即停止）
   export [<文件>]                  导出配置 + 版本清单（JSON）；默认写到数据根目录
   import <文件>                    导入配置（从 export 生成的备份文件）
   clean                            清理孤立缓存 + 回收站（maintenance --cleanup 的超集）
@@ -39,11 +46,15 @@ pub fn print_help() {
 修饰符：
   --json       结构化输出（机读）；只影响格式，不改行为
   --dry-run    只预览不执行（可搭配 install / uninstall / set-default / set-root /
-               isolate / clean / maintenance / import / shortcut / copy-shared /
-               clear-isolated / setup-runtime / update）
+               isolate / instance / clean / maintenance / import / shortcut /
+               copy-shared / clear-isolated / setup-runtime / update）
   --force      覆盖非本管理器生成的 dsh 命令（用于 set-default）
   --registry <url>  指定 npm 源（用于 install）
-  --off        关闭隔离（用于 isolate）
+  --off        关闭隔离 / 解除全部实例挂载（用于 isolate）
+  --list       列出该版本挂载的实例（用于 isolate）
+  --attach <版本>   创建实例时挂载版本，可重复（用于 instance create）
+  --detach <id>     解除版本与实例的挂载（用于 isolate）
+  --instance <id>   指定实例（用于 run / copy-shared / clear-isolated）
 
 示例：
   dsh-multiver list

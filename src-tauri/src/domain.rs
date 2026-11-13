@@ -145,10 +145,6 @@ pub enum ProcKey {
 }
 
 impl ProcKey {
-    pub fn shared(version: impl AsRef<str>) -> Result<Self, String> {
-        Ok(Self::Shared(VersionId::new(version)?))
-    }
-
     #[allow(dead_code)]
     pub fn instance(id: InstanceId) -> Self {
         Self::Instance(id)
@@ -214,7 +210,7 @@ mod tests {
     #[test]
     fn proc_key_labels_are_stable() {
         assert_eq!(
-            ProcKey::shared("0.2.2-rc.1").unwrap().label_prefix(),
+            ProcKey::Shared(VersionId::new("0.2.2-rc.1").unwrap()).label_prefix(),
             "dsh-0_2_2-rc_1"
         );
         assert_eq!(
