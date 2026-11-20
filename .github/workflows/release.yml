@@ -166,7 +166,10 @@ jobs:
           node-version: 22
 
       - name: Upgrade npm for OIDC
-        run: npm install -g npm@11
+        run: |
+          npm install -g npm@11.21.3
+          npm --version
+          npm config get registry
 
       - name: Publish plugin (skip if version exists)
         run: |
@@ -182,7 +185,7 @@ jobs:
             echo "dsh-multiver-bridge@${VERSION} 已发布，跳过"
             exit 0
           fi
-          npm publish "$TGZ" --access public --provenance --registry https://registry.npmjs.org
+          npm publish "$TGZ" --access public --provenance --registry https://registry.npmjs.org --loglevel verbose
 
   # ── 发布：Windows 构建完成后创建 Release ──
   release:
@@ -277,7 +280,10 @@ jobs:
         run: npm test
 
       - name: Upgrade npm for OIDC
-        run: npm install -g npm@11
+        run: |
+          npm install -g npm@11.21.3
+          npm --version
+          npm config get registry
 
       - name: Pack plugin
         working-directory: dsh-plugin
@@ -298,7 +304,7 @@ jobs:
           if npm view "dsh-multiver-bridge@${VERSION}" version >/dev/null 2>&1; then
             echo "dsh-multiver-bridge@${VERSION} 已发布，跳过"
           else
-            npm publish "$TGZ" --access public --provenance --registry https://registry.npmjs.org
+            npm publish "$TGZ" --access public --provenance --registry https://registry.npmjs.org --loglevel verbose
           fi
           sha256sum "$TGZ" > SHA256SUMS.txt
 
