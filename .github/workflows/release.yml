@@ -5,6 +5,7 @@ on:
   push:
     tags:
       - 'v*'
+      - 'plugin-v*'
   # 允许手动触发
   workflow_dispatch:
     inputs:
@@ -19,6 +20,7 @@ permissions:
 jobs:
   # 发布门禁：tag 触发时先跑完整检查，verify 失败不构建、不发布。
   verify:
+    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
     runs-on: windows-latest
     steps:
       - name: Checkout
@@ -77,6 +79,7 @@ jobs:
   # Linux 明确不打包、不发布；Linux 只保留 ci.yml 的编译/测试。
   build:
     needs: verify
+    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
     runs-on: windows-latest
     steps:
       - name: Checkout
@@ -187,7 +190,7 @@ jobs:
       always() &&
       needs.build.result == 'success' &&
       (needs.publish-npm.result == 'success' || needs.publish-npm.result == 'skipped') &&
-      (startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch')
+      (startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch')
     runs-on: ubuntu-latest
 
     steps:
@@ -229,6 +232,76 @@ jobs:
             release-assets/*.tgz
             release-assets/SHA256SUMS.txt
           body_path: RELEASE_NOTES.md
+          draft: false
+          allowUpdates: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # ── 插件单独发布：plugin-v* tag（OIDC，不构建 app）──
+  # 复用 release.yml 这一 workflow，因此 npm Trusted Publisher 只需绑定本文件。
+  publish-plugin:
+    if: startsWith(github.ref, 'refs/tags/plugin-v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 11
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+
+      - name: Test plugin
+        working-directory: dsh-plugin
+        run: npm test
+
+      - name: Upgrade npm for OIDC
+        run: npm install -g npm@11
+
+      - name: Pack plugin
+        working-directory: dsh-plugin
+        run: |
+          pnpm pack
+          ls -l *.tgz
+
+      - name: Publish plugin (skip if version exists)
+        working-directory: dsh-plugin
+        run: |
+          set -euo pipefail
+          VERSION=$(node -p "require('./package.json').version")
+          TGZ=$(find . -maxdepth 1 -name "dsh-multiver-bridge-${VERSION}.tgz" -print -quit)
+          if [ -z "$TGZ" ]; then
+            echo "找不到 dsh-multiver-bridge-${VERSION}.tgz" >&2
+            exit 1
+          fi
+          if npm view "dsh-multiver-bridge@${VERSION}" version >/dev/null 2>&1; then
+            echo "dsh-multiver-bridge@${VERSION} 已发布，跳过"
+          else
+            npm publish "$TGZ" --access public --provenance
+          fi
+          sha256sum "$TGZ" > SHA256SUMS.txt
+
+      - name: Create plugin Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: dsh-multiver-bridge ${{ github.ref_name }}
+          body: |
+            dsh-multiver-bridge 插件发布。
+
+            安装：`dsh plugin --profile web add dsh-multiver-bridge`
+          files: |
+            dsh-plugin/*.tgz
+            dsh-plugin/SHA256SUMS.txt
           draft: false
           allowUpdates: true
         env:

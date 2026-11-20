@@ -17,6 +17,11 @@
 - GAP-019 关闭。
 - v0.4.0 规划与发布检查单撤回本地归档；新增 GAP-023（窄窗标题栏三键换行，排期 v0.4.1）。
 - 新增 GAP-024 与 v0.4.1 安全模式规划：启动失败兜底界面、诊断导出、配置/缓存重置、工作环境初始化与重装指引；交互设计新增 §2.15。
+- 插件面向社区收录：根 README 新增 `dsh-multiver-bridge` 说明；插件 README 补作者/发布者身份与 Release 链接；`package.json` 补 `author` / `keywords`。
+
+### 插件
+
+- `dsh-multiver-bridge` 0.2.2：新增 `author` / `keywords`；根 README 与插件 README 补社区收录所需的说明与作者身份。
 
 ### 修复
 

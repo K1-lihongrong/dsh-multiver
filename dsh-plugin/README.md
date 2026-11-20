@@ -2,6 +2,8 @@
 
 dsh-multiver 的双向桥插件：在 dsh 设置页查看已安装版本、切换默认版本、查看运行状态与一致性校对。
 
+> 它解决什么问题：不用切回 dsh-multiver 管理器窗口，在 dsh 设置页就能看版本、切默认版本、检查更新。
+
 ## 状态
 
 设置页「版本管理」提供：状态条（默认版本 / 运行版本 + 置信度 / 待重启提示 / 一致性校对详情）、版本表、「设为默认」、四个送回动作（打开 multiver 目录 / 打开版本目录 / 打开 multiver 路径设置 / 复制诊断），以及「打开 multiver」按钮（仅非内嵌模式显示）。
@@ -23,7 +25,7 @@ dsh plugin --profile web add dsh-multiver-bridge
 ### 方式二：GitHub Release tarball
 
 ```powershell
-dsh plugin --profile web add https://github.com/K1-lihongrong/dsh-multiver/releases/download/v0.3.2/dsh-multiver-bridge-0.2.1.tgz
+dsh plugin --profile web add https://github.com/K1-lihongrong/dsh-multiver/releases/download/plugin-v0.2.2/dsh-multiver-bridge-0.2.2.tgz
 ```
 
 ### 方式三：本地 tarball
@@ -31,8 +33,8 @@ dsh plugin --profile web add https://github.com/K1-lihongrong/dsh-multiver/relea
 ```powershell
 cd dsh-plugin
 pnpm pack
-# 产物：dsh-multiver-bridge-0.2.1.tgz
-dsh plugin --profile web add .\dsh-multiver-bridge-0.2.1.tgz
+# 产物：dsh-multiver-bridge-0.2.2.tgz
+dsh plugin --profile web add .\dsh-multiver-bridge-0.2.2.tgz
 ```
 
 ### 方式四：目录安装（仅开发用）
@@ -46,7 +48,7 @@ dsh plugin --profile web add .\dsh-multiver-bridge-0.2.1.tgz
 ### 辅助脚本 `install.ps1`（可选，仅 tarball/目录安装需要）
 
 ```powershell
-.\install.ps1 -DshCmd '<dsh.cmd 路径>' -Profile web -PackageDir '.\dsh-multiver-bridge-0.2.1.tgz'
+.\install.ps1 -DshCmd '<dsh.cmd 路径>' -Profile web -PackageDir '.\dsh-multiver-bridge-0.2.2.tgz'
 ```
 
 脚本行为：
@@ -107,20 +109,30 @@ multiver 启动 dsh 时会注入以下环境变量，插件据此判断「谁启
 
 `*.tgz` 已加入 `.gitignore`，随 Release 分发，不进仓库。
 
+## 作者与发布者
+
+- GitHub：[K1-lihongrong](https://github.com/K1-lihongrong)
+- npm 维护者：`hongrong-li`
+- npm 包：[`dsh-multiver-bridge`](https://www.npmjs.com/package/dsh-multiver-bridge)
+
+GitHub 与 npm 为同一维护者；npm 包的 `repository.directory` 指向本仓库的 `dsh-plugin/` 子目录，便于社区索引按子目录识别。
+
 ## 发布信息
 
 | 项 | 值 |
 |:---|:---|
 | 包名 | `dsh-multiver-bridge` |
-| 版本 | `0.2.1` |
+| 版本 | `0.2.2` |
 | npm | https://www.npmjs.com/package/dsh-multiver-bridge |
-| Release | [v0.3.2](https://github.com/K1-lihongrong/dsh-multiver/releases/tag/v0.3.2) |
+| Release | [plugin-v0.2.2](https://github.com/K1-lihongrong/dsh-multiver/releases/tag/plugin-v0.2.2) |
 
 两条通道分发同一份 tarball。
+
+> 0.2.1 的 npm 包与 Release 包存在历史差异（npm 包不含 `LICENSE`，功能代码一致）；0.2.2 起统一用同一份 tgz。
 
 **完整性校验**：npm 通道由 registry 的 `integrity` 字段保证；Release 通道请对照该 Release 附带的 `SHA256SUMS.txt`（本文件会随内容变化，故不在包内硬编码指纹）：
 
 ```powershell
-Get-FileHash dsh-multiver-bridge-0.2.1.tgz -Algorithm SHA256
+Get-FileHash dsh-multiver-bridge-0.2.2.tgz -Algorithm SHA256
 # 与 Release 页面 SHA256SUMS.txt 中同名行比对
 ```

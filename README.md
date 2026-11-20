@@ -25,6 +25,15 @@
 
 一个**轻量、便携**的 DeepSeek Harness（dsh）版本管理器，用于在同一台机器上安装、切换、运行多个 dsh 版本。它把版本、实例、插件与运行态放在同一个界面里，也提供完整的命令行入口。
 
+## 自带 dsh 插件：dsh-multiver-bridge
+
+它解决什么问题：在 dsh 的设置页直接查看 dsh-multiver 的版本、切换默认版本、检查更新，不用切回管理器窗口。
+
+- npm 安装：`dsh plugin --profile web add dsh-multiver-bridge`
+- 源码：[`dsh-plugin/`](dsh-plugin/)
+- 插件清单：`dsh-plugin/package.json` 的 `dsh.bundle` 指向 [`cordis.patch.yml`](dsh-plugin/cordis.patch.yml)
+- 详细说明：[`dsh-plugin/README.md`](dsh-plugin/README.md)
+
 ## Highlights
 
 - 🪶 **轻量便携**：Windows 约 10 MB 单 exe，无需安装，放在普通可写目录双击即用。

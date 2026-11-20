@@ -1,8 +1,19 @@
 {
   "name": "dsh-multiver-bridge",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "type": "module",
   "description": "dsh-multiver 双向桥：在 dsh 内查看/切换版本",
+  "author": {
+    "name": "K1-lihongrong",
+    "url": "https://github.com/K1-lihongrong"
+  },
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "dsh-multiver",
+    "version-manager"
+  ],
   "scripts": {
     "test": "node --test lib/pure.test.js"
   },
