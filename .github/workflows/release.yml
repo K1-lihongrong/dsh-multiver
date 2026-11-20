@@ -182,7 +182,7 @@ jobs:
             echo "dsh-multiver-bridge@${VERSION} 已发布，跳过"
             exit 0
           fi
-          npm publish "$TGZ" --access public --provenance
+          npm publish "$TGZ" --access public --provenance --registry https://registry.npmjs.org
 
   # ── 发布：Windows 构建完成后创建 Release ──
   release:
@@ -264,6 +264,14 @@ jobs:
         with:
           node-version: 22
 
+      - name: Check OIDC environment
+        run: |
+          if [ -z "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" ] || [ -z "${ACTIONS_ID_TOKEN_REQUEST_TOKEN:-}" ]; then
+            echo "::error::OIDC env missing; check id-token: write"
+            exit 1
+          fi
+          echo "OIDC env present"
+
       - name: Test plugin
         working-directory: dsh-plugin
         run: npm test
@@ -290,7 +298,7 @@ jobs:
           if npm view "dsh-multiver-bridge@${VERSION}" version >/dev/null 2>&1; then
             echo "dsh-multiver-bridge@${VERSION} 已发布，跳过"
           else
-            npm publish "$TGZ" --access public --provenance
+            npm publish "$TGZ" --access public --provenance --registry https://registry.npmjs.org
           fi
           sha256sum "$TGZ" > SHA256SUMS.txt
 
