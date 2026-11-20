@@ -180,8 +180,14 @@ jobs:
 
   # ── 发布：Windows 构建完成后创建 Release ──
   release:
-    needs: build
-    if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
+    needs: [build, publish-npm]
+    # publish-npm 默认关闭（变量未设置 → skipped），Release 仍照常运行；
+    # 变量开启后，npm 发布失败会阻断 Release，保证两条通道同成败。
+    if: |
+      always() &&
+      needs.build.result == 'success' &&
+      (needs.publish-npm.result == 'success' || needs.publish-npm.result == 'skipped') &&
+      (startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch')
     runs-on: ubuntu-latest
 
     steps:
