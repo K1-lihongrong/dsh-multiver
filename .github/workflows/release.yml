@@ -127,6 +127,57 @@ jobs:
             dsh-multiver.exe
             dsh-plugin/*.tgz
 
+  # ── npm 发布：OIDC trusted publishing（默认关闭）──
+  #
+  # 启用步骤：
+  #   1. npmjs.com → 包 dsh-multiver-bridge → Settings → Trusted Publisher
+  #      绑定 GitHub 用户/组织 K1-lihongrong、仓库 dsh-multiver、workflow release.yml
+  #   2. gh variable set NPM_PUBLISH_ENABLED --body true
+  #   3. 下一个 v* tag 自动发布；npm 上已有同版本则跳过
+  #
+  # 变量未设置或不为 true 时本 job 不运行，Release 流程与现在完全一致。
+  publish-npm:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v') && vars.NPM_PUBLISH_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: dsh-multiver-windows
+          path: release-assets
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+
+      - name: Upgrade npm for OIDC
+        run: npm install -g npm@11
+
+      - name: Publish plugin (skip if version exists)
+        run: |
+          set -euo pipefail
+          VERSION=$(node -p "require('./dsh-plugin/package.json').version")
+          TGZ=$(find release-assets -name "dsh-multiver-bridge-${VERSION}.tgz" -print -quit)
+          if [ -z "$TGZ" ]; then
+            echo "找不到 dsh-multiver-bridge-${VERSION}.tgz" >&2
+            find release-assets -type f >&2
+            exit 1
+          fi
+          if npm view "dsh-multiver-bridge@${VERSION}" version >/dev/null 2>&1; then
+            echo "dsh-multiver-bridge@${VERSION} 已发布，跳过"
+            exit 0
+          fi
+          npm publish "$TGZ" --access public --provenance
+
   # ── 发布：Windows 构建完成后创建 Release ──
   release:
     needs: build
