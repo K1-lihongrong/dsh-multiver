@@ -13,6 +13,10 @@ on:
         description: '要发布的 tag（如 v0.2.0）'
         required: true
         type: string
+      plugin_tag:
+        description: '插件单独发布：plugin-v* tag（如 plugin-v0.2.2）；填了就不构建 app'
+        required: false
+        type: string
 
 permissions:
   contents: write
@@ -20,7 +24,7 @@ permissions:
 jobs:
   # 发布门禁：tag 触发时先跑完整检查，verify 失败不构建、不发布。
   verify:
-    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+    if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && !inputs.plugin_tag)
     runs-on: windows-latest
     steps:
       - name: Checkout
@@ -79,7 +83,7 @@ jobs:
   # Linux 明确不打包、不发布；Linux 只保留 ci.yml 的编译/测试。
   build:
     needs: verify
-    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+    if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && !inputs.plugin_tag)
     runs-on: windows-latest
     steps:
       - name: Checkout
@@ -160,7 +164,6 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 22
-          registry-url: https://registry.npmjs.org
 
       - name: Upgrade npm for OIDC
         run: npm install -g npm@11
@@ -190,7 +193,7 @@ jobs:
       always() &&
       needs.build.result == 'success' &&
       (needs.publish-npm.result == 'success' || needs.publish-npm.result == 'skipped') &&
-      (startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch')
+      (startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && !inputs.plugin_tag))
     runs-on: ubuntu-latest
 
     steps:
@@ -240,7 +243,7 @@ jobs:
   # ── 插件单独发布：plugin-v* tag（OIDC，不构建 app）──
   # 复用 release.yml 这一 workflow，因此 npm Trusted Publisher 只需绑定本文件。
   publish-plugin:
-    if: startsWith(github.ref, 'refs/tags/plugin-v')
+    if: startsWith(github.ref, 'refs/tags/plugin-v') || (github.event_name == 'workflow_dispatch' && inputs.plugin_tag != '')
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -248,6 +251,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.plugin_tag || github.ref }}
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
@@ -258,7 +263,6 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 22
-          registry-url: https://registry.npmjs.org
 
       - name: Test plugin
         working-directory: dsh-plugin
@@ -293,8 +297,8 @@ jobs:
       - name: Create plugin Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ github.ref_name }}
-          name: dsh-multiver-bridge ${{ github.ref_name }}
+          tag_name: ${{ inputs.plugin_tag || github.ref_name }}
+          name: dsh-multiver-bridge ${{ inputs.plugin_tag || github.ref_name }}
           body: |
             dsh-multiver-bridge 插件发布。
 
